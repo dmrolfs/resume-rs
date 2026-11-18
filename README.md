@@ -24,7 +24,10 @@ just build-macos     # universal2 (arm64 + x86_64) binary at target/universal2/r
 just build-windows   # quick windows-gnu cross-build of resume.exe plus a self-contained import check (needs mingw-w64)
 ```
 
-`build-windows` is a fast compile and link check. Release binaries are built natively with MSVC in CI.
+`build-windows` is a fast compile and link check. Release binaries are built natively with MSVC in CI,
+with the C runtime linked statically (`.cargo/config.toml`) so `resume.exe` runs on a clean Windows machine.
+To inspect any Windows exe from your Mac, run `bash scripts/check-pe-imports.sh exe path/to/resume.exe`
+(needs `rustup component add llvm-tools`).
 A binary cross-built on a Mac cannot be tested there, so behavior on Windows is verified by the CI
 matrix, which runs `just check` on macOS and Windows for every push.
 

@@ -64,6 +64,8 @@
 - [ ] `help_names_the_binary_resume_with_no_extension` (both OSes) and `help_ignores_an_exe_suffix_in_argv0` (unix): clap's display name must not include `.exe`
 - [ ] Local: `just build-macos` produces a universal2 Mach-O (`lipo -info`, `lipo -verify_arch`, `codesign --verify`, both slices run)
 - [ ] Local: `just build-windows` produces a PE32+ x86-64 `resume.exe`, and `just check-windows-imports` fails for a dynamic-std exe and passes for the real one
+- [ ] `tests/pe_imports_test.rs` (unix): system DLLs accepted; `VCRUNTIME140.dll` and its variants rejected case-insensitively; mingw runtime and dynamic std rejected; CRLF tool output handled; empty import list fails closed; unknown subcommand exits 2
+- [ ] CI: the Windows release exe passes `scripts/check-pe-imports.sh` (imports published as an annotation)
 
 Cross-OS PDF byte comparison and the Windows-only behavior tests are owned by the tasks that introduce the code:
 

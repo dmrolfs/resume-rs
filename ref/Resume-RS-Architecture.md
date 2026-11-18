@@ -488,8 +488,10 @@ Cambria was dropped. Caladea doesn't match the installed Cambria 6.90 (lines are
 |---|---|---|
 | macOS, Apple silicon | `aarch64-apple-darwin` | native, local and CI |
 | macOS, Intel | `x86_64-apple-darwin` | local cross (`rustup target add`), CI. Combined with arm64 into a universal2 binary using `lipo`. |
-| Windows, x64 | `x86_64-pc-windows-msvc` | CI on `windows-latest`, for release artifacts and tests |
+| Windows, x64 | `x86_64-pc-windows-msvc` | CI on `windows-latest`, for release artifacts and tests. `.cargo/config.toml` sets `-C target-feature=+crt-static`, because by default the exe imports `VCRUNTIME140.dll`, which Windows does not ship. |
 | Windows, x64 (local cross-check) | `x86_64-pc-windows-gnu` | Local cross-build from macOS with the installed `x86_64-w64-mingw32-gcc` (`just build-windows`). It catches compile and link problems quickly. No `.cargo/config.toml` is needed: for ordinary executables rustc already links `libgcc_eh` and winpthread statically on this target. `just check-windows-imports` proves it by failing on any `lib*.dll`, `std-<hash>.dll`, or hash-suffixed import. `cargo-zigbuild` is not used: its README says only Linux and macOS targets are supported. |
+
+**Self-contained Windows binaries.** One rule, `scripts/check-pe-imports.sh`, rejects the mingw runtime (`lib*.dll`), a dynamic Rust std (`std-<hash>.dll`), and the Visual C++ runtime (`vcruntime*`, `msvcp*`, `msvcr*`, `vcomp*`, `concrt*`), and fails closed when it finds no imports. It reads imports with the `llvm-readobj` from rustup's `llvm-tools`, so it runs on macOS, and CI runs it on the MSVC release exe. Proven on a real build: without `crt-static` the exe imported `VCRUNTIME140.dll` (run 44251515002); with it, only `kernel32.dll`, `ntdll.dll`, and `api-ms-win-core-synch-l1-2-0.dll` (run 44251779665). The rule is unit-tested by `tests/pe_imports_test.rs` on unix, because a bare `bash` on Windows can be the WSL launcher.
 
 A cross-built Windows binary can't run its tests on macOS, so behavior on Windows is verified in CI. The gnu build is a local compile check only: its output must never be compared with the MSVC build.
 
@@ -691,4 +693,5 @@ Total: about 11.5 working days.
 - 2026-11-18: Beads tasks recreated as hierarchical children rsm-141.1 through rsm-141.13 following the epics-and-tasks skill, adding the font spike rsm-141.1.
 - 2026-11-18: Fonts redesigned as a preferred original plus a bundled fallback per role (measured in rsm-141.1), with `--fonts auto|bundled` and `--font-path`. Added macOS (universal2) and Windows (x64) builds: local cross-build plus a CI matrix with a cross-OS determinism check (task rsm-141.14).
 - 2026-11-18: Book Antiqua fallback decided: TeX Gyre Pagella. Spike rsm-141.1 closed.
+- 2026-11-18 (rsm-141.14 follow-up): the shipped MSVC exe imported VCRUNTIME140.dll. Added the self-contained check for the release build and `crt-static` for the MSVC target; verified before and after on CI.
 - 2026-11-18 (rsm-141.14, oracle analysis in history/): universal2 is built with two builds plus `lipo` and re-signed. The windows-gnu local build needs no `.cargo/config.toml`. The cross-OS PDF comparison moved to rsm-141.15 (owner decision: not critical, pursued because GitHub runners are free for public repos). The owner declined a blocking link from rsm-141.3 to rsm-141.14. `tempfile` and `opener` are not added in the platform task (cargo 1.100 warns on unused dependencies); they arrive with their first users. `cargo-zigbuild` removed as a Windows option.
