@@ -3,6 +3,12 @@
 
 set shell := ["bash", "-ueo", "pipefail", "-c"]
 
+# On Windows a bare `bash` resolves to C:\Windows\System32\bash.exe, the WSL launcher, before PATH is
+# consulted, so `just check` fails with "Windows Subsystem for Linux has no installed distributions".
+# PowerShell always exists and is enough: the recipes that run on Windows are plain commands. The bash
+# recipes (build-macos, build-windows, check-windows-imports) are [macos] or [unix] only.
+set windows-shell := ["powershell.exe", "-NoLogo", "-Command"]
+
 # Check formatting without changing files
 fmt:
     cargo fmt --all --check

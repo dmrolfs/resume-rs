@@ -20,7 +20,8 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
-  # The justfile pins bash as its shell; keep CI on the same `just` the repo was developed with.
+  # Keep CI on the same `just` the repo was developed with. The justfile uses bash on macOS/Linux and
+  # PowerShell on Windows (see `set windows-shell`).
   JUST_VERSION: "1.40.0"
 
 # Third-party actions are pinned to full commit SHAs (public repo, supply chain). The trailing comment
@@ -51,23 +52,6 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
-      # `just` runs recipes with `bash`, resolved from PATH. The Windows image also has WSL's
-      # System32\bash.exe, which would hijack that lookup, so put Git Bash first and verify it.
-      - name: Put Git Bash first on PATH (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: Add-Content -Path $env:GITHUB_PATH -Value 'C:\Program Files\Git\bin'
-
-      - name: Verify the bash that just will use
-        shell: bash
-        run: |
-          kernel="$(bash -c 'uname -s')"
-          echo "bash resolves to: $(command -v bash) ($kernel)"
-          case "$kernel" in
-            Darwin | MINGW* | MSYS*) ;;
-            *) echo "unexpected bash ($kernel); just recipes would run in the wrong shell" >&2; exit 1 ;;
-          esac
 
       - name: Install Rust toolchain
         shell: bash
