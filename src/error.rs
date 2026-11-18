@@ -8,6 +8,7 @@ use strum::Display;
 
 use crate::diagnostics::{Diagnostic, Severity};
 use crate::model::StyleName;
+use crate::typeset::fonts::FontOrigin;
 
 /// A style source file as Typst read it, so a renderer can show excerpts of it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +48,12 @@ pub enum Error {
 
     #[snafu(display("cannot serialize the resume for the style: {source}"))]
     SerializeResume { source: serde_json::Error },
+
+    #[snafu(display("cannot read font directory {}: {source}", path.display()))]
+    FontDirectory { path: PathBuf, source: std::io::Error },
+
+    #[snafu(display("scanning {origin} fonts panicked: {message}"))]
+    FontScanPanicked { origin: FontOrigin, message: String },
 
     #[snafu(display("cannot start the typesetting thread: {source}"))]
     SpawnTypesetThread { source: std::io::Error },

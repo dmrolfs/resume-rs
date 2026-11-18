@@ -43,6 +43,17 @@ pub enum ColorMode {
     Never,
 }
 
+/// Which fonts a render may use (`--fonts`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum, Display, EnumString, AsRefStr, EnumIter)]
+#[strum(serialize_all = "lowercase")]
+pub enum FontsMode {
+    /// Bundled fonts, then `--font-path`, `RESUME_FONT_PATH`, application fonts, and system fonts.
+    #[default]
+    Auto,
+    /// Only the bundled fonts, so the output does not depend on the machine.
+    Bundled,
+}
+
 /// The `--max-pages` limit, 1 to 20.
 #[nutype(
     validate(greater_or_equal = 1, less_or_equal = 20),
@@ -86,6 +97,18 @@ mod tests {
             assert_eq!(assert_ok!(clap_name.parse::<ColorMode>()), mode);
         }
         assert_eq!(ColorMode::default(), ColorMode::Auto);
+    }
+
+    #[test]
+    fn fonts_mode_names_match_clap_and_strum() {
+        for mode in FontsMode::iter() {
+            let clap_name = assert_some!(mode.to_possible_value()).get_name().to_string();
+            assert_eq!(clap_name, mode.to_string());
+            assert_eq!(mode.as_ref(), mode.to_string());
+            assert_eq!(assert_ok!(clap_name.parse::<FontsMode>()), mode);
+        }
+        assert_eq!(FontsMode::default(), FontsMode::Auto);
+        assert_eq!(FontsMode::Bundled.to_string(), "bundled");
     }
 
     #[test]

@@ -203,6 +203,27 @@ impl DiagnosticCode {
                 fix: "Split the file, flatten the nesting, or fix the earlier findings first.",
                 example: None,
             }),
+            FontFallbackMetric => Some(&Advice {
+                summary: "A bundled font stands in for the template's font; layout is unchanged.",
+                why: "Project convention: each style names the template's own font and a free bundled substitute with the same character widths (Calibri and Carlito, Georgia and Gelasio), so line breaks and the page count match and only glyph shapes differ.",
+                fix: "No action is needed. To get the original glyph shapes, install the font or pass `--font-path <DIR>` with its font files. `--fonts bundled` always uses the substitute.",
+                example: Some(("resume build resume.md", "resume build resume.md --font-path ~/Fonts")),
+            }),
+            FontFallbackLayout => Some(&Advice {
+                summary: "A bundled font with different character widths stands in; line breaks may change.",
+                why: "Project convention: the substitute for this role is not metric-compatible (TeX Gyre Pagella for Book Antiqua), so text can wrap differently and the page count can change.",
+                fix: "Install the preferred font or pass `--font-path <DIR>` with its font files, rebuild, and check the page count and the last page.",
+                example: Some(("resume build resume.md", "resume build resume.md --font-path ~/Fonts")),
+            }),
+            FontMissing => Some(&Advice {
+                summary: "Neither the preferred font nor its bundled fallback is available.",
+                why: "Project convention: every role in a style names a preferred font and a bundled fallback, so a build never lacks a font; this happens only when a style's font list was edited.",
+                fix: "Name a bundled family as the fallback in the style's `theme.typ`, install the font, or pass `--font-path <DIR>`.",
+                example: Some((
+                    r#"body: (preferred: "Calibri", fallback: "Calbri")"#,
+                    r#"body: (preferred: "Calibri", fallback: "Carlito")"#,
+                )),
+            }),
             // Content (doctor), Layout (render), and Setup: written by the tasks that own them.
             LongBullet
             | UnquantifiedBullet
@@ -215,9 +236,6 @@ impl DiagnosticCode {
             | PageLimitExceeded
             | HeadingNearPageBottom
             | SparseLastPage
-            | FontFallbackMetric
-            | FontFallbackLayout
-            | FontMissing
             | UnknownStyle
             | StyleMissingMain
             | OutputNotWritable
@@ -240,6 +258,22 @@ mod tests {
     fn every_format_code_has_advice() {
         for code in DiagnosticCode::iter().filter(|c| c.category() == Category::Format) {
             assert_some!(code.advice(), "{code} has no advice");
+        }
+    }
+
+    #[test]
+    fn the_font_codes_have_advice_that_says_how_to_get_the_font() {
+        for code in [
+            DiagnosticCode::FontFallbackMetric,
+            DiagnosticCode::FontFallbackLayout,
+            DiagnosticCode::FontMissing,
+        ] {
+            let advice = assert_some!(code.advice(), "{code} has advice");
+            assert!(
+                advice.fix.contains("--font-path") || advice.fix.contains("theme.typ"),
+                "{code}: {}",
+                advice.fix
+            );
         }
     }
 

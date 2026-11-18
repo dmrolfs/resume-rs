@@ -148,9 +148,12 @@ Style, world, and PDF settings (unit, in `src`):
 Not covered here: cross-architecture byte equality (rsm-141.15), the text of the PDF in reading order (rsm-141.7; lopdf text extraction on Typst's CID fonts is unverified), font layering and role resolution (rsm-141.18).
 
 ### rsm-141.18: Layered font set and role resolution
-- [ ] `role_resolution_prefers_installed_original`, `role_resolution_falls_back_and_flags_metric_compatibility`, `role_resolution_reports_missing_when_neither_font_exists`
-- [ ] `layer_order_is_bundled_then_font_path_then_env_then_application_then_system`, `ordering_within_a_directory_is_independent_of_enumeration_order`, `duplicate_path_and_index_is_loaded_once`
-- [ ] `fonts_bundled_mode_ignores_system_fonts`, `font_path_adds_fonts`, `ttc_collections_load`, `font_path_beats_installed_font_of_same_family`, `resolved_font_appears_in_pdf`
+Unit tests in `src/typeset/fonts.rs` (synthetic `FontInfo`, injected system and application sources) and `tests/fonts_test.rs` (real files copied from the typst-kit embedded fonts into temp directories; nothing is committed):
+- [x] Resolution: `role_resolution_prefers_installed_original` (case-insensitive, reports the book's spelling), `role_resolution_falls_back_and_flags_metric_compatibility`, `role_resolution_reports_missing_when_neither_font_exists`, `a_family_present_only_in_another_variant_still_resolves_as_typst_would_use_it`, `diagnostics_say_what_was_used_and_how_to_fix_it`, `the_font_codes_have_advice_that_says_how_to_get_the_font`
+- [x] Order: `layer_order_is_bundled_then_font_path_then_env_then_application_then_system`, `ordering_within_a_group_is_independent_of_enumeration_order`, `duplicate_path_and_index_is_loaded_once_and_the_earlier_layer_wins`, `the_same_file_reached_through_a_symlink_is_one_face` (unix), `font_path_beats_installed_font_of_same_family`, `an_application_directory_whose_files_are_already_scanned_is_skipped`, `env_paths_drop_empty_entries_and_keep_order`
+- [x] Builder: `bundled_mode_never_asks_the_system_or_validates_directories`, `auto_mode_asks_the_system_source`, `a_missing_font_directory_is_an_error_naming_it`, `a_file_given_as_a_font_directory_is_an_error`, `a_bad_env_entry_is_an_error_too`, `a_panicking_system_scan_is_an_error_not_a_crash`, `fonts_mode_names_match_clap_and_strum`
+- [x] Real files: `font_path_adds_fonts`, `ttc_collections_load` (a two-face collection built in the test), `fonts_bundled_mode_ignores_installed_fonts_and_font_paths`, `the_default_bundled_mode_set_has_only_bundled_faces_on_any_machine`, `auto_mode_keeps_the_bundled_faces_first_whatever_is_installed`, `a_symlink_into_the_same_directory_adds_no_duplicate_faces` (unix), `one_file_reached_through_two_case_spellings_is_one_face` (`cfg(windows)`), `resolved_font_appears_in_the_pdf`
+- Not covered: Windows `canonicalize` behavior beyond the case-spelling test, Windows Office directories, Linux fontconfig, a font file vanishing mid-scan on a real directory (the panic guard is tested with an injected panic).
 
 ### rsm-141.7: Components and pragmatic
 - [ ] `full_fixture_renders_in_pragmatic_without_warnings`
