@@ -1,0 +1,32 @@
+[package]
+name = "resume"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+authors = ["Damon Rolfs <drolfs@gmail.com>"]
+description = "Typesets Markdown resumes into print-quality PDFs with embedded Typst and book-recommended styles."
+license = "MIT"
+repository = "https://github.com/dmrolfs/resume-rs"
+readme = "README.md"
+keywords = ["resume", "cv", "typst", "pdf", "markdown"]
+categories = ["command-line-utilities", "text-processing"]
+
+[lints.rust]
+rust_2018_idioms = { level = "warn", priority = -1 }
+rust_2021_compatibility = { level = "warn", priority = -1 }
+rust_2021_incompatible_closure_captures = "warn"
+rust_2021_prelude_collisions = "warn"
+
+[lints.clippy]
+cargo = { level = "warn", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+multiple_crate_versions = "allow"
+
+# Dependencies are added by the task that first uses them (cargo warns on unused ones).
+# Typst crates are pinned exactly (`=0.15.1`) when added in rsm-141.6; see ref/Resume-RS-Implementation-Plan.md.
+[dependencies]
+clap = { version = "4.6", features = ["derive"] }
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"

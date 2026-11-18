@@ -29,3 +29,13 @@ rustc-ice-*.txt
 .beads-credential-key
 .beads/proxieddb/
 *.gate.lock*
+
+# resume-rs build output
+/out/
+
+# Session working docs (planning scripts, font comparison with local-only proprietary fonts); never commit.
+# Long-lived design docs live in ref/.
+/history/
+
+# Python bytecode from planning scripts
+__pycache__/
