@@ -89,7 +89,18 @@ jobs:
           tool: just@${{ env.JUST_VERSION }}
 
       - name: Quality gate (fmt, clippy -D warnings, test)
-        run: just check
+        id: gate
+        shell: bash # explicit `bash` also turns on pipefail, so a failing `just check` fails this step through `tee`
+        run: just check 2>&1 | tee gate.log
+
+      # Job logs need a signed-in session even on a public repo, but annotations are public. Attach the
+      # tail of the failing gate to the run so a failure is diagnosable from the PR page or the API.
+      - name: Annotate the failure with the gate output
+        if: failure() && steps.gate.outcome == 'failure'
+        shell: bash
+        run: |
+          body="$(tail -c 5000 gate.log | perl -0pe 's/\e\[[0-9;]*m//g; s/\r//g; s/%/%25/g; s/\n/%0A/g')"
+          echo "::error title=just check failed on ${RUNNER_OS}::${body}"
 
       - name: Build release binary
         run: cargo build --release --locked
