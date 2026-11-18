@@ -89,6 +89,25 @@ jobs:
       - name: Build release binary
         run: cargo build --release --locked
 
+      # The shipped Windows binary is built with MSVC, which links the Visual C++ runtime (VCRUNTIME140.dll)
+      # dynamically unless crt-static is on; a clean Windows machine may not have it. Fail if the release exe
+      # imports it, and publish the import list as an annotation (job logs need a signed-in session).
+      - name: Check the release exe is self-contained (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          rustup component add llvm-tools
+          status=0
+          bash scripts/check-pe-imports.sh exe target/release/resume.exe > imports.log 2>&1 || status=$?
+          cat imports.log
+          imports="$(perl -0pe 's/\r//g; s/%/%25/g; s/\n/%0A/g' imports.log)"
+          if [ "$status" -eq 0 ]; then
+            echo "::notice title=resume.exe imports (self-contained)::${imports}"
+          else
+            echo "::error title=resume.exe is not self-contained::${imports}"
+          fi
+          exit "$status"
+
       - name: Upload release binary
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

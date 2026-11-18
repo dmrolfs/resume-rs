@@ -65,20 +65,9 @@ build-windows:
     cargo build --release --locked --target x86_64-pc-windows-gnu
     just check-windows-imports target/x86_64-pc-windows-gnu/release/resume.exe
 
-# Fail if a Windows exe imports a non-system runtime DLL, meaning it is not self-contained.
-# rustc links libgcc_eh and winpthread statically for ordinary windows-gnu executables, so any
-# `lib*.dll` (libgcc_s_seh-1, libwinpthread-1, libstdc++), `std-<hash>.dll` (dynamic Rust std), or
-# hash-suffixed DLL means the link went wrong. Windows system DLLs (kernel32, api-ms-win-*) are fine.
+# Fail if a Windows exe imports a runtime DLL that a clean machine may lack: the mingw runtime, a dynamic
+# Rust std, or the Visual C++ runtime. Works on macOS and Linux (reads the exe with rustup's llvm-readobj).
+# The rule lives in scripts/check-pe-imports.sh and is unit-tested by tests/pe_imports_test.rs.
 [unix]
 check-windows-imports exe:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    file "{{exe}}"
-    imports=$(x86_64-w64-mingw32-objdump -p "{{exe}}" | awk '/DLL Name:/ {print $3}' | sort -fu)
-    echo "$imports"
-    if bad=$(echo "$imports" | grep -iE '^lib|^std-|-[0-9a-f]{8,}\.dll$'); then
-        echo "error: {{exe}} is not self-contained; it imports:" >&2
-        echo "$bad" >&2
-        exit 1
-    fi
-    echo "ok: {{exe}} imports only system DLLs"
+    bash scripts/check-pe-imports.sh exe "{{exe}}"
