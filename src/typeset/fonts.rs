@@ -753,6 +753,8 @@ mod tests {
 
     #[test]
     fn a_relative_directory_is_stored_as_the_canonical_path() {
+        // Cargo runs tests from the package root; `target` may be elsewhere when CARGO_TARGET_DIR is set.
+        assert_ok!(std::fs::create_dir_all("target"));
         let tmp = assert_ok!(tempfile::Builder::new().tempdir_in("target"));
         assert_ok!(std::fs::write(tmp.path().join("a.otf"), b"x"));
         let relative_dir = PathBuf::from("target").join(assert_some!(tmp.path().file_name()));

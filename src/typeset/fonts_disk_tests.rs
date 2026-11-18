@@ -312,6 +312,8 @@ fn a_font_file_removed_after_the_build_no_longer_loads_and_the_role_falls_back()
 #[test]
 fn a_relative_font_path_still_loads_after_the_working_directory_changes() {
     // Cargo runs tests from the package root, so `target/<dir>` is a relative path to a real directory.
+    // Cargo runs tests from the package root; `target` may be elsewhere when CARGO_TARGET_DIR is set.
+    assert_ok!(std::fs::create_dir_all("target"));
     let tmp = assert_ok!(tempfile::Builder::new().tempdir_in("target"));
     assert_ok!(std::fs::write(tmp.path().join("a.otf"), bytes_of("Libertinus Serif")));
     let relative = PathBuf::from("target").join(assert_some!(tmp.path().file_name()));
