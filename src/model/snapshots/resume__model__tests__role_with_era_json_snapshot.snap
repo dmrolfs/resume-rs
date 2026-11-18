@@ -1,0 +1,88 @@
+---
+source: src/model/mod.rs
+expression: sample()
+---
+{
+  "schema": 1,
+  "name": "Ada Lovelace",
+  "contact": [
+    {
+      "kind": "link",
+      "url": "https://example.com/",
+      "content": [
+        {
+          "kind": "text",
+          "text": "site"
+        }
+      ]
+    }
+  ],
+  "sections": [
+    {
+      "title": "Experience",
+      "blocks": [
+        {
+          "kind": "role",
+          "company": "Initech",
+          "title": "VP of Engineering",
+          "period": {
+            "text": "Aug 2017 – Present",
+            "start": {
+              "precision": "month",
+              "year": 2017,
+              "month": 8
+            },
+            "end": {
+              "kind": "present"
+            }
+          },
+          "blurb": [
+            {
+              "kind": "text",
+              "text": "Enterprise software."
+            }
+          ],
+          "body": [
+            {
+              "kind": "era",
+              "name": "Early years",
+              "period": {
+                "text": "2017 – 2019",
+                "start": {
+                  "precision": "year",
+                  "year": 2017
+                },
+                "end": {
+                  "kind": "date",
+                  "date": {
+                    "precision": "year",
+                    "year": 2019
+                  }
+                }
+              },
+              "items": [
+                {
+                  "label": [
+                    {
+                      "kind": "text",
+                      "text": "Languages"
+                    }
+                  ],
+                  "content": [
+                    {
+                      "kind": "text",
+                      "text": "Rust"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "kind": "page-break"
+        }
+      ]
+    }
+  ]
+}

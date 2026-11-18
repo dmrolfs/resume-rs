@@ -26,7 +26,18 @@ multiple_crate_versions = "allow"
 # Typst crates are pinned exactly (`=0.15.1`) when added in rsm-141.6; see ref/Resume-RS-Implementation-Plan.md.
 [dependencies]
 clap = { version = "4.6", features = ["derive"] }
+nutype = { version = "0.8.0", features = ["serde", "regex"] }
+regex = "1.13.2"
+serde = { version = "1.0.229", features = ["derive"] }
+snafu = "0.9.2"
+strum = { version = "0.28.0", features = ["derive"] }
+time = { version = "0.3.55", features = ["serde"] }
+url = { version = "2.5.8", features = ["serde"] }
 
 [dev-dependencies]
 assert_cmd = "2"
+claims = "0.8.0"
+insta = { version = "1.49.0", features = ["json"] }
 predicates = "3"
+pretty_assertions = "1.4.1"
+serde_json = "1.0.154"

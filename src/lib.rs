@@ -8,3 +8,5 @@
 //! through a runtime-loadable Typst style.
 
 pub mod cli;
+pub mod diagnostics;
+pub mod model;
