@@ -16,6 +16,7 @@ use typst::syntax::{RootedPath, VirtualPath, VirtualRoot};
 const OUT_ENV: &str = "RESUME_TEST_OUT";
 const PREINTERN_ENV: &str = "RESUME_TEST_PREINTERN";
 const STYLE: &str = "content";
+const DETERMINISM_OUT_ENV: &str = "RESUME_DETERMINISM_OUT";
 
 fn crate_path(relative: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(relative)
@@ -145,4 +146,19 @@ fn file_id_numbering_does_not_change_bytes() {
 #[test]
 fn a_fresh_process_matches_this_warm_one() {
     assert_same_bytes(&render_in_child(&[]), &render_full("fixture"), "child vs parent");
+}
+
+/// Writes the reference PDF that CI compares across operating systems (rsm-141.15, rung 1).
+///
+/// Ignored by default; CI runs it with `RESUME_DETERMINISM_OUT` set on each OS and an `ubuntu-latest`
+/// job compares the files byte for byte. It uses only the fonts embedded in typst-kit, so installed
+/// fonts cannot reach the output, and a fixed ident, so the file name cannot either.
+#[test]
+#[ignore = "writes the cross-OS reference PDF; run by CI with RESUME_DETERMINISM_OUT set"]
+fn write_determinism_pdf() {
+    let out = PathBuf::from(std::env::var(DETERMINISM_OUT_ENV).expect("set RESUME_DETERMINISM_OUT to the output path"));
+    if let Some(parent) = out.parent() {
+        assert_ok!(std::fs::create_dir_all(parent));
+    }
+    assert_ok!(std::fs::write(&out, render_full("determinism")));
 }

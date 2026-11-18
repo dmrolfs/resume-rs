@@ -1,5 +1,5 @@
 # ABOUTME: CI for resume-rs: runs the `just check` quality gate on macOS and Windows for every push and PR.
-# ABOUTME: Also builds release binaries per OS and a universal2 macOS binary on main and version tags.
+# ABOUTME: Also builds release binaries per OS, compares the PDFs they render, and builds universal2 on main and tags.
 name: CI
 
 on:
@@ -115,6 +115,67 @@ jobs:
           path: target/release/${{ matrix.binary }}
           if-no-files-found: error
           retention-days: 7
+
+      # Rung 1 of rsm-141.15. Each OS renders the same synthetic resume with the fonts embedded in typst-kit
+      # (installed fonts cannot reach it) under the same ident, and uploads the PDF. The `determinism` job
+      # below compares the two files byte for byte.
+      - name: Write the cross-OS reference PDF
+        shell: bash
+        env:
+          RESUME_DETERMINISM_OUT: target/determinism/determinism.pdf
+        run: cargo test --locked --test determinism_test -- --ignored --exact write_determinism_pdf
+
+      - name: Upload the reference PDF
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: determinism-pdf-${{ runner.os }}-${{ runner.arch }}
+          path: target/determinism/determinism.pdf
+          if-no-files-found: error
+          retention-days: 7
+
+  # Fails closed: it names both expected artifacts instead of globbing, so a missing, empty, or renamed
+  # upload is an error, never a pass. A passing run prints both SHA-256 values.
+  determinism:
+    name: PDF bytes match across macOS and Windows
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download the macOS reference PDF
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: determinism-pdf-macOS-ARM64
+          path: pdf/macos
+
+      - name: Download the Windows reference PDF
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: determinism-pdf-Windows-X64
+          path: pdf/windows
+
+      - name: Compare the two PDFs byte for byte
+        shell: bash
+        run: |
+          set -euo pipefail
+          macos=pdf/macos/determinism.pdf
+          windows=pdf/windows/determinism.pdf
+          for f in "$macos" "$windows"; do
+            if [ ! -s "$f" ]; then
+              echo "::error title=Reference PDF missing or empty::$f"
+              exit 1
+            fi
+          done
+          sha256sum "$macos" "$windows"
+          ls -l "$macos" "$windows"
+          if cmp "$macos" "$windows"; then
+            echo "::notice title=PDFs are byte-identical::$(sha256sum "$macos" | cut -d' ' -f1)"
+          else
+            first="$(cmp "$macos" "$windows" 2>&1 | head -1 || true)"
+            sizes="$(wc -c < "$macos") bytes (macOS), $(wc -c < "$windows") bytes (Windows)"
+            hashes="$(sha256sum "$macos" "$windows" | cut -d' ' -f1 | tr '\n' ' ')"
+            echo "::error title=PDF bytes differ across operating systems::${first}; ${sizes}; sha256 macOS then Windows: ${hashes}"
+            exit 1
+          fi
 
   # The macOS universal2 build runs on main and release tags only, so the `just build-macos` recipe
   # cannot rot unnoticed without spending minutes on every branch push.
