@@ -1,0 +1,111 @@
+---
+source: tests/parse_test.rs
+expression: "views(&text, parsed.diagnostics())"
+---
+[
+  {
+    "code": "era-shape",
+    "severity": "error",
+    "range": [
+      282,
+      313
+    ],
+    "source": "**AI platforms · recent work**",
+    "message": "the era line has no dates",
+    "hints": [
+      "an era line is a whole bold paragraph: `**Era name · 2020 – 2023**`"
+    ],
+    "fix": null
+  },
+  {
+    "code": "era-shape",
+    "severity": "error",
+    "range": [
+      315,
+      342
+    ],
+    "source": "**A · B · 2015 – 2016**",
+    "message": "the era line has too many ` · ` parts",
+    "hints": [
+      "an era line is a whole bold paragraph: `**Era name · 2020 – 2023**`"
+    ],
+    "fix": null
+  },
+  {
+    "code": "mid-sentence-bold",
+    "severity": "warning",
+    "range": [
+      344,
+      377
+    ],
+    "source": "**AI platforms · 2015 – 2016**",
+    "message": "bold inside a sentence",
+    "hints": [
+      "bold only titles, companies, dates, and headings; for a lead-in write `**Label:** text`, with the colon inside"
+    ],
+    "fix": null
+  },
+  {
+    "code": "era-shape",
+    "severity": "error",
+    "range": [
+      344,
+      397
+    ],
+    "source": "**AI platforms · 2015 – 2016** with trailing words",
+    "message": "text follows the era line",
+    "hints": [
+      "an era line is only the bold text; move the rest into its own paragraph"
+    ],
+    "fix": null
+  },
+  {
+    "code": "era-shape",
+    "severity": "error",
+    "range": [
+      399,
+      431
+    ],
+    "source": "**AI platforms - 2016 – 2017**",
+    "message": "era parts must be separated by ` · `, not `-`",
+    "hints": [
+      "did you mean `**AI platforms · 2016 – 2017**`?"
+    ],
+    "fix": {
+      "range": [
+        413,
+        416
+      ],
+      "replaces": " - ",
+      "with": " · "
+    }
+  },
+  {
+    "code": "era-shape",
+    "severity": "error",
+    "range": [
+      433,
+      467
+    ],
+    "source": "**Gusto - Webtab - 2012 – 2013**",
+    "message": "era parts must be separated by ` · `, not `-`",
+    "hints": [
+      "an era is `**Era name · 2020 – 2023**`; the name can't contain separators"
+    ],
+    "fix": null
+  },
+  {
+    "code": "era-outside-role",
+    "severity": "error",
+    "range": [
+      479,
+      507
+    ],
+    "source": "**Outside · 2015 – 2016**",
+    "message": "an era line must be inside a role",
+    "hints": [
+      "put it under a `### Company · Title · Period` role line"
+    ],
+    "fix": null
+  }
+]

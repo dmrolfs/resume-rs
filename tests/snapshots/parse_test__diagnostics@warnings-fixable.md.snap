@@ -1,0 +1,195 @@
+---
+source: tests/parse_test.rs
+expression: "views(&text, parsed.diagnostics())"
+---
+[
+  {
+    "code": "period-present-spelling",
+    "severity": "warning",
+    "range": [
+      275,
+      282
+    ],
+    "source": "Current",
+    "message": "write `Present` for an ongoing role",
+    "hints": [
+      "write `2019 – Present`"
+    ],
+    "fix": {
+      "range": [
+        275,
+        282
+      ],
+      "replaces": "Current",
+      "with": "Present"
+    }
+  },
+  {
+    "code": "period-present-spelling",
+    "severity": "warning",
+    "range": [
+      317,
+      320
+    ],
+    "source": "now",
+    "message": "write `Present` for an ongoing role",
+    "hints": [
+      "write `2018 – Present`"
+    ],
+    "fix": {
+      "range": [
+        317,
+        320
+      ],
+      "replaces": "now",
+      "with": "Present"
+    }
+  },
+  {
+    "code": "period-hyphen",
+    "severity": "warning",
+    "range": [
+      350,
+      353
+    ],
+    "source": " - ",
+    "message": "dates are separated by `-`; use an en dash with a space on each side",
+    "hints": [
+      "write `2015 – 2017`"
+    ],
+    "fix": {
+      "range": [
+        350,
+        353
+      ],
+      "replaces": " - ",
+      "with": " – "
+    }
+  },
+  {
+    "code": "hard-break",
+    "severity": "warning",
+    "range": [
+      373,
+      375
+    ],
+    "source": "  ",
+    "message": "a hard line break is rendered as a space",
+    "hints": [
+      "remove the trailing spaces or backslash; a blank line starts a new paragraph"
+    ],
+    "fix": {
+      "range": [
+        373,
+        375
+      ],
+      "replaces": "  ",
+      "with": ""
+    }
+  },
+  {
+    "code": "hard-break",
+    "severity": "warning",
+    "range": [
+      410,
+      411
+    ],
+    "source": "\\",
+    "message": "a hard line break is rendered as a space",
+    "hints": [
+      "remove the trailing spaces or backslash; a blank line starts a new paragraph"
+    ],
+    "fix": {
+      "range": [
+        410,
+        411
+      ],
+      "replaces": "\\",
+      "with": ""
+    }
+  },
+  {
+    "code": "period-hyphen",
+    "severity": "warning",
+    "range": [
+      450,
+      451
+    ],
+    "source": "-",
+    "message": "dates are separated by `-`; use an en dash with a space on each side",
+    "hints": [
+      "write `2013 – 2015`"
+    ],
+    "fix": {
+      "range": [
+        450,
+        451
+      ],
+      "replaces": "-",
+      "with": " – "
+    }
+  },
+  {
+    "code": "period-hyphen",
+    "severity": "warning",
+    "range": [
+      486,
+      490
+    ],
+    "source": " -- ",
+    "message": "dates are separated by `--`; use an en dash with a space on each side",
+    "hints": [
+      "write `2011 – 2013`"
+    ],
+    "fix": {
+      "range": [
+        486,
+        490
+      ],
+      "replaces": " -- ",
+      "with": " – "
+    }
+  },
+  {
+    "code": "period-hyphen",
+    "severity": "warning",
+    "range": [
+      525,
+      530
+    ],
+    "source": " — ",
+    "message": "dates are separated by `—`; use an en dash with a space on each side",
+    "hints": [
+      "write `2009 – 2011`"
+    ],
+    "fix": {
+      "range": [
+        525,
+        530
+      ],
+      "replaces": " — ",
+      "with": " – "
+    }
+  },
+  {
+    "code": "mid-sentence-bold",
+    "severity": "warning",
+    "range": [
+      538,
+      547
+    ],
+    "source": "**Label**",
+    "message": "bold inside a sentence",
+    "hints": [
+      "bold only titles, companies, dates, and headings; for a lead-in write `**Label:** text`, with the colon inside"
+    ],
+    "fix": {
+      "range": [
+        545,
+        548
+      ],
+      "replaces": "**:",
+      "with": ":**"
+    }
+  }
+]

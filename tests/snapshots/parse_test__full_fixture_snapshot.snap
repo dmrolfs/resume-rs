@@ -1,0 +1,400 @@
+---
+source: tests/parse_test.rs
+expression: assert_some!(parsed.valid())
+---
+{
+  "schema": 1,
+  "name": "Ada Lovelace",
+  "contact": [
+    {
+      "kind": "text",
+      "text": "London, UK · ada@example.com · "
+    },
+    {
+      "kind": "link",
+      "url": "https://example.com/notes",
+      "content": [
+        {
+          "kind": "text",
+          "text": "Notes"
+        }
+      ]
+    },
+    {
+      "kind": "text",
+      "text": " · "
+    },
+    {
+      "kind": "link",
+      "url": "https://github.com/ada",
+      "content": [
+        {
+          "kind": "text",
+          "text": "GitHub"
+        }
+      ]
+    }
+  ],
+  "sections": [
+    {
+      "title": "Summary",
+      "blocks": [
+        {
+          "kind": "paragraph",
+          "content": [
+            {
+              "kind": "text",
+              "text": "Principal engineer who designs & builds “distributed” systems – and leads the teams that ship them."
+            }
+          ]
+        },
+        {
+          "kind": "bullets",
+          "items": [
+            {
+              "label": null,
+              "content": [
+                {
+                  "kind": "text",
+                  "text": "Led a team of 12 to deliver the analytical engine in 18 months, cutting weekly cost from $39K to $29K."
+                }
+              ]
+            },
+            {
+              "label": null,
+              "content": [
+                {
+                  "kind": "text",
+                  "text": "Won adoption of "
+                },
+                {
+                  "kind": "emph",
+                  "content": [
+                    {
+                      "kind": "text",
+                      "text": "event sourcing"
+                    }
+                  ]
+                },
+                {
+                  "kind": "text",
+                  "text": ", "
+                },
+                {
+                  "kind": "code",
+                  "text": "CQRS"
+                },
+                {
+                  "kind": "text",
+                  "text": ", and "
+                },
+                {
+                  "kind": "link",
+                  "url": "https://example.com/abac",
+                  "content": [
+                    {
+                      "kind": "text",
+                      "text": "ABAC"
+                    }
+                  ]
+                },
+                {
+                  "kind": "text",
+                  "text": " across 5 organizations."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Languages and Technologies",
+      "blocks": [
+        {
+          "kind": "bullets",
+          "items": [
+            {
+              "label": [
+                {
+                  "kind": "text",
+                  "text": "Languages"
+                }
+              ],
+              "content": [
+                {
+                  "kind": "text",
+                  "text": "Rust, Java, Scala"
+                }
+              ]
+            },
+            {
+              "label": [
+                {
+                  "kind": "text",
+                  "text": "Cloud and infrastructure"
+                }
+              ],
+              "content": [
+                {
+                  "kind": "text",
+                  "text": "AWS (EKS, EC2), Kubernetes"
+                }
+              ]
+            },
+            {
+              "label": [
+                {
+                  "kind": "link",
+                  "url": "https://acme.example/",
+                  "content": [
+                    {
+                      "kind": "text",
+                      "text": "Acme"
+                    }
+                  ]
+                },
+                {
+                  "kind": "text",
+                  "text": ", VP of Engineering"
+                }
+              ],
+              "content": [
+                {
+                  "kind": "text",
+                  "text": "Led all product development."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Experience",
+      "blocks": [
+        {
+          "kind": "role",
+          "company": "Analytical Engines Ltd",
+          "title": "Principal Engineer",
+          "period": {
+            "text": "Aug 2017 – Present",
+            "start": {
+              "precision": "month",
+              "year": 2017,
+              "month": 8
+            },
+            "end": {
+              "kind": "present"
+            }
+          },
+          "blurb": [
+            {
+              "kind": "text",
+              "text": "Builds mechanical computers for scientific customers."
+            }
+          ],
+          "body": [
+            {
+              "kind": "era",
+              "name": "Programming languages",
+              "period": {
+                "text": "2026 – Present",
+                "start": {
+                  "precision": "year",
+                  "year": 2026
+                },
+                "end": {
+                  "kind": "present"
+                }
+              },
+              "items": [
+                {
+                  "label": null,
+                  "content": [
+                    {
+                      "kind": "text",
+                      "text": "Designed the first loop construct."
+                    }
+                  ]
+                },
+                {
+                  "label": null,
+                  "content": [
+                    {
+                      "kind": "text",
+                      "text": "Wrote the first published program."
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "kind": "era",
+              "name": "Early machines",
+              "period": {
+                "text": "Spring 2020 – Winter 2021",
+                "start": {
+                  "precision": "season",
+                  "year": 2020,
+                  "season": "spring"
+                },
+                "end": {
+                  "kind": "date",
+                  "date": {
+                    "precision": "season",
+                    "year": 2021,
+                    "season": "winter"
+                  }
+                }
+              },
+              "items": [
+                {
+                  "label": null,
+                  "content": [
+                    {
+                      "kind": "text",
+                      "text": "Prototyped the difference engine."
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "kind": "paragraph",
+              "content": [
+                {
+                  "kind": "text",
+                  "text": "Closing remarks about the role."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "kind": "role",
+          "company": "Babbage & Co",
+          "title": null,
+          "period": {
+            "text": "Fall 2012 – Sept 2017",
+            "start": {
+              "precision": "season",
+              "year": 2012,
+              "season": "fall"
+            },
+            "end": {
+              "kind": "date",
+              "date": {
+                "precision": "month",
+                "year": 2017,
+                "month": 9
+              }
+            }
+          },
+          "blurb": null,
+          "body": [
+            {
+              "kind": "bullets",
+              "items": [
+                {
+                  "label": null,
+                  "content": [
+                    {
+                      "kind": "text",
+                      "text": "Calculated tables."
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "kind": "page-break"
+        },
+        {
+          "kind": "role",
+          "company": "Consulting and Early-Stage Companies",
+          "title": null,
+          "period": {
+            "text": "2008 – 2012",
+            "start": {
+              "precision": "year",
+              "year": 2008
+            },
+            "end": {
+              "kind": "date",
+              "date": {
+                "precision": "year",
+                "year": 2012
+              }
+            }
+          },
+          "blurb": null,
+          "body": [
+            {
+              "kind": "bullets",
+              "items": [
+                {
+                  "label": [
+                    {
+                      "kind": "text",
+                      "text": "Korrio, Director"
+                    }
+                  ],
+                  "content": [
+                    {
+                      "kind": "text",
+                      "text": "Led a youth-sports platform."
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Education",
+      "blocks": [
+        {
+          "kind": "role",
+          "company": "University of London",
+          "title": null,
+          "period": {
+            "text": "2004 – 2008",
+            "start": {
+              "precision": "year",
+              "year": 2004
+            },
+            "end": {
+              "kind": "date",
+              "date": {
+                "precision": "year",
+                "year": 2008
+              }
+            }
+          },
+          "blurb": null,
+          "body": [
+            {
+              "kind": "bullets",
+              "items": [
+                {
+                  "label": null,
+                  "content": [
+                    {
+                      "kind": "text",
+                      "text": "Mathematics."
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

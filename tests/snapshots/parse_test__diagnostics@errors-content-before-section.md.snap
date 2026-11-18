@@ -1,0 +1,62 @@
+---
+source: tests/parse_test.rs
+expression: "views(&text, parsed.diagnostics())"
+---
+[
+  {
+    "code": "content-before-section",
+    "severity": "error",
+    "range": [
+      192,
+      220
+    ],
+    "source": "Stray intro before the name.",
+    "message": "content before the name heading",
+    "hints": [
+      "only the name and the contact line may come before the first `## Section`; move this under a section"
+    ],
+    "fix": null
+  },
+  {
+    "code": "content-before-section",
+    "severity": "error",
+    "range": [
+      265,
+      283
+    ],
+    "source": "A stray paragraph.",
+    "message": "content before the first section",
+    "hints": [
+      "only the name and the contact line may come before the first `## Section`; move this under a section"
+    ],
+    "fix": null
+  },
+  {
+    "code": "content-before-section",
+    "severity": "error",
+    "range": [
+      285,
+      301
+    ],
+    "source": "- a stray bullet",
+    "message": "content before the first section",
+    "hints": [
+      "only the name and the contact line may come before the first `## Section`; move this under a section"
+    ],
+    "fix": null
+  },
+  {
+    "code": "content-before-section",
+    "severity": "error",
+    "range": [
+      303,
+      336
+    ],
+    "source": "### A stray role · 2015 – 2017",
+    "message": "content before the first section",
+    "hints": [
+      "only the name and the contact line may come before the first `## Section`; move this under a section"
+    ],
+    "fix": null
+  }
+]

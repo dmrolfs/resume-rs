@@ -1,0 +1,48 @@
+---
+source: tests/parse_test.rs
+expression: "views(&text, parsed.diagnostics())"
+---
+[
+  {
+    "code": "text-too-long",
+    "severity": "error",
+    "range": [
+      193,
+      274
+    ],
+    "source": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "message": "the name is longer than 80 characters",
+    "hints": [
+      "shorten it"
+    ],
+    "fix": null
+  },
+  {
+    "code": "text-too-long",
+    "severity": "error",
+    "range": [
+      306,
+      367
+    ],
+    "source": "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+    "message": "the section title is longer than 60 characters",
+    "hints": [
+      "shorten it"
+    ],
+    "fix": null
+  },
+  {
+    "code": "text-too-long",
+    "severity": "error",
+    "range": [
+      395,
+      516
+    ],
+    "source": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+    "message": "the company is longer than 120 characters",
+    "hints": [
+      "shorten it; move detail into the bullets"
+    ],
+    "fix": null
+  }
+]

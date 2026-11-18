@@ -1,0 +1,104 @@
+---
+source: tests/parse_test.rs
+expression: "views(&text, parsed.diagnostics())"
+---
+[
+  {
+    "code": "period-end-before-start",
+    "severity": "error",
+    "range": [
+      253,
+      266
+    ],
+    "source": "2020 – 2018",
+    "message": "the period ends before it starts",
+    "hints": [
+      "swap the dates, or check the years"
+    ],
+    "fix": null
+  },
+  {
+    "code": "period-unparseable",
+    "severity": "error",
+    "range": [
+      277,
+      281
+    ],
+    "source": "1949",
+    "message": "year 1949 is outside 1950–2100",
+    "hints": [
+      "years must be between 1950 and 2100"
+    ],
+    "fix": null
+  },
+  {
+    "code": "period-unparseable",
+    "severity": "error",
+    "range": [
+      306,
+      308
+    ],
+    "source": "to",
+    "message": "can't read `to` as part of a date",
+    "hints": [
+      "separate the dates with an en dash: `Aug 2017 – 2020`"
+    ],
+    "fix": null
+  },
+  {
+    "code": "period-unparseable",
+    "severity": "error",
+    "range": [
+      324,
+      331
+    ],
+    "source": "08/2017",
+    "message": "can't read `08/2017` as part of a date",
+    "hints": [
+      "numeric months aren't supported; write the month name, like `Aug 2017`"
+    ],
+    "fix": null
+  },
+  {
+    "code": "period-unparseable",
+    "severity": "error",
+    "range": [
+      351,
+      355
+    ],
+    "source": "Aug,",
+    "message": "can't read `Aug,` as part of a date",
+    "hints": [
+      "remove the comma: `Aug 2017`"
+    ],
+    "fix": null
+  },
+  {
+    "code": "role-line-shape",
+    "severity": "error",
+    "range": [
+      375,
+      409
+    ],
+    "source": "F · ２０２０ – ２０２１",
+    "message": "this `###` heading is not a role line",
+    "hints": [
+      "level-3 headings are reserved for roles: a role line is `### Company · Title · 2019 – 2023` or `### Company · 2019 – 2023`; use `## ` for a section or `**Name · Period**` for an era"
+    ],
+    "fix": null
+  },
+  {
+    "code": "period-unparseable",
+    "severity": "error",
+    "range": [
+      433,
+      439
+    ],
+    "source": "Prsent",
+    "message": "can't read `Prsent` as part of a date",
+    "hints": [
+      "expected a month (`Aug`), a season (`Fall`), or a year (`2017`)"
+    ],
+    "fix": null
+  }
+]

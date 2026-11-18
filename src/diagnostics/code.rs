@@ -44,6 +44,13 @@ pub enum DiagnosticCode {
     MidSentenceBold,
     Image,
     TooManyContactItems,
+    MissingContact,
+    PeriodPresentSpelling,
+    UnsupportedMarkdown,
+    HardBreak,
+    TextTooLong,
+    EmptyHeading,
+    InputLimit,
     // Content (doctor)
     LongBullet,
     UnquantifiedBullet,
@@ -73,10 +80,32 @@ impl DiagnosticCode {
     pub const fn category(self) -> Category {
         use DiagnosticCode::*;
         match self {
-            MissingName | DuplicateName | ContentBeforeSection | RoleLineShape | RoleSeparator | EmptyRolePart
-            | EraShape | EraOutsideRole | PeriodUnparseable | PeriodEndBeforeStart | PeriodHyphen | UnsupportedHtml
-            | InvalidLink | UnsupportedLink | NestedList | RoleOrder | MidSentenceBold | Image
-            | TooManyContactItems => Category::Format,
+            MissingName
+            | DuplicateName
+            | ContentBeforeSection
+            | RoleLineShape
+            | RoleSeparator
+            | EmptyRolePart
+            | EraShape
+            | EraOutsideRole
+            | PeriodUnparseable
+            | PeriodEndBeforeStart
+            | PeriodHyphen
+            | UnsupportedHtml
+            | InvalidLink
+            | UnsupportedLink
+            | NestedList
+            | RoleOrder
+            | MidSentenceBold
+            | Image
+            | TooManyContactItems
+            | MissingContact
+            | PeriodPresentSpelling
+            | UnsupportedMarkdown
+            | HardBreak
+            | TextTooLong
+            | EmptyHeading
+            | InputLimit => Category::Format,
             LongBullet | UnquantifiedBullet | WeakOpener | FirstPerson | SloppyPhrase | LongSummary
             | EducationNotLast | OldRoleDetail => Category::Content,
             PageLimitExceeded
@@ -158,5 +187,22 @@ mod tests {
         assert_eq!(DiagnosticCode::FontMissing.category(), Category::Layout);
         assert_eq!(DiagnosticCode::UnknownStyle.category(), Category::Setup);
         assert_eq!(DiagnosticCode::TypstError.category(), Category::Setup);
+    }
+
+    #[test]
+    fn parser_codes_added_in_the_markdown_task_are_format_codes_with_stable_ids() {
+        let added = [
+            (DiagnosticCode::MissingContact, "missing-contact"),
+            (DiagnosticCode::PeriodPresentSpelling, "period-present-spelling"),
+            (DiagnosticCode::UnsupportedMarkdown, "unsupported-markdown"),
+            (DiagnosticCode::HardBreak, "hard-break"),
+            (DiagnosticCode::TextTooLong, "text-too-long"),
+            (DiagnosticCode::EmptyHeading, "empty-heading"),
+            (DiagnosticCode::InputLimit, "input-limit"),
+        ];
+        for (code, id) in added {
+            assert_eq!(code.category(), Category::Format);
+            assert_eq!(<&str>::from(code), id);
+        }
     }
 }

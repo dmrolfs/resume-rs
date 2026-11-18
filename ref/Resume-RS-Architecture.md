@@ -90,14 +90,17 @@ resume-rs/
       options.rs         # Paper, OutputFormat, BuiltinStyle, PageLimit (strum + clap ValueEnum)
     diagnostics/
       mod.rs             # Diagnostic, Severity, Span, SourceKind
-      code.rs            # DiagnosticCode (strum), Category, Advice catalog
+      code.rs            # DiagnosticCode (strum), Category, Advice
+      advice.rs          # the advice catalog: DiagnosticCode::advice()
       render.rs          # codespan-reporting human output; JSON lines
     markdown/
-      mod.rs             # parse(path, text) -> Parsed { resume, diagnostics }
-      blocks.rs          # block-level conventions (name, contact, roles, eras, blurbs)
-      inline.rs          # inline runs (text, strong, emph, link, code)
-      period.rs          # Period parsing and validation
-      lint.rs            # format lints (nesting, chronology, mid-sentence bold, images)
+      mod.rs             # parse(path, text) -> Parsed (valid() / best_effort()); Sink, limits, BOM and CR handling
+      tree.rs            # phase 1: events -> located tree (iterative, depth-capped; text-to-source segment map)
+      blocks.rs          # phase 2: name, contact, sections, role bodies, eras, bullets, HTML classification
+      role.rs            # role lines and era lines: canonical split, look-alike recovery, nutype-error mapping
+      inline.rs          # inline runs (text, strong, emph, link, code), labels, links, hard breaks
+      period.rs          # period grammar (pure) and located findings with Edits
+      lint.rs            # format lints (nesting, chronology, mid-sentence bold, images, contact count)
     doctor/
       mod.rs             # doctor(&Parsed, &Rendered, &Env) -> DoctorReport
       content.rs         # book-guided content lints (quantification, weak openers, first person, ...)
@@ -302,26 +305,38 @@ pub struct PageLimit(u8);          // --max-pages
 
 ### Markdown Parsing (`src/markdown/`)
 
-The parser uses `pulldown-cmark` 0.13 with `into_offset_iter()`, so every event carries a byte range for diagnostics. Smart punctuation is enabled to match pandoc's `smart` extension. HTML comments (`Event::Html` starting with `<!--`) are skipped. Any other raw HTML is an error, except the exact page-break marker.
+The parser uses `pulldown-cmark` 0.13 with `into_offset_iter()`, so every event carries a byte range for diagnostics. It runs in two phases. Phase 1 (`tree.rs`) lowers the events into a small located syntax tree, iteratively and with depth caps, and maps every piece of text back to bytes in the original source. Phase 2 (`blocks.rs`, `role.rs`, `inline.rs`, `period.rs`, `lint.rs`) interprets that tree into the model and reports findings. Lints run in phase 2, where every node still has its source range, so the model carries no span fields.
+
+`parse(path, text)` returns `Parsed`, whose fields are private. `valid()` is `Some` only when no error-severity diagnostic exists, which is what `build`, `export`, and `check` use. `best_effort()` is `Some` whenever a valid name heading was found, which is what `doctor` uses to lint the content of a file that still has format errors. The invariants are: no error implies a model, and no model implies an error. Parsing never aborts on content errors. Invalid nodes are dropped (an unrecoverable role) or degraded without losing text (an invalid link keeps its text, an era outside a role becomes a paragraph).
+
+Options: smart punctuation, tables, and footnotes. Tables and footnotes are on only so they can be diagnosed. Math, strikethrough, YAML metadata blocks, heading attributes, task lists, and definition lists stay off: a resume writes `$39K` and `~5`, and a `---` line is not front matter. A UTF-8 BOM is skipped, and a lone `\r` is treated as a line ending (offsets are unchanged, because the replacement is byte for byte). All spans index the original text, for LF, CRLF, and mixed line endings.
+
+HTML comments are skipped, and the exact page-break marker becomes a page break. Any other raw HTML is an error. A comment that never closes, text after `-->` on the same line, and a page-break marker followed by a non-blank line each hide content, so each is an `unsupported-html` error.
 
 | Convention | Rule | Diagnostic when violated |
 |---|---|---|
-| Name | Exactly one `# ` heading, first in the document | Error if missing or repeated |
+| Name | Exactly one `# ` heading, the first block other than comments | Error if missing or repeated. Content before it is `content-before-section`. |
 | Contact | The first paragraph after the name | Warning if missing. `too-many-contact-items` warning above 4 ` · `-separated items (book: four contact details at most). Links must parse as URLs (`invalid-link`) with an `http(s)://` or `mailto:` scheme (`unsupported-link`). |
 | Section | `## Title`. Everything until the next `##` belongs to it. | Error for content before the first `##` other than the name and contact |
 | Role | `### Company · Title · Period` or `### Company · Period`. A period is recognized by containing a four-digit year. | Error with a hint naming the expected shape and the separator ` · ` (U+00B7 with spaces). A separator typed as `-`, `\|`, or `•` gets a "did you mean ` · `?" hint. |
-| Company description | The first paragraph directly after a role line | None. This is the documented behavior. |
-| Era | A paragraph that is only `**Name · Period**`, inside a role | A bold paragraph that has ` · ` but no year gets an error. An era outside a role gets an error. |
-| Bullet label | A list item starting with `**Label:**` | None |
-| Page break | `<div class="page-break"></div>` on its own lines, kept for compatibility | None |
-| Period | Start: `Mon YYYY`, `Month YYYY`, `YYYY`, or a season plus `YYYY`. Separator: ` – ` (en dash) or ` - `. End: the same forms, or `Present` (also accepts `Current` and `Now`, with a fixable warning). | Error on an unparseable year, a year outside 1950–2100, or an end before the start. Fixable warning for a hyphen instead of an en dash. |
+| Company description | The first paragraph directly after a role line, if it is not an era | None. This is the documented behavior. A first block that is a list or an era means the role has no description. |
+| Era | A paragraph that is only `**Name · Period**`, inside a role. Following bullets belong to it until the next era, role, section, page break, or non-list block. | A bold paragraph that has ` · ` but no year gets an error, and so does an era followed by text in the same paragraph (the old tool treated that as a normal paragraph). An era outside a role gets an error. |
+| Bullet label | A list item starting with `**Label:**`, the colon inside the bold | `**Label**: text` (colon outside) is a `mid-sentence-bold` warning with an Edit that moves the colon inside. |
+| Page break | `<div class="page-break"></div>` on its own lines, with blank lines around it, kept for compatibility | A page break inside a role body is an error (schema v1 has no `RoleBlock::PageBreak`); between roles or at the end of a section it closes the role. |
+| Period | Start: `Mon YYYY`, `Month YYYY`, `YYYY`, or a season plus `YYYY`. A single date is allowed. Separator: ` – ` (en dash with spaces). End: the same forms, or `Present`. | `period-unparseable` for unreadable dates (word separators and numeric months get a targeted hint) and for years outside 1950–2100. `period-end-before-start` for a reversed range; a bare year end is compared as the end of that year, so `Mar 2017 – 2017` is valid. A hyphen, an unspaced or em dash, or `--` instead of the en dash is a fixable `period-hyphen` warning. `Current`, `Now`, or another capitalization of Present is a fixable `period-present-spelling` warning. |
+| Unsupported constructs | Everything the model cannot represent: block quotes, code blocks, tables, footnotes, thematic breaks, setext headings, headings below level 3, numbered lists, and a bullet with more than one paragraph | `unsupported-markdown` error, never dropped silently. Nested lists are a `nested-list` warning and are flattened. A hard line break is a fixable `hard-break` warning and renders as a space. |
+
+Every `###` heading is a role-line attempt, because the model has no plain-heading variant. A line whose separators are look-alikes (`|`, a bullet or other dot, a spaced hyphen, a misspaced middle dot) is recovered period first: the earliest separator whose suffix parses as a period is where the dates start. The result is a `role-separator` error with a "did you mean" hint, and an Edit only when it is unambiguous. No Edit is offered when the split would yield more than a company and a title, or when the only wrong separator before the title is a hyphen (it could belong to the company name, as in `Gusto - Webtab`). A hyphen with no spaces around it, as in `Rolls-Royce`, is never a separator. A split is rejected when the text before it already contains a year, so a period with a bad start (`08/2017 – 2018`) is reported as an unparseable period, not as a separator.
+
+Limits, all reported as `input-limit` errors: input over 1 MiB, emphasis, strong, or link nesting deeper than 8 levels (the excess is flattened, text kept), list nesting deeper than 8, and more than 500 findings (the rest are summarized in one finding whose severity is the worst of those suppressed). Role and era lines over 512 bytes are `text-too-long`. The depth cap matters beyond this parser: Typst's `json()` rejects documents nested deeper than 128 levels, so deep emphasis would break every style.
 
 Format lints run during parsing. They are warnings about how the Markdown is written:
 
 - Nested lists. The book says to avoid sub-bullets.
-- Roles that aren't in reverse chronological order within a section, compared with `PartialDate::sort_key` on the end date, with Present treated as the most recent.
-- Bold inside a sentence (a `Strong` that isn't a bullet label or an era). The book says to avoid bolding in mid-sentence.
-- Images. The book says no photos.
+- Roles that aren't in reverse chronological order within a section. A role is flagged only when the earliest date its end can denote (`PartialDate::sort_key`) is after the latest date the previous role's end can denote (`PartialDate::latest_key`), with Present as the most recent, so `2017` after `Aug 2017` is never flagged. Eras do not take part.
+- Bold inside a sentence (a `Strong` that isn't a bullet label, an era, or the whole content of its paragraph or bullet). The book says to avoid bolding in mid-sentence.
+- Images. The book says no photos. They are dropped from the model.
+- More than four contact items, counted over `·`, `|`, and `•` separators, never inside link text.
 
 Content advice (bullet length, quantification, weak openers, and so on) belongs to `doctor`. See the Doctor section.
 
@@ -348,6 +363,7 @@ pub enum DiagnosticCode {
     MissingName, DuplicateName, ContentBeforeSection, RoleLineShape, RoleSeparator, EmptyRolePart,
     EraShape, EraOutsideRole, PeriodUnparseable, PeriodEndBeforeStart, PeriodHyphen,
     UnsupportedHtml, InvalidLink, UnsupportedLink, NestedList, RoleOrder, MidSentenceBold, Image, TooManyContactItems,
+    MissingContact, PeriodPresentSpelling, UnsupportedMarkdown, HardBreak, TextTooLong, EmptyHeading, InputLimit,
     // Content (doctor)
     LongBullet, UnquantifiedBullet, WeakOpener, FirstPerson, SloppyPhrase, LongSummary,
     EducationNotLast, OldRoleDetail,
@@ -359,7 +375,8 @@ pub enum DiagnosticCode {
 
 impl DiagnosticCode {
     pub fn category(self) -> Category;
-    pub fn advice(self) -> &'static Advice;   // static catalog, one entry per code
+    /// `None` until the task that owns the code writes its advice (exhaustive match, no wildcard).
+    pub const fn advice(self) -> Option<&'static Advice>;
 }
 
 pub struct Advice {
@@ -394,7 +411,7 @@ Using `strum` on `DiagnosticCode` gives:
 - `EnumIter`, so a test can assert that every code has advice and the README catalog can be generated
 - `EnumString`, for parsing `--explain` arguments
 
-Advice lives in a `match` in `code.rs`, not in strum attributes, because multi-line rationale and before/after examples read poorly inside attributes.
+Advice lives in a `match` in `advice.rs`, not in strum attributes, because multi-line rationale and before/after examples read poorly inside attributes. The match is exhaustive with no wildcard, so adding a code forces a decision. Format codes are filled in; the owner of each other category writes its entries, and its test then tightens "every Format code has advice" to "every code has advice". A rationale cites *The Tech Resume Inside Out* only where the book says it, and otherwise starts "Project convention:".
 
 Markdown and Typst diagnostics share one type and are rendered with `codespan-reporting` 0.13, the same renderer Typst's own CLI uses. Typst diagnostics are converted by resolving each span's `FileId` through `ResumeWorld` back to the style file path and byte range. `--format json` emits diagnostics as JSON lines for editors and scripts.
 
@@ -574,8 +591,9 @@ Setup    ok (style mono, 3 fonts embedded, out/ writable)
 **Fixes** (`doctor/fix.rs`). A diagnostic carries an `Edit` only when the fix is mechanical and preserves meaning:
 - a role or era separator typed as `-`, `|`, or `•` between parts becomes ` · `
 - a period hyphen becomes an en dash
-- "Current" or "Now" as a period end becomes "Present"
-- trailing whitespace on role and era lines is removed
+- "Current", "Now", or another capitalization of Present becomes "Present"
+- the trailing spaces or backslash of a hard line break are removed
+- `**Label**: text` becomes `**Label:** text`
 
 `doctor --fix` applies all edits in one pass (sorted, non-overlapping, applied from the end), writes the file atomically, prints a unified diff (`similar` 3), and re-runs the checks. Content advice is never auto-fixed. `doctor --explain <code>` prints the full advice entry, like `rustc --explain`.
 

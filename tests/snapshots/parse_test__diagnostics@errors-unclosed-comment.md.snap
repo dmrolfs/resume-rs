@@ -1,0 +1,20 @@
+---
+source: tests/parse_test.rs
+expression: "views(&text, parsed.diagnostics())"
+---
+[
+  {
+    "code": "unsupported-html",
+    "severity": "error",
+    "range": [
+      242,
+      246
+    ],
+    "source": "<!--",
+    "message": "the comment is never closed; everything after line 12 is hidden",
+    "hints": [
+      "end the comment with `-->`"
+    ],
+    "fix": null
+  }
+]

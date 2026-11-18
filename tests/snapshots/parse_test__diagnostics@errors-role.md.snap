@@ -1,0 +1,195 @@
+---
+source: tests/parse_test.rs
+expression: "views(&text, parsed.diagnostics())"
+---
+[
+  {
+    "code": "role-line-shape",
+    "severity": "error",
+    "range": [
+      251,
+      259
+    ],
+    "source": "Projects",
+    "message": "this `###` heading is not a role line",
+    "hints": [
+      "level-3 headings are reserved for roles: a role line is `### Company · Title · 2019 – 2023` or `### Company · 2019 – 2023`; use `## ` for a section or `**Name · Period**` for an era"
+    ],
+    "fix": null
+  },
+  {
+    "code": "role-separator",
+    "severity": "error",
+    "range": [
+      265,
+      296
+    ],
+    "source": "Acme | Engineer | 2015 – 2017",
+    "message": "role parts must be separated by ` · `, not `|`",
+    "hints": [
+      "did you mean `### Acme · Engineer · 2015 – 2017`?"
+    ],
+    "fix": {
+      "range": [
+        269,
+        283
+      ],
+      "replaces": " | Engineer | ",
+      "with": " · Engineer · "
+    }
+  },
+  {
+    "code": "role-separator",
+    "severity": "error",
+    "range": [
+      302,
+      336
+    ],
+    "source": "Acme • Engineer · 2013 – 2015",
+    "message": "role parts must be separated by ` · `, not `•`",
+    "hints": [
+      "did you mean `### Acme · Engineer · 2013 – 2015`?"
+    ],
+    "fix": {
+      "range": [
+        306,
+        311
+      ],
+      "replaces": " • ",
+      "with": " · "
+    }
+  },
+  {
+    "code": "role-separator",
+    "severity": "error",
+    "range": [
+      342,
+      370
+    ],
+    "source": "Gusto-Webtab - 2011 – 2013",
+    "message": "role parts must be separated by ` · `, not `-`",
+    "hints": [
+      "did you mean `### Gusto-Webtab · 2011 – 2013`?"
+    ],
+    "fix": {
+      "range": [
+        354,
+        357
+      ],
+      "replaces": " - ",
+      "with": " · "
+    }
+  },
+  {
+    "code": "role-separator",
+    "severity": "error",
+    "range": [
+      376,
+      407
+    ],
+    "source": "Acme - Engineer - 2009 – 2011",
+    "message": "role parts must be separated by ` · `, not `-`",
+    "hints": [
+      "if this is a company and a title, write `### Acme · Engineer · 2009 – 2011`; a hyphen could also belong to the company name"
+    ],
+    "fix": null
+  },
+  {
+    "code": "role-separator",
+    "severity": "error",
+    "range": [
+      413,
+      453
+    ],
+    "source": "Rolls - Royce - Engineer - 2007 – 2009",
+    "message": "role parts must be separated by ` · `, not `-`",
+    "hints": [
+      "can't tell where the company ends; write `### Company · Title · 2019 – 2023`"
+    ],
+    "fix": null
+  },
+  {
+    "code": "empty-role-part",
+    "severity": "error",
+    "range": [
+      459,
+      462
+    ],
+    "source": "· ",
+    "message": "the company is empty",
+    "hints": [
+      "a role line is `Company · Title · Period` or `Company · Period`; every part needs text"
+    ],
+    "fix": null
+  },
+  {
+    "code": "empty-role-part",
+    "severity": "error",
+    "range": [
+      501,
+      505
+    ],
+    "source": " · ",
+    "message": "the title is empty",
+    "hints": [
+      "a role line is `Company · Title · Period` or `Company · Period`; every part needs text"
+    ],
+    "fix": null
+  },
+  {
+    "code": "role-line-shape",
+    "severity": "error",
+    "range": [
+      524,
+      552
+    ],
+    "source": "A · B · C · 2001 – 2003",
+    "message": "the role line has too many ` · ` parts",
+    "hints": [
+      "a role line is `### Company · Title · 2019 – 2023` or `### Company · 2019 – 2023`; use a comma inside a title"
+    ],
+    "fix": null
+  },
+  {
+    "code": "role-line-shape",
+    "severity": "error",
+    "range": [
+      558,
+      595
+    ],
+    "source": "**Bold** · Engineer · 1999 – 2001",
+    "message": "role lines must be plain text",
+    "hints": [
+      "write `### Company · Title · Period` without bold, italics, links, or code; styles format it"
+    ],
+    "fix": null
+  },
+  {
+    "code": "period-end-before-start",
+    "severity": "error",
+    "range": [
+      609,
+      622
+    ],
+    "source": "2020 – 2018",
+    "message": "the period ends before it starts",
+    "hints": [
+      "swap the dates, or check the years"
+    ],
+    "fix": null
+  },
+  {
+    "code": "empty-heading",
+    "severity": "error",
+    "range": [
+      624,
+      627
+    ],
+    "source": "###",
+    "message": "the role line is empty",
+    "hints": [
+      "write `### Company · Title · 2019 – 2023`"
+    ],
+    "fix": null
+  }
+]

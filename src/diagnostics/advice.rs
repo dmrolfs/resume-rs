@@ -1,0 +1,280 @@
+//! ABOUTME: The advice catalog: one summary, rationale, fix, and example per diagnostic code.
+//! ABOUTME: Format codes are filled in; Content, Layout, and Setup advice is written by the tasks that own them.
+
+use super::code::{Advice, DiagnosticCode};
+
+impl DiagnosticCode {
+    /// The advice for this code, or `None` until the task that owns it writes it.
+    ///
+    /// The match is exhaustive with no wildcard, so adding a code forces a decision here.
+    #[must_use]
+    pub const fn advice(self) -> Option<&'static Advice> {
+        use DiagnosticCode::*;
+        match self {
+            MissingName => Some(&Advice {
+                summary: "The resume has no `# Name` heading.",
+                why: "Project convention: the first-level heading is the name; styles use it as the title and the footer text.",
+                fix: "Start the file with `# Your Name`; comments may come before it.",
+                example: Some((
+                    "## Summary\n\nSenior engineer.",
+                    "# Ada Lovelace\n\nLondon · ada@example.com\n\n## Summary\n\nSenior engineer.",
+                )),
+            }),
+            DuplicateName => Some(&Advice {
+                summary: "A resume has exactly one `# ` heading.",
+                why: "Project convention: the single `# ` heading is the name; sections start at `## `.",
+                fix: "Change the extra `# ` heading to `## `, or remove it.",
+                example: Some(("# Experience", "## Experience")),
+            }),
+            ContentBeforeSection => Some(&Advice {
+                summary: "Content appears before the first `## ` section.",
+                why: "Project convention: only the name and one contact line come before the first section.",
+                fix: "Move the content under a `## ` section.",
+                example: Some((
+                    "# Ada\n\nLondon\n\nSenior engineer.\n\n## Experience",
+                    "# Ada\n\nLondon\n\n## Summary\n\nSenior engineer.\n\n## Experience",
+                )),
+            }),
+            RoleLineShape => Some(&Advice {
+                summary: "This `###` heading is not a role line.",
+                why: "Project convention: `###` is reserved for roles, written `Company · Title · Period` or `Company · Period`. The book asks for experience marked clearly with dates.",
+                fix: "Write `### Company · Title · 2019 – 2023`; use `## ` for a section or `**Name · Period**` for an era.",
+                example: Some((
+                    "### Staff Engineer at Acme, 2019-2023",
+                    "### Acme · Staff Engineer · 2019 – 2023",
+                )),
+            }),
+            RoleSeparator => Some(&Advice {
+                summary: "Role parts are separated by something other than ` · `.",
+                why: "Project convention: the separator is a middle dot (U+00B7) with a space on each side. The previous tool silently rendered other separators as a plain heading.",
+                fix: "Type ` · ` (Option+Shift+9 on a Mac) between the company, the title, and the dates.",
+                example: Some(("### Acme | Engineer | 2015 – 2017", "### Acme · Engineer · 2015 – 2017")),
+            }),
+            EmptyRolePart => Some(&Advice {
+                summary: "A part of the role line is empty.",
+                why: "Project convention: every part of `Company · Title · Period` needs text; a title may be left out only together with its separator.",
+                fix: "Fill in the empty part, or remove it together with its separator.",
+                example: Some(("### Acme ·  · 2019 – 2023", "### Acme · Staff Engineer · 2019 – 2023")),
+            }),
+            EraShape => Some(&Advice {
+                summary: "The bold line looks like an era but is not `**Name · Period**`.",
+                why: "Project convention: an era is a paragraph that is only bold text: a name, ` · `, and dates. It shows progression inside one employer.",
+                fix: "Make the whole paragraph bold with a name, ` · `, and dates; move any other text into its own paragraph.",
+                example: Some(("**AI platforms** · 2026 – Present", "**AI platforms · 2026 – Present**")),
+            }),
+            EraOutsideRole => Some(&Advice {
+                summary: "An era line is outside a role.",
+                why: "Project convention: eras show progression inside one employer, so they belong under a `###` role line.",
+                fix: "Move the era under the role it belongs to, or make it plain text.",
+                example: Some((
+                    "## Experience\n\n**AI platforms · 2026 – Present**",
+                    "## Experience\n\n### Acme · 2026 – Present\n\n**AI platforms · 2026 – Present**",
+                )),
+            }),
+            PeriodUnparseable => Some(&Advice {
+                summary: "The dates can't be read.",
+                why: "The Tech Resume Inside Out asks for consistent, easy-to-read dates. The parser accepts a small closed set of forms so every style renders them the same way.",
+                fix: "Write `Aug 2017 – Present`, `2015 – 2017`, or `Fall 2019 – Spring 2021`, with years from 1950 to 2100.",
+                example: Some(("### Acme · 08/2017 until now", "### Acme · Aug 2017 – Present")),
+            }),
+            PeriodEndBeforeStart => Some(&Advice {
+                summary: "The period ends before it starts.",
+                why: "Project convention: a period runs from its start to its end; a reversed range is almost always a typo.",
+                fix: "Swap the dates, or correct the year.",
+                example: Some(("2020 – 2018", "2018 – 2020")),
+            }),
+            PeriodHyphen => Some(&Advice {
+                summary: "Use an en dash with a space on each side between dates.",
+                why: "Project convention: one separator everywhere keeps dates consistent, which the book asks for, and lets styles align them.",
+                fix: "Replace the separator with ` – ` (an en dash; Option+hyphen on a Mac).",
+                example: Some(("2015 - 2017", "2015 – 2017")),
+            }),
+            PeriodPresentSpelling => Some(&Advice {
+                summary: "Write `Present` for an ongoing role.",
+                why: "Project convention: a single spelling keeps dates consistent, which the book asks for.",
+                fix: "Replace `Current`, `Now`, or another capitalization with `Present`.",
+                example: Some(("Aug 2017 – Current", "Aug 2017 – Present")),
+            }),
+            UnsupportedHtml => Some(&Advice {
+                summary: "Raw HTML can't be typeset.",
+                why: "Project convention: only comments and the page-break marker are allowed; other HTML would be dropped or break the layout.",
+                fix: "Use Markdown. A comment is `<!-- ... -->`; a page break is `<div class=\"page-break\"></div>` alone on its lines, with blank lines around it.",
+                example: Some(("Seattle<br>WA", "Seattle, WA")),
+            }),
+            InvalidLink => Some(&Advice {
+                summary: "The link target is not a valid address.",
+                why: "The Tech Resume Inside Out says links should be clickable, and a link needs a full address to be.",
+                fix: "Write a full address such as `https://example.com`, with descriptive link text.",
+                example: Some(("[Notes](notes.md)", "[Notes](https://example.com/notes)")),
+            }),
+            UnsupportedLink => Some(&Advice {
+                summary: "Only http, https, and mailto links are supported.",
+                why: "Project convention: links are limited to schemes that every PDF viewer and recruiter can open.",
+                fix: "Use an `https://` or `mailto:` link.",
+                example: Some((
+                    "[Resume](ftp://example.com/resume.pdf)",
+                    "[Resume](https://example.com/resume.pdf)",
+                )),
+            }),
+            NestedList => Some(&Advice {
+                summary: "Nested bullets are flattened to one level.",
+                why: "The Tech Resume Inside Out: sub-bullets clutter a resume and make it harder to read; stick with one level.",
+                fix: "Fold the detail into the parent bullet, or make it a sibling bullet.",
+                example: Some((
+                    "- Led the platform\n  - cut cost 40%",
+                    "- Led the platform, cutting cost 40%",
+                )),
+            }),
+            RoleOrder => Some(&Advice {
+                summary: "Roles are not listed newest first.",
+                why: "The Tech Resume Inside Out: list experience in reverse chronological order, with the latest on top.",
+                fix: "Move the later role above the earlier one.",
+                example: Some((
+                    "### Old Co · 2010 – 2012\n\n### New Co · 2018 – 2020",
+                    "### New Co · 2018 – 2020\n\n### Old Co · 2010 – 2012",
+                )),
+            }),
+            MidSentenceBold => Some(&Advice {
+                summary: "Bold appears inside a sentence.",
+                why: "The Tech Resume Inside Out: don't bold anything inside a sentence; bold only a job title, company name, date, or header.",
+                fix: "Remove the bold, or write a lead-in as `**Label:** text` with the colon inside the bold.",
+                example: Some((
+                    "Cut cost by **40%** with autoscaling",
+                    "Cut cost by 40% with autoscaling",
+                )),
+            }),
+            Image => Some(&Advice {
+                summary: "Images are not rendered.",
+                why: "The Tech Resume Inside Out: don't include photos on a resume.",
+                fix: "Remove the image.",
+                example: Some(("![Me](me.png)", "")),
+            }),
+            TooManyContactItems => Some(&Advice {
+                summary: "The contact line has more than four items.",
+                why: "The Tech Resume Inside Out: don't share more than four contact details or social profiles.",
+                fix: "Keep location, email, phone, and one or two links; drop the rest.",
+                example: Some((
+                    "Seattle, WA · 206-555-0100 · ada@example.com · [LinkedIn](https://l.in/a) · [GitHub](https://g.h/a)",
+                    "Seattle, WA · ada@example.com · [LinkedIn](https://l.in/a) · [GitHub](https://g.h/a)",
+                )),
+            }),
+            MissingContact => Some(&Advice {
+                summary: "The name has no contact line.",
+                why: "The Tech Resume Inside Out: put basic contact details at the top, and keep them short.",
+                fix: "Add a line right after the name with location, email, phone, and links, separated by ` · `.",
+                example: Some(("# Ada\n\n## Summary", "# Ada\n\nLondon · ada@example.com\n\n## Summary")),
+            }),
+            UnsupportedMarkdown => Some(&Advice {
+                summary: "This Markdown construct can't be represented.",
+                why: "Project convention: a resume is a name, a contact line, sections, roles with bullets, and eras. Quotes, tables, code blocks, numbered lists, and headings below level 3 have no place in the model and would be lost.",
+                fix: "Rewrite it as a paragraph, a `- ` bullet, a `**Label:**` lead-in, or an era line.",
+                example: Some(("1. Led the team", "- Led the team")),
+            }),
+            HardBreak => Some(&Advice {
+                summary: "A hard line break is rendered as a space.",
+                why: "Project convention: paragraphs and bullets flow as one block; trailing spaces or a backslash at a line end are usually accidental.",
+                fix: "Remove the trailing spaces or backslash; use a blank line to start a new paragraph.",
+                example: Some(("Led the team  \nand shipped", "Led the team\nand shipped")),
+            }),
+            TextTooLong => Some(&Advice {
+                summary: "A heading or role part is too long.",
+                why: "Project convention: names and headings are short. The limits are 80 characters for a name or era, 120 for a company or title, and 60 for a section.",
+                fix: "Shorten it; move the detail into the bullets.",
+                example: None,
+            }),
+            EmptyHeading => Some(&Advice {
+                summary: "A heading has no text.",
+                why: "Project convention: the name, every section, and every role line need text.",
+                fix: "Write the heading text, or remove the heading.",
+                example: Some(("##", "## Experience")),
+            }),
+            InputLimit => Some(&Advice {
+                summary: "The input exceeds a size or nesting limit.",
+                why: "Project convention: limits protect the tool from pathological files: 1 MiB of Markdown, 8 levels of nested emphasis or lists, and 500 findings.",
+                fix: "Split the file, flatten the nesting, or fix the earlier findings first.",
+                example: None,
+            }),
+            // Content (doctor), Layout (render), and Setup: written by the tasks that own them.
+            LongBullet
+            | UnquantifiedBullet
+            | WeakOpener
+            | FirstPerson
+            | SloppyPhrase
+            | LongSummary
+            | EducationNotLast
+            | OldRoleDetail
+            | PageLimitExceeded
+            | HeadingNearPageBottom
+            | SparseLastPage
+            | FontFallbackMetric
+            | FontFallbackLayout
+            | FontMissing
+            | UnknownStyle
+            | StyleMissingMain
+            | OutputNotWritable
+            | TypstError => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostics::Category;
+
+    const BOOK: &str = "The Tech Resume Inside Out";
+
+    use claims::assert_some;
+    use strum::IntoEnumIterator;
+
+    #[test]
+    fn every_format_code_has_advice() {
+        for code in DiagnosticCode::iter().filter(|c| c.category() == Category::Format) {
+            assert_some!(code.advice(), "{code} has no advice");
+        }
+    }
+
+    #[test]
+    fn advice_entries_are_well_formed() {
+        for code in DiagnosticCode::iter() {
+            let Some(advice) = code.advice() else { continue };
+            assert!(
+                !advice.summary.is_empty() && !advice.summary.contains('\n'),
+                "{code}: summary is one line"
+            );
+            assert!(
+                advice.summary.chars().count() <= 100,
+                "{code}: summary is at most 100 characters"
+            );
+            assert!(advice.summary.ends_with('.'), "{code}: summary is a sentence");
+            assert!(
+                !advice.why.is_empty() && !advice.fix.is_empty(),
+                "{code}: why and fix are non-empty"
+            );
+            if let Some((before, after)) = advice.example {
+                assert_ne!(before, after, "{code}: the example must change something");
+            }
+        }
+    }
+
+    #[test]
+    fn why_cites_the_book_or_names_a_project_convention() {
+        for code in DiagnosticCode::iter() {
+            let Some(advice) = code.advice() else { continue };
+            let sourced = advice.why.starts_with(BOOK) || advice.why.starts_with("Project convention:");
+            assert!(
+                sourced,
+                "{code}: rationale must cite the book or say it is a project convention: {}",
+                advice.why
+            );
+        }
+    }
+
+    #[test]
+    fn codes_without_advice_are_not_format_codes() {
+        // The tasks that write Content, Layout, and Setup advice flip this to "every code has advice".
+        for code in DiagnosticCode::iter().filter(|c| c.advice().is_none()) {
+            assert_ne!(code.category(), Category::Format, "{code}");
+        }
+    }
+}

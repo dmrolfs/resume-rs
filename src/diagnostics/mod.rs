@@ -1,6 +1,7 @@
 //! ABOUTME: Diagnostic types shared by the parser, doctor, and renderer: severity, span, and edits.
 //! ABOUTME: One type covers Markdown and Typst findings so a single renderer can display both.
 
+mod advice;
 pub mod code;
 
 use std::ops::Range;

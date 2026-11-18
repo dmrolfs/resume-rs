@@ -92,22 +92,17 @@ Cross-OS PDF byte comparison and the Windows-only behavior tests are owned by th
 - [ ] `schema_version_is_emitted`
 
 ### rsm-141.4: Markdown parser
-- [ ] `parses_name_and_contact`
-- [ ] `parses_three_part_role_line` and `parses_two_part_role_line`
-- [ ] `first_paragraph_after_role_is_blurb`
-- [ ] `bold_only_paragraph_with_dates_is_era`
-- [ ] `bullet_label_is_extracted_without_colon`
-- [ ] `page_break_marker_becomes_block` and `comments_are_dropped`
-- [ ] `missing_name_is_error`, `duplicate_name_is_error`
-- [ ] `role_with_wrong_separator_suggests_middle_dot`: asserts the span and the hint
-- [ ] `era_without_year_is_error`, `era_outside_role_is_error`
-- [ ] `end_year_before_start_is_error`, `hyphen_range_warns_with_edit`, `current_end_warns_with_edit`
-- [ ] `empty_company_maps_nutype_error_to_located_diagnostic`
-- [ ] `raw_html_other_than_page_break_is_error`
-- [ ] `malformed_link_is_invalid_link_with_parser_hint`, `ftp_link_is_unsupported_link`
-- [ ] `nested_list_warns`, `out_of_order_roles_warn`, `mid_sentence_bold_warns`, `image_warns`, `too_many_contact_items_warns`
-- [ ] `parse_never_panics` (proptest), `spans_are_in_bounds` (proptest)
-- [ ] `baselines_parse_without_errors` (ignored)
+Unit tests sit beside the code in `src/markdown/{tree,blocks,role,inline,period,lint,mod}.rs`; whole-document tests are in `tests/parse_test.rs` with fixtures `tests/fixtures/{full,errors-*,warnings-*}.md`.
+- [x] One test per convention: `parses_name_and_contact`, `parses_three_part_role_line`, `parses_two_part_role_line`, `first_paragraph_after_role_is_blurb`, `bold_only_paragraph_with_dates_is_era`, `bullet_label_is_extracted_without_colon`, `page_break_marker_becomes_block`, `comments_are_dropped`
+- [x] One test per Format code, asserting the byte range, a hint, and the Edit when fixable (for example `role_with_wrong_separator_suggests_middle_dot`, `hyphen_range_warns_with_edit`, `current_end_warns_with_edit`, `empty_company_maps_nutype_error_to_located_diagnostic`), and `every_format_code_is_demonstrated_by_a_fixture`
+- [x] Role-line safety: `hyphenated_company_is_not_rewritten`, `ambiguous_hyphen_separators_have_no_edit`, `role_separator_and_period_hyphen_edits_do_not_overlap`, `a_period_with_a_bad_start_is_not_mistaken_for_a_role_separator`
+- [x] Links: `malformed_link_is_invalid_link_with_parser_hint`, `relative_link_is_invalid_link`, `ftp_link_is_unsupported_link`, `email_autolink_gets_mailto`
+- [x] Nothing silently lost: `unsupported_blocks_are_errors`, `unterminated_comment_is_error`, `page_break_without_blank_line_after_is_error`, `nested_items_are_flattened_in_order`
+- [x] Fixtures: `full_fixture_has_no_diagnostics`, `full_fixture_snapshot`, `finding_fixtures_snapshots` (diagnostics with the quoted source), `warnings_fixable_edits_apply_cleanly`
+- [x] Windows portability (owned by this task): `crlf_spans_point_into_original`, `lf_and_crlf_inputs_parse_to_equal_models`, `mixed_line_endings_parse_like_lf`, `lone_cr_line_endings_parse_like_lf`, `final_line_without_newline_parses`, `bom_is_ignored_for_the_model_and_spans_shift`
+- [x] Property tests (proptest): `parse_never_panics_on_arbitrary_text`, `parse_never_panics_on_structured_markdown`, `spans_are_in_bounds` (bounds, char boundaries, hints, Edits non-overlapping), `resume_is_present_unless_errors`, `applying_edits_clears_fixable_findings`, `period_text_reparses_identically`
+- [x] Pathological input: `pathological_inputs_do_not_overflow_a_small_stack` (256 KiB stack), `nesting_beyond_the_cap_is_reported_not_crashed_on`, `oversized_input_is_one_error_and_no_model`
+- [x] `baselines_parse_without_errors` (ignored; set `RESUME_BASELINES`, it fails loudly when unset). Each baseline emits exactly one `too-many-contact-items` warning, because each has five contact items and the book says at most four.
 
 ### rsm-141.5: Diagnostic rendering
 - [ ] `human_error_shows_excerpt_and_hint` (snapshot)

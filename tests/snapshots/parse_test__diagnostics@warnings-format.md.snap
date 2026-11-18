@@ -1,0 +1,97 @@
+---
+source: tests/parse_test.rs
+expression: "views(&text, parsed.diagnostics())"
+---
+[
+  {
+    "code": "too-many-contact-items",
+    "severity": "warning",
+    "range": [
+      211,
+      317
+    ],
+    "source": "London, UK · 206-555-0100 · ada@example.com · [LinkedIn](https://l.in/ada) · [GitHub](https://g.h/ada)",
+    "message": "the contact line has 5 items; at most 4 are recommended",
+    "hints": [
+      "keep the contact line to location, email, phone, and one or two links"
+    ],
+    "fix": null
+  },
+  {
+    "code": "nested-list",
+    "severity": "warning",
+    "range": [
+      393,
+      434
+    ],
+    "source": "- Nested bullet one\n  - Nested bullet two",
+    "message": "nested lists are flattened to one level",
+    "hints": [
+      "keep bullets to one level: fold the detail into the parent bullet or make it a sibling"
+    ],
+    "fix": null
+  },
+  {
+    "code": "mid-sentence-bold",
+    "severity": "warning",
+    "range": [
+      445,
+      453
+    ],
+    "source": "**fast**",
+    "message": "bold inside a sentence",
+    "hints": [
+      "bold only titles, companies, dates, and headings; for a lead-in write `**Label:** text`, with the colon inside"
+    ],
+    "fix": null
+  },
+  {
+    "code": "mid-sentence-bold",
+    "severity": "warning",
+    "range": [
+      465,
+      478
+    ],
+    "source": "**Languages**",
+    "message": "bold inside a sentence",
+    "hints": [
+      "bold only titles, companies, dates, and headings; for a lead-in write `**Label:** text`, with the colon inside"
+    ],
+    "fix": {
+      "range": [
+        476,
+        479
+      ],
+      "replaces": "**:",
+      "with": ":**"
+    }
+  },
+  {
+    "code": "image",
+    "severity": "warning",
+    "range": [
+      486,
+      504
+    ],
+    "source": "![A photo](me.png)",
+    "message": "images are not rendered on a resume",
+    "hints": [
+      "remove the image; a resume has no photos or graphics"
+    ],
+    "fix": null
+  },
+  {
+    "code": "role-order",
+    "severity": "warning",
+    "range": [
+      510,
+      545
+    ],
+    "source": "New Co · Engineer · 2018 – 2020",
+    "message": "`New Co` ended after the role above it",
+    "hints": [
+      "list roles newest first: move it above `Old Co`"
+    ],
+    "fix": null
+  }
+]

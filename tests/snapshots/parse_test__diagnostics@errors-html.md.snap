@@ -1,0 +1,90 @@
+---
+source: tests/parse_test.rs
+expression: "views(&text, parsed.diagnostics())"
+---
+[
+  {
+    "code": "unsupported-html",
+    "severity": "error",
+    "range": [
+      208,
+      212
+    ],
+    "source": "<br>",
+    "message": "raw HTML `<br>` can't be typeset",
+    "hints": [
+      "use Markdown (**bold**, *italic*, [links](https://example.com)); only comments and the page-break marker are allowed"
+    ],
+    "fix": null
+  },
+  {
+    "code": "unsupported-html",
+    "severity": "error",
+    "range": [
+      233,
+      269
+    ],
+    "source": "<div class=\"note\">A raw block.</div>",
+    "message": "raw HTML can't be typeset",
+    "hints": [
+      "use Markdown; only comments and `<div class=\"page-break\"></div>` are allowed"
+    ],
+    "fix": null
+  },
+  {
+    "code": "unsupported-html",
+    "severity": "error",
+    "range": [
+      276,
+      279
+    ],
+    "source": "<b>",
+    "message": "raw HTML `<b>` can't be typeset",
+    "hints": [
+      "use Markdown (**bold**, *italic*, [links](https://example.com)); only comments and the page-break marker are allowed"
+    ],
+    "fix": null
+  },
+  {
+    "code": "unsupported-html",
+    "severity": "error",
+    "range": [
+      285,
+      289
+    ],
+    "source": "</b>",
+    "message": "raw HTML `</b>` can't be typeset",
+    "hints": [
+      "use Markdown (**bold**, *italic*, [links](https://example.com)); only comments and the page-break marker are allowed"
+    ],
+    "fix": null
+  },
+  {
+    "code": "unsupported-html",
+    "severity": "error",
+    "range": [
+      299,
+      326
+    ],
+    "source": "<!-- a comment --> visible?",
+    "message": "text after a comment on the same line is hidden",
+    "hints": [
+      "put the text on its own line, after a blank line"
+    ],
+    "fix": null
+  },
+  {
+    "code": "unsupported-html",
+    "severity": "error",
+    "range": [
+      328,
+      373
+    ],
+    "source": "<div class=\"page-break\"></div>\nswallowed line",
+    "message": "the page-break marker swallowed the lines after it",
+    "hints": [
+      "add a blank line after `<div class=\"page-break\"></div>`"
+    ],
+    "fix": null
+  }
+]

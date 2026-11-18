@@ -1,0 +1,20 @@
+---
+source: tests/parse_test.rs
+expression: "views(&text, parsed.diagnostics())"
+---
+[
+  {
+    "code": "missing-contact",
+    "severity": "warning",
+    "range": [
+      145,
+      159
+    ],
+    "source": "# Ada Lovelace",
+    "message": "the name has no contact line",
+    "hints": [
+      "add a line with location, email, phone, and links right after the name, separated by ` · `"
+    ],
+    "fix": null
+  }
+]

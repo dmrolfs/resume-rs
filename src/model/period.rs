@@ -37,6 +37,16 @@ impl Season {
             Self::Winter => 12,
         }
     }
+
+    /// The last month of the season within its calendar year; Winter stops at December.
+    const fn last_month(self) -> u8 {
+        match self {
+            Self::Spring => 5,
+            Self::Summer => 8,
+            Self::Fall => 11,
+            Self::Winter => 12,
+        }
+    }
 }
 
 fn month_number<S: Serializer>(month: &time::Month, serializer: S) -> Result<S::Ok, S::Error> {
@@ -71,6 +81,18 @@ impl PartialDate {
             Self::Year { year } => (year, 0),
             Self::Month { year, month } => (year, u8::from(month)),
             Self::Season { year, season } => (year, season.first_month()),
+        }
+    }
+
+    /// The latest month this date can denote; a bare year is December, a season its last month.
+    ///
+    /// Use this for the end of a range, so `Mar 2017 – 2017` is not "ending before it starts".
+    #[must_use]
+    pub fn latest_key(&self) -> (Year, u8) {
+        match *self {
+            Self::Year { year } => (year, 12),
+            Self::Month { year, month } => (year, u8::from(month)),
+            Self::Season { year, season } => (year, season.last_month()),
         }
     }
 }
@@ -109,7 +131,7 @@ impl Period {
     pub fn try_new(text: impl Into<String>, start: PartialDate, end: PeriodEnd) -> Result<Self, PeriodError> {
         if let PeriodEnd::Date(end_date) = end {
             ensure!(
-                end_date.sort_key() >= start.sort_key(),
+                end_date.latest_key() >= start.sort_key(),
                 EndBeforeStartSnafu { start, end: end_date }
             );
         }
@@ -129,7 +151,7 @@ mod tests {
     use serde_json::json;
 
     fn year(y: u16) -> Year {
-        Year::try_new(y).expect("test year is in range")
+        assert_ok!(Year::try_new(y))
     }
 
     fn month(y: u16, m: time::Month) -> PartialDate {
@@ -187,6 +209,35 @@ mod tests {
         assert_err!(Period::try_new("x", start, PeriodEnd::Date(end)));
         assert_ok!(Period::try_new("x", start, PeriodEnd::Date(start)));
         assert_ok!(Period::try_new("x", start, PeriodEnd::Present));
+    }
+
+    #[test]
+    fn period_accepts_year_end_in_start_month_year() {
+        let start = month(2017, time::Month::March);
+        let end = PartialDate::Year { year: year(2017) };
+        assert_ok!(Period::try_new("Mar 2017 – 2017", start, PeriodEnd::Date(end)));
+        assert_err!(Period::try_new(
+            "Mar 2017 – 2016",
+            start,
+            PeriodEnd::Date(PartialDate::Year { year: year(2016) })
+        ));
+    }
+
+    #[test]
+    fn latest_key_is_the_last_month_a_date_can_denote() {
+        let y = year(2020);
+        assert_eq!(PartialDate::Year { year: y }.latest_key(), (y, 12));
+        assert_eq!(month(2020, time::Month::May).latest_key(), (y, 5));
+        let spring = PartialDate::Season {
+            year: y,
+            season: Season::Spring,
+        };
+        assert_eq!(spring.latest_key(), (y, 5));
+        let fall = PartialDate::Season {
+            year: y,
+            season: Season::Fall,
+        };
+        assert_eq!(fall.latest_key(), (y, 11));
     }
 
     #[test]

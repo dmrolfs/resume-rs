@@ -114,7 +114,7 @@ mod tests {
     }
 
     fn sample() -> Resume {
-        let year = |y| Year::try_new(y).expect("test year is in range");
+        let year = |y| assert_ok!(Year::try_new(y));
         let start = PartialDate::Month {
             year: year(2017),
             month: time::Month::August,
@@ -130,25 +130,25 @@ mod tests {
             content: vec![text("Rust")],
         };
         let role = Role {
-            company: Company::try_new("Initech").expect("non-empty"),
-            title: Some(Title::try_new("VP of Engineering").expect("non-empty")),
+            company: assert_ok!(Company::try_new("Initech")),
+            title: Some(assert_ok!(Title::try_new("VP of Engineering"))),
             period,
             blurb: Some(vec![text("Enterprise software.")]),
             body: vec![RoleBlock::Era {
-                name: EraName::try_new("Early years").expect("non-empty"),
+                name: assert_ok!(EraName::try_new("Early years")),
                 period: era_period,
                 items: vec![bullet],
             }],
         };
-        let url = url::Url::parse("https://example.com").expect("valid url");
+        let url = assert_ok!(url::Url::parse("https://example.com"));
         let section = Section {
-            title: SectionTitle::try_new("Experience").expect("non-empty"),
+            title: assert_ok!(SectionTitle::try_new("Experience")),
             blocks: vec![Block::Role(role), Block::PageBreak],
         };
         Resume::new(
-            Name::try_new("Ada Lovelace").expect("non-empty"),
+            assert_ok!(Name::try_new("Ada Lovelace")),
             vec![Inline::Link {
-                url: LinkUrl::try_new(url).expect("https"),
+                url: assert_ok!(LinkUrl::try_new(url)),
                 content: vec![text("site")],
             }],
             vec![section],

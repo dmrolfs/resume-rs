@@ -9,4 +9,5 @@
 
 pub mod cli;
 pub mod diagnostics;
+pub mod markdown;
 pub mod model;

@@ -1,0 +1,90 @@
+---
+source: tests/parse_test.rs
+expression: "views(&text, parsed.diagnostics())"
+---
+[
+  {
+    "code": "invalid-link",
+    "severity": "error",
+    "range": [
+      195,
+      210
+    ],
+    "source": "[home](http://)",
+    "message": "`http://` is not a valid link",
+    "hints": [
+      "empty host; links need a full address like https://example.com"
+    ],
+    "fix": null
+  },
+  {
+    "code": "invalid-link",
+    "severity": "error",
+    "range": [
+      214,
+      231
+    ],
+    "source": "[notes](notes.md)",
+    "message": "`notes.md` is not a valid link",
+    "hints": [
+      "relative URL without a base; links need a full address like https://example.com"
+    ],
+    "fix": null
+  },
+  {
+    "code": "unsupported-link",
+    "severity": "error",
+    "range": [
+      249,
+      280
+    ],
+    "source": "[file](ftp://example.com/r.pdf)",
+    "message": "`ftp:` links are not supported",
+    "hints": [
+      "use https://, http://, or mailto: links"
+    ],
+    "fix": null
+  },
+  {
+    "code": "unsupported-link",
+    "severity": "error",
+    "range": [
+      287,
+      316
+    ],
+    "source": "[script](javascript:alert(1))",
+    "message": "`javascript:` links are not supported",
+    "hints": [
+      "use https://, http://, or mailto: links"
+    ],
+    "fix": null
+  },
+  {
+    "code": "invalid-link",
+    "severity": "error",
+    "range": [
+      323,
+      346
+    ],
+    "source": "[](https://example.com)",
+    "message": "the link has no visible text",
+    "hints": [
+      "describe the link: [LinkedIn](https://www.linkedin.com/in/you)"
+    ],
+    "fix": null
+  },
+  {
+    "code": "invalid-link",
+    "severity": "error",
+    "range": [
+      365,
+      381
+    ],
+    "source": "[undefined][ref]",
+    "message": "link reference is not defined",
+    "hints": [
+      "write the link inline: [text](https://example.com)"
+    ],
+    "fix": null
+  }
+]

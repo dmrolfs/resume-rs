@@ -53,13 +53,10 @@ pub struct LinkUrl(url::Url);
 /// A built-in or `--styles-dir` style directory name.
 #[nutype(
     sanitize(trim, lowercase),
-    validate(regex = STYLE_NAME_PATTERN),
+    validate(regex = "^[a-z][a-z0-9-]{0,31}$"),
     derive(Debug, Clone, PartialEq, Eq, Hash, Display, AsRef, Serialize, TryFrom, FromStr)
 )]
 pub struct StyleName(String);
-
-static STYLE_NAME_PATTERN: std::sync::LazyLock<regex::Regex> =
-    std::sync::LazyLock::new(|| regex::Regex::new("^[a-z][a-z0-9-]{0,31}$").expect("static pattern is valid"));
 
 #[cfg(test)]
 mod tests {

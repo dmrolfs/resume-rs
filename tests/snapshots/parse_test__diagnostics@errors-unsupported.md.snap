@@ -1,0 +1,174 @@
+---
+source: tests/parse_test.rs
+expression: "views(&text, parsed.diagnostics())"
+---
+[
+  {
+    "code": "unsupported-markdown",
+    "severity": "error",
+    "range": [
+      210,
+      226
+    ],
+    "source": "> A block quote.",
+    "message": "block quotes are not supported",
+    "hints": [
+      "remove the `> ` quote markers"
+    ],
+    "fix": null
+  },
+  {
+    "code": "unsupported-markdown",
+    "severity": "error",
+    "range": [
+      228,
+      247
+    ],
+    "source": "```\nfenced code\n```",
+    "message": "fenced code blocks are not supported",
+    "hints": [
+      "use plain text, or inline `code` within a sentence"
+    ],
+    "fix": null
+  },
+  {
+    "code": "unsupported-markdown",
+    "severity": "error",
+    "range": [
+      253,
+      266
+    ],
+    "source": "indented code",
+    "message": "indented code blocks are not supported",
+    "hints": [
+      "remove the 4-space indentation: indented text is code, not a paragraph"
+    ],
+    "fix": null
+  },
+  {
+    "code": "unsupported-markdown",
+    "severity": "error",
+    "range": [
+      268,
+      297
+    ],
+    "source": "| a | b |\n|---|---|\n| 1 | 2 |",
+    "message": "tables are not supported",
+    "hints": [
+      "use bullets such as `**Label:** value` instead of a table"
+    ],
+    "fix": null
+  },
+  {
+    "code": "unsupported-markdown",
+    "severity": "error",
+    "range": [
+      299,
+      324
+    ],
+    "source": "#### A level-four heading",
+    "message": "level-4 headings are not supported",
+    "hints": [
+      "use an era line (`**Name · Period**`) or a `**Label:**` bullet instead"
+    ],
+    "fix": null
+  },
+  {
+    "code": "unsupported-markdown",
+    "severity": "error",
+    "range": [
+      326,
+      355
+    ],
+    "source": "Setext heading\n--------------",
+    "message": "underlined (setext) headings are not supported",
+    "hints": [
+      "write `# Name` or `## Section` with `#` markers"
+    ],
+    "fix": null
+  },
+  {
+    "code": "unsupported-markdown",
+    "severity": "error",
+    "range": [
+      357,
+      360
+    ],
+    "source": "---",
+    "message": "thematic breaks are not supported",
+    "hints": [
+      "remove the `---` line; at the top of a file it looks like front matter, which isn't supported"
+    ],
+    "fix": null
+  },
+  {
+    "code": "unsupported-markdown",
+    "severity": "error",
+    "range": [
+      362,
+      398
+    ],
+    "source": "1. An ordered list\n2. with two items",
+    "message": "numbered lists are not supported",
+    "hints": [
+      "use `- ` bullets; the numbers would be lost"
+    ],
+    "fix": null
+  },
+  {
+    "code": "unsupported-markdown",
+    "severity": "error",
+    "range": [
+      420,
+      424
+    ],
+    "source": "[^1]",
+    "message": "footnotes are not supported",
+    "hints": [
+      "write plain text, bold, italics, code, and links only"
+    ],
+    "fix": null
+  },
+  {
+    "code": "unsupported-markdown",
+    "severity": "error",
+    "range": [
+      427,
+      446
+    ],
+    "source": "[^1]: The footnote.",
+    "message": "footnotes are not supported",
+    "hints": [
+      "put the note in the text or remove it"
+    ],
+    "fix": null
+  },
+  {
+    "code": "unsupported-markdown",
+    "severity": "error",
+    "range": [
+      525,
+      546
+    ],
+    "source": "The second paragraph.",
+    "message": "a bullet has more than one paragraph",
+    "hints": [
+      "put each paragraph in its own bullet"
+    ],
+    "fix": null
+  },
+  {
+    "code": "unsupported-markdown",
+    "severity": "error",
+    "range": [
+      548,
+      578
+    ],
+    "source": "<div class=\"page-break\"></div>",
+    "message": "a page break inside a role can't be represented",
+    "hints": [
+      "move the page break above the `###` role line, or remove it"
+    ],
+    "fix": null
+  }
+]

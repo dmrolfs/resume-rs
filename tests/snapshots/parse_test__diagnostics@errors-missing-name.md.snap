@@ -1,0 +1,20 @@
+---
+source: tests/parse_test.rs
+expression: "views(&text, parsed.diagnostics())"
+---
+[
+  {
+    "code": "missing-name",
+    "severity": "error",
+    "range": [
+      160,
+      160
+    ],
+    "source": "",
+    "message": "the resume has no `# Name` heading",
+    "hints": [
+      "start the file with `# Your Name` (comments may come first)"
+    ],
+    "fix": null
+  }
+]

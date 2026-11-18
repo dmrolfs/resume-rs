@@ -1,0 +1,20 @@
+---
+source: tests/parse_test.rs
+expression: "views(&text, parsed.diagnostics())"
+---
+[
+  {
+    "code": "duplicate-name",
+    "severity": "error",
+    "range": [
+      184,
+      198
+    ],
+    "source": "# Grace Hopper",
+    "message": "a resume has one `# ` name heading",
+    "hints": [
+      "make the extra heading a `## Section`, or remove it"
+    ],
+    "fix": null
+  }
+]
