@@ -7,6 +7,9 @@ use clap::Parser;
 #[derive(Debug, Parser)]
 #[command(
     name = "resume",
+    // Windows starts the binary as `resume.exe` and clap derives its display name from argv[0],
+    // so pin it; otherwise help would print `Usage: resume.exe`.
+    bin_name = "resume",
     version,
     about = "Typesets Markdown resumes into print-quality PDFs."
 )]

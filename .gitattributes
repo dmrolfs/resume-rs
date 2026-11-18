@@ -1,0 +1,26 @@
+# ABOUTME: Line-ending and binary rules so Windows checkouts keep every byte that affects output.
+# ABOUTME: Text is LF in the repo and the working tree; fonts, PDFs, and images are never converted.
+
+# Default: normalize text to LF on every platform.
+* text=auto eol=lf
+
+# Files embedded into the binary or read byte-for-byte by tests must be LF everywhere,
+# otherwise a Windows checkout would change shipped bytes and snapshot comparisons.
+*.rs text eol=lf
+*.typ text eol=lf
+*.snap text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+justfile text eol=lf
+
+# Never convert binary assets (bundled fonts, rendered output, images).
+*.ttf binary
+*.otf binary
+*.ttc binary
+*.pdf binary
+*.png binary
+*.jpg binary
+
+# Fixtures that deliberately contain CRLF (or mixed) line endings. Keep these LAST: later rules
+# override earlier ones, and -text disables all conversion on checkin and checkout.
+tests/fixtures/crlf/** -text

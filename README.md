@@ -16,3 +16,29 @@ just check   # cargo fmt --check, cargo clippy --all-targets -D warnings, cargo 
 ```
 
 Requires Rust 1.92 or later.
+
+### Building for macOS and Windows
+
+```bash
+just build-macos     # universal2 (arm64 + x86_64) binary at target/universal2/resume, re-signed and verified (macOS only)
+just build-windows   # quick windows-gnu cross-build of resume.exe plus a self-contained import check (needs mingw-w64)
+```
+
+`build-windows` is a fast compile and link check. Release binaries are built natively with MSVC in CI.
+A binary cross-built on a Mac cannot be tested there, so behavior on Windows is verified by the CI
+matrix, which runs `just check` on macOS and Windows for every push.
+
+### Portability rules
+
+These keep output identical on macOS and Windows:
+
+- **Paths.** Use `Path`/`PathBuf` and build them from components. Never concatenate with `/` or `\`.
+- **Line endings.** Text is LF in the repo and in checkouts (`.gitattributes`). Code that reads user files
+  must accept LF and CRLF and keep spans as byte offsets into the original text. Fixtures that need CRLF
+  live in `tests/fixtures/crlf/` and are marked `-text`.
+- **Fonts, PDFs, and images** are binary in `.gitattributes`; never let git convert them.
+- **Replacing output files.** Write a temp file in the same directory and persist it. A PDF open in a
+  viewer is locked on Windows, so report that case instead of failing opaquely.
+- **No `-C target-cpu=native`** and no reliance on the machine's clock, locale, or installed fonts for
+  anything that affects output bytes.
+- **Don't hash a windows-gnu build against the MSVC build.** The gnu build is only a local compile check.

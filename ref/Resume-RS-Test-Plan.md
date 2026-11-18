@@ -59,11 +59,25 @@
 - [ ] `cli_help_exits_zero`: verifies the binary builds and clap is wired up.
 
 ### rsm-141.14: Cross-platform
-- [ ] CI: `just check` passes on macos-latest and windows-latest
-- [ ] CI: the fixture PDF SHA-256 is identical on both OSes with `--fonts bundled`
-- [ ] Local: `just build-windows` produces a PE32+ x86-64 `resume.exe`; `just build-macos` produces a universal2 Mach-O
-- [ ] Windows-only (`cfg(windows)`): `output_locked_reports_hint`, `watch_continues_after_output_locked`
-- [ ] Both OSes: `fix_preserves_crlf_line_endings`, `virtual_paths_from_windows_style_components`
+- [ ] CI: `just check` passes on macos-latest and windows-latest, on every push
+- [ ] `crlf_fixture_keeps_every_byte`, `mixed_fixture_keeps_every_byte`, `lf_fixture_has_no_carriage_returns` (`tests/portability_test.rs`). Under `core.autocrlf=true` the pure-CRLF fixture alone survives without `.gitattributes`; the mixed and LF fixtures are the ones that detect conversion.
+- [ ] `help_names_the_binary_resume_with_no_extension` (both OSes) and `help_ignores_an_exe_suffix_in_argv0` (unix): clap's display name must not include `.exe`
+- [ ] Local: `just build-macos` produces a universal2 Mach-O (`lipo -info`, `lipo -verify_arch`, `codesign --verify`, both slices run)
+- [ ] Local: `just build-windows` produces a PE32+ x86-64 `resume.exe`, and `just check-windows-imports` fails for a dynamic-std exe and passes for the real one
+
+Cross-OS PDF byte comparison and the Windows-only behavior tests are owned by the tasks that introduce the code:
+
+| Test | Owner |
+|---|---|
+| Cross-OS PDF hash job on ubuntu-latest, failing closed (rung 1: test-written PDF with embedded fonts; rung 2: bundled fonts; rung 3: `resume build --fonts bundled`) | rsm-141.15 (P3) |
+| `crlf_spans_point_into_original`, LF and CRLF inputs parse to equal models | rsm-141.4 |
+| `--color never` and `NO_COLOR` emit no `\x1b`; summary markers are ASCII | rsm-141.5, rsm-141.10 |
+| `virtual_paths_from_windows_style_components` (all OSes; `\`-separated `PathBuf` under `cfg(windows)`) | rsm-141.6 |
+| `output_locked_reports_hint` (`cfg(windows)`: open the target with `share_mode(0)`, expect `OutputLocked`) | rsm-141.6 if it writes files, else rsm-141.10 |
+| Build twice with `RAYON_NUM_THREADS=1` and `=8`, same bytes; deep-nesting fixture on a spawned thread with an explicit stack size | rsm-141.6 |
+| CRLF input produces the same PDF as LF input | rsm-141.10 |
+| `fix_preserves_crlf_line_endings` | rsm-141.11 |
+| `watch_continues_after_output_locked` (`cfg(windows)`) | rsm-141.12 |
 
 ### rsm-141.3: Model, newtypes, periods, diagnostic types
 - [ ] `role_with_era_json_snapshot`: verifies the documented JSON contract.

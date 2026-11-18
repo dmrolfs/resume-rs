@@ -1,0 +1,10 @@
+# ABOUTME: Dependabot config that keeps the SHA-pinned GitHub Actions in CI workflows current.
+# ABOUTME: Pinned SHAs never update themselves, so without this they silently rot.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"
