@@ -7,30 +7,14 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 
 use snafu::ResultExt;
-use strum::{AsRefStr, Display};
 use typst::text::{Font, FontBook, FontInfo, FontVariant};
 use typst::utils::LazyHash;
 use typst_kit::fonts::{FontPath, FontStore};
 
 use crate::diagnostics::{Diagnostic, DiagnosticCode, Severity};
 use crate::error::{Error, FontDirectorySnafu, FontScanPanickedSnafu};
+pub use crate::model::options::FontOrigin;
 use crate::model::options::FontsMode;
-
-/// Where a face came from.
-///
-/// Both `--font-path` and `RESUME_FONT_PATH` directories are `FontPath`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, AsRefStr)]
-#[strum(serialize_all = "kebab-case")]
-pub enum FontOrigin {
-    /// Shipped inside the binary.
-    Bundled,
-    /// A directory the user named.
-    FontPath,
-    /// A known application font directory, such as Microsoft Office's on macOS.
-    Application,
-    /// An operating-system font directory.
-    System,
-}
 
 /// A face found on disk, before it has a place in the font book.
 type Scanned = (FontPath, FontInfo);
@@ -52,48 +36,61 @@ pub struct FontSet {
     store: FontStore,
     /// Parallel to the font book: `origins[i]` is where face `i` came from.
     origins: Vec<FontOrigin>,
+    mode: FontsMode,
 }
 
 impl std::fmt::Debug for FontSet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FontSet").field("families", &self.families()).finish()
+        f.debug_struct("FontSet")
+            .field("mode", &self.mode)
+            .field("families", &self.families())
+            .finish()
     }
 }
 
 impl FontSet {
-    /// Only the bundled fonts: for now those embedded in typst-kit (Libertinus Serif, New Computer
-    /// Modern, and DejaVu Sans Mono).
-    #[must_use]
-    pub fn bundled() -> Self {
-        Self::assemble(bundled_faces(), Vec::new())
-    }
-
     /// Starts a set from the bundled fonts; add layers, then [`FontSetBuilder::build`].
     #[must_use]
     pub fn builder() -> FontSetBuilder {
         FontSetBuilder::default()
     }
 
+    /// Only the bundled fonts: for now those embedded in typst-kit (Libertinus Serif, New Computer
+    /// Modern, and DejaVu Sans Mono). The same as a [`FontsMode::Bundled`] build, without the builder.
+    #[must_use]
+    pub fn bundled() -> Self {
+        Self::assemble(bundled_faces(), Vec::new())
+    }
+
     /// Bundled faces first, then each group in order; a `(path, index)` already seen is skipped.
     ///
     /// Inside a group faces are sorted by canonical path, then face index, because the scans return
-    /// them in directory-enumeration order, which differs between machines.
+    /// them in directory-enumeration order, which differs between machines. The stored path is the
+    /// canonical one, so a relative `--font-path` still loads after the working directory changes.
     fn assemble(bundled: Vec<(Font, FontInfo)>, groups: Vec<Group>) -> Self {
         let mut store = FontStore::new();
         let mut origins: Vec<FontOrigin> = bundled.iter().map(|_| FontOrigin::Bundled).collect();
         store.extend(bundled);
         let mut seen = HashSet::new();
         for Group { origin, faces } in groups {
-            let mut keyed: Vec<_> = faces.into_iter().map(|face| (identity(&face.0), face)).collect();
+            let mut keyed: Vec<_> = faces.into_iter().map(|(path, info)| (identity(&path), info)).collect();
             keyed.sort_by(|a, b| a.0.cmp(&b.0));
-            for (key, face) in keyed {
-                if seen.insert(key) {
-                    store.push(face);
+            for ((canonical, index), info) in keyed {
+                if seen.insert((canonical.clone(), index)) {
+                    store.push((FontPath { path: canonical, index }, info));
                     origins.push(origin);
                 }
             }
         }
-        Self { store, origins }
+        debug_assert_eq!(
+            origins.len(),
+            store.book().families().map(|(_, ids)| ids.count()).sum::<usize>()
+        );
+        Self {
+            store,
+            origins,
+            mode: FontsMode::Bundled,
+        }
     }
 
     pub(crate) fn book(&self) -> &LazyHash<FontBook> {
@@ -135,12 +132,20 @@ impl FontSet {
         self.font(index).is_some()
     }
 
+    /// The mode this set was built in.
+    #[must_use]
+    pub fn mode(&self) -> FontsMode {
+        self.mode
+    }
+
     /// Resolves each role to its preferred font, its fallback, or neither.
+    ///
+    /// A family counts only if the face Typst would pick for it can be read.
     #[must_use]
     pub fn resolve(&self, roles: &[FontRole]) -> Vec<FontResolution> {
         roles
             .iter()
-            .map(|role| resolve_role(self.book(), &self.origins, role))
+            .map(|role| resolve_role(self.book(), &self.origins, |i| self.loads(i), role))
             .collect()
     }
 }
@@ -151,7 +156,7 @@ fn bundled_faces() -> Vec<(Font, FontInfo)> {
 }
 
 /// The key that makes one face the same face however it was reached (symlinks, `/var` vs
-/// `/private/var`, case spellings on case-insensitive volumes).
+/// `/private/var`, relative spellings, case spellings on case-insensitive volumes).
 fn identity(path: &FontPath) -> (PathBuf, u32) {
     (
         std::fs::canonicalize(&path.path).unwrap_or_else(|_| path.path.clone()),
@@ -168,6 +173,16 @@ pub struct FontSetBuilder {
     env_paths: Vec<PathBuf>,
     application_dirs: Vec<PathBuf>,
     system: SystemSource,
+}
+
+impl std::fmt::Debug for FontSetBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FontSetBuilder")
+            .field("mode", &self.mode)
+            .field("font_paths", &self.font_paths)
+            .field("env_paths", &self.env_paths)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for FontSetBuilder {
@@ -192,21 +207,25 @@ impl FontSetBuilder {
         self
     }
 
-    /// Replaces the default bundled layer.
+    /// Replaces the bundled layer, which also holds the fonts Typst needs for math and code; tests only.
+    #[cfg(test)]
     #[must_use]
-    pub fn bundled(mut self, faces: impl IntoIterator<Item = (Font, FontInfo)>) -> Self {
+    fn bundled(mut self, faces: impl IntoIterator<Item = (Font, FontInfo)>) -> Self {
         self.bundled = Some(faces.into_iter().collect());
         self
     }
 
     /// Adds a `--font-path` directory; directories keep the order they are added in.
+    ///
+    /// Ignored, and not validated, in Bundled mode: the CLI should reject that combination.
     #[must_use]
     pub fn font_path(mut self, dir: impl Into<PathBuf>) -> Self {
         self.font_paths.push(dir.into());
         self
     }
 
-    /// Adds the entries of a `RESUME_FONT_PATH` value; empty entries are ignored.
+    /// Sets the entries of a `RESUME_FONT_PATH` value, replacing any earlier call; empty entries are
+    /// ignored. They come after every `--font-path` directory.
     ///
     /// The caller reads the environment and passes the value in, so tests need not touch it.
     #[must_use]
@@ -233,8 +252,8 @@ impl FontSetBuilder {
     ///
     /// # Errors
     /// - `Error::FontDirectory` - a `--font-path` or `RESUME_FONT_PATH` entry is not a readable directory
-    /// - `Error::FontScanPanicked` - typst-kit panicked while scanning (it does when a font file
-    ///   disappears mid-scan)
+    /// - `Error::FontScanPanicked` - typst-kit panicked twice in a row while scanning (it panics when
+    ///   a font file disappears mid-scan)
     pub fn build(self) -> Result<FontSet, Error> {
         let bundled = self.bundled.unwrap_or_else(bundled_faces);
         let mut groups = Vec::new();
@@ -242,30 +261,42 @@ impl FontSetBuilder {
             for dir in self.font_paths.iter().chain(&self.env_paths) {
                 groups.push(Group {
                     origin: FontOrigin::FontPath,
-                    faces: scan_dir(dir)?,
+                    faces: scan_dir(dir, FontOrigin::FontPath, |d| typst_kit::fonts::scan(d).collect())?,
                 });
             }
             for dir in office_dirs_to_scan(&self.application_dirs) {
                 groups.push(Group {
                     origin: FontOrigin::Application,
-                    faces: scan_dir(&dir)?,
+                    faces: scan_dir(&dir, FontOrigin::Application, |d| typst_kit::fonts::scan(d).collect())?,
                 });
             }
             groups.push(Group {
                 origin: FontOrigin::System,
-                faces: guarded(FontOrigin::System, || (self.system)())?,
+                faces: guarded(FontOrigin::System, None, || (self.system)())?,
             });
         }
-        Ok(FontSet::assemble(bundled, groups))
+        let mut set = FontSet::assemble(bundled, groups);
+        set.mode = self.mode;
+        Ok(set)
     }
 }
 
-/// Runs a typst-kit scan, turning its panics into an error.
-fn guarded<T>(origin: FontOrigin, scan: impl FnOnce() -> T) -> Result<T, Error> {
-    catch_unwind(AssertUnwindSafe(scan)).map_err(|payload| {
+/// Runs a typst-kit scan, retrying once and then turning a panic into an error.
+///
+/// typst-kit panics when a font file disappears between its two passes over a directory. A panic leaves
+/// no state behind (the font database is local to the scan), and the second pass sees the settled
+/// directory, so one retry rides out a font manager or installer running at the same moment. This
+/// relies on `panic = "unwind"`, the default.
+fn guarded<T>(origin: FontOrigin, dir: Option<&Path>, scan: impl Fn() -> T) -> Result<T, Error> {
+    let attempt = || catch_unwind(AssertUnwindSafe(&scan));
+    attempt().or_else(|_| attempt()).map_err(|payload| {
+        let message = panic_message(payload.as_ref());
         FontScanPanickedSnafu {
             origin,
-            message: panic_message(payload.as_ref()),
+            message: match dir {
+                Some(dir) => format!("{}: {message}", dir.display()),
+                None => message,
+            },
         }
         .build()
     })
@@ -280,9 +311,9 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
 }
 
 /// Scans an explicit directory; unlike typst-kit, a missing or unreadable one is an error.
-fn scan_dir(dir: &Path) -> Result<Vec<Scanned>, Error> {
+fn scan_dir(dir: &Path, origin: FontOrigin, scan: impl Fn(&Path) -> Vec<Scanned>) -> Result<Vec<Scanned>, Error> {
     std::fs::read_dir(dir).context(FontDirectorySnafu { path: dir })?;
-    guarded(FontOrigin::FontPath, || typst_kit::fonts::scan(dir).collect())
+    guarded(origin, Some(dir), || scan(dir))
 }
 
 /// Office keeps Calibri and Cambria here on macOS; typst-kit's system scan does not look in these.
@@ -300,17 +331,23 @@ fn application_dirs() -> Vec<PathBuf> {
 /// The existing directories, skipping one whose files (name and size) an earlier one already holds.
 ///
 /// Word, Excel, and PowerPoint ship identical font directories, so scanning all of them costs
-/// several times as long and adds nothing.
+/// several times as long and adds nothing. A directory with anything but plain files in it is never
+/// skipped, because a directory's own size says nothing about what it holds.
 fn office_dirs_to_scan(candidates: &[PathBuf]) -> Vec<PathBuf> {
     let mut seen = BTreeSet::new();
     let mut chosen = Vec::new();
     for dir in candidates {
         let Ok(entries) = std::fs::read_dir(dir) else { continue };
+        let mut only_files = true;
         let listing: BTreeSet<_> = entries
             .flatten()
-            .filter_map(|e| Some((e.file_name(), e.metadata().ok()?.len())))
+            .filter_map(|e| {
+                let metadata = e.metadata().ok()?;
+                only_files &= metadata.is_file();
+                Some((e.file_name(), metadata.len()))
+            })
             .collect();
-        if listing.is_subset(&seen) {
+        if only_files && listing.is_subset(&seen) {
             continue;
         }
         seen.extend(listing);
@@ -331,14 +368,36 @@ pub enum Metrics {
 }
 
 /// One typographic role of a style, such as body text.
+///
+/// Build it with [`FontRole::new`]; more requirements (such as the variants a role needs) can be
+/// added later without breaking callers.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct FontRole {
+    /// What the role is for, such as `body`; shown in the build summary.
     pub name: String,
     /// The template's own font, used when installed.
     pub preferred: String,
     /// The bundled stand-in.
     pub fallback: String,
     pub metrics: Metrics,
+}
+
+impl FontRole {
+    #[must_use]
+    pub fn new(
+        name: impl Into<String>,
+        preferred: impl Into<String>,
+        fallback: impl Into<String>,
+        metrics: Metrics,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            preferred: preferred.into(),
+            fallback: fallback.into(),
+            metrics,
+        }
+    }
 }
 
 /// What a role got.
@@ -367,10 +426,17 @@ pub enum FontResolution {
 }
 
 /// Picks the face Typst would use for each family, in order, by family name alone: Typst falls back
-/// to the closest variant of a family it has, so presence of the family is what matters.
-fn resolve_role(book: &FontBook, origins: &[FontOrigin], role: &FontRole) -> FontResolution {
+/// to the closest variant of a family it has, so presence of the family is what matters. A face that
+/// cannot be read counts as absent, because Typst skips it too.
+fn resolve_role(
+    book: &FontBook,
+    origins: &[FontOrigin],
+    loads: impl Fn(usize) -> bool,
+    role: &FontRole,
+) -> FontResolution {
     let pick = |family: &str| {
         let index = book.select(&family.to_lowercase(), FontVariant::default())?;
+        loads(index).then_some(())?;
         Some((book.info(index)?.family.clone(), *origins.get(index)?))
     };
     if let Some((family, origin)) = pick(&role.preferred) {
@@ -397,10 +463,30 @@ fn resolve_role(book: &FontBook, origins: &[FontOrigin], role: &FontRole) -> Fon
 }
 
 impl FontResolution {
-    /// The finding for this resolution, or `None` when the preferred font is used.
+    /// The role this resolution is for.
     #[must_use]
-    pub fn diagnostic(&self) -> Option<Diagnostic> {
-        let (severity, code, message, hint) = match self {
+    pub fn role(&self) -> &str {
+        match self {
+            Self::Preferred { role, .. } | Self::Fallback { role, .. } | Self::Missing { role, .. } => role,
+        }
+    }
+
+    /// Where the chosen face came from; `None` when neither font exists.
+    #[must_use]
+    pub fn origin(&self) -> Option<FontOrigin> {
+        match self {
+            Self::Preferred { origin, .. } | Self::Fallback { origin, .. } => Some(*origin),
+            Self::Missing { .. } => None,
+        }
+    }
+
+    /// The finding for this resolution, or `None` when the preferred font is used.
+    ///
+    /// `mode` only changes the hint: in Bundled mode installed fonts and `--font-path` are ignored, so
+    /// telling the user to install a font would not help.
+    #[must_use]
+    pub fn diagnostic(&self, mode: FontsMode) -> Option<Diagnostic> {
+        let (severity, code, message, how_to_fix) = match self {
             Self::Preferred { .. } => return None,
             Self::Fallback {
                 role,
@@ -437,6 +523,12 @@ impl FontResolution {
                 format!("install {preferred} or {fallback}, pass --font-path <DIR>, or fix the style's font list"),
             ),
         };
+        let hint = match mode {
+            FontsMode::Auto => how_to_fix,
+            FontsMode::Bundled => {
+                "--fonts bundled uses only the bundled fonts; drop it to use installed fonts or --font-path".to_string()
+            }
+        };
         Some(Diagnostic {
             severity,
             code,
@@ -449,12 +541,16 @@ impl FontResolution {
 }
 
 #[cfg(test)]
+#[path = "fonts_disk_tests.rs"]
+mod disk_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use claims::{assert_err, assert_ok, assert_some};
     use pretty_assertions::assert_eq;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use typst::text::{Coverage, FontFlags, FontStretch, FontStyle, FontWeight};
 
     fn info(family: &str, weight: u16) -> FontInfo {
@@ -468,12 +564,16 @@ mod tests {
     }
 
     fn face(path: &str, index: u32, family: &str) -> Scanned {
+        scanned(path, index, info(family, 400))
+    }
+
+    fn scanned(path: &str, index: u32, info: FontInfo) -> Scanned {
         (
             FontPath {
                 path: PathBuf::from(path),
                 index,
             },
-            info(family, 400),
+            info,
         )
     }
 
@@ -481,35 +581,48 @@ mod tests {
         Group { origin, faces }
     }
 
-    /// `(family, origin)` of every face, in font-book order.
-    fn families_in_order(set: &FontSet) -> Vec<(String, FontOrigin)> {
-        set.faces()
-    }
-
-    fn role(preferred: &str, fallback: &str, metrics: Metrics) -> FontRole {
-        FontRole {
-            name: "body".into(),
-            preferred: preferred.into(),
-            fallback: fallback.into(),
-            metrics,
-        }
-    }
-
-    /// The bytes of the first embedded face of `family`.
-    fn embedded_bytes(family: &str) -> Vec<u8> {
-        let (font, _) = assert_some!(typst_kit::fonts::embedded().find(|(_, i)| i.family == family));
-        font.data().as_slice().to_vec()
-    }
-
     fn pair(family: &str, origin: FontOrigin) -> (String, FontOrigin) {
         (family.to_string(), origin)
     }
 
+    fn role(preferred: &str, fallback: &str, metrics: Metrics) -> FontRole {
+        FontRole::new("body", preferred, fallback, metrics)
+    }
+
+    /// Resolution over synthetic faces, whose files do not exist: treat every face as readable.
+    fn resolve_synthetic(set: &FontSet, roles: &[FontRole]) -> Vec<FontResolution> {
+        roles
+            .iter()
+            .map(|r| resolve_role(set.book(), &set.origins, |_| true, r))
+            .collect()
+    }
+
+    fn fallback(metrics: Metrics) -> FontResolution {
+        FontResolution::Fallback {
+            role: "body".into(),
+            preferred: "Calibri".into(),
+            family: "Carlito".into(),
+            origin: FontOrigin::Bundled,
+            metrics,
+        }
+    }
+
+    fn missing() -> FontResolution {
+        FontResolution::Missing {
+            role: "body".into(),
+            preferred: "Calibri".into(),
+            fallback: "Carlito".into(),
+        }
+    }
+
+    // ---- the bundled set --------------------------------------------------------------------
+
     #[test]
     fn bundled_set_is_exactly_the_typst_kit_fonts() {
         // The font set is an input to every PDF byte, so a typst-kit bump that changes it must fail here.
+        let set = FontSet::bundled();
         assert_eq!(
-            FontSet::bundled().families(),
+            set.families(),
             [
                 "DejaVu Sans Mono",
                 "Libertinus Serif",
@@ -517,110 +630,44 @@ mod tests {
                 "New Computer Modern Math"
             ]
         );
+        assert_eq!(set.origins().len(), 17, "a face was added or removed");
+        assert!(set.origins().iter().all(|o| *o == FontOrigin::Bundled));
+        assert_eq!(set.mode(), FontsMode::Bundled);
     }
 
     #[test]
     fn every_font_in_the_book_loads() {
         let set = FontSet::bundled();
         let count = set.origins().len();
-        assert!(count > 0);
         for index in 0..count {
-            assert!(set.font(index).is_some(), "font {index} did not load");
+            assert!(set.loads(index), "font {index} did not load");
         }
-        assert!(set.font(count).is_none());
-    }
-
-    #[test]
-    fn families_are_sorted_and_unique() {
-        let families = FontSet::bundled().families();
-        let mut sorted = families.clone();
-        sorted.sort_by_key(|f| f.to_lowercase());
-        sorted.dedup();
-        assert_eq!(families, sorted);
-    }
-
-    #[test]
-    fn bundled_faces_all_have_the_bundled_origin() {
-        let set = FontSet::bundled();
-        assert!(set.origins().iter().all(|o| *o == FontOrigin::Bundled));
+        assert!(!set.loads(count));
     }
 
     // ---- ordering ---------------------------------------------------------------------------
 
     #[test]
-    fn layer_order_is_bundled_then_font_path_then_env_then_application_then_system() {
-        let user = assert_ok!(tempfile::tempdir());
-        let env = assert_ok!(tempfile::tempdir());
-        let app = assert_ok!(tempfile::tempdir());
-        assert_ok!(std::fs::write(
-            user.path().join("u.otf"),
-            embedded_bytes("Libertinus Serif")
-        ));
-        assert_ok!(std::fs::write(
-            env.path().join("e.ttf"),
-            embedded_bytes("DejaVu Sans Mono")
-        ));
-        assert_ok!(std::fs::write(
-            app.path().join("a.otf"),
-            embedded_bytes("New Computer Modern")
-        ));
-        let env_value = assert_ok!(std::env::join_paths([env.path()]));
-        let bundled: Vec<_> = typst_kit::fonts::embedded()
-            .filter(|(_, i)| i.family == "New Computer Modern Math")
-            .take(1)
-            .collect();
-        // Called out of layer order on purpose: the order of the calls must not matter.
-        let set = assert_ok!(
-            FontSet::builder()
-                .system_source(|| vec![face("/sys/s.ttf", 0, "S")])
-                .env_paths(Some(env_value.as_os_str()))
-                .application_dirs(vec![app.path().to_path_buf()])
-                .font_path(user.path())
-                .bundled(bundled)
-                .build()
-        );
-        assert_eq!(
-            families_in_order(&set),
-            [
-                pair("New Computer Modern Math", FontOrigin::Bundled),
-                pair("Libertinus Serif", FontOrigin::FontPath),
-                pair("DejaVu Sans Mono", FontOrigin::FontPath),
-                pair("New Computer Modern", FontOrigin::Application),
-                pair("S", FontOrigin::System),
-            ]
-        );
-    }
-
-    #[test]
     fn ordering_within_a_group_is_independent_of_enumeration_order() {
-        let enumerated_one_way = FontSet::assemble(
-            vec![],
-            vec![
-                group(FontOrigin::System, vec![face("/s/z.ttf", 0, "Z")]),
-                group(
-                    FontOrigin::FontPath,
-                    vec![
-                        face("/d/b.ttf", 0, "B"),
-                        face("/d/a.ttf", 1, "A1"),
-                        face("/d/a.ttf", 0, "A0"),
-                    ],
-                ),
-            ],
-        );
-        let enumerated_another = FontSet::assemble(
-            vec![],
-            vec![
-                group(FontOrigin::System, vec![face("/s/z.ttf", 0, "Z")]),
-                group(
-                    FontOrigin::FontPath,
-                    vec![
-                        face("/d/a.ttf", 0, "A0"),
-                        face("/d/b.ttf", 0, "B"),
-                        face("/d/a.ttf", 1, "A1"),
-                    ],
-                ),
-            ],
-        );
+        let sorted = |faces: Vec<Scanned>| {
+            FontSet::assemble(
+                vec![],
+                vec![
+                    group(FontOrigin::System, vec![face("/s/z.ttf", 0, "Z")]),
+                    group(FontOrigin::FontPath, faces),
+                ],
+            )
+        };
+        let one = sorted(vec![
+            face("/d/b.ttf", 0, "B"),
+            face("/d/a.ttf", 1, "A1"),
+            face("/d/a.ttf", 0, "A0"),
+        ]);
+        let another = sorted(vec![
+            face("/d/a.ttf", 0, "A0"),
+            face("/d/b.ttf", 0, "B"),
+            face("/d/a.ttf", 1, "A1"),
+        ]);
         // Groups keep their given order; faces inside a group are sorted by path, then face index.
         let expected = [
             pair("Z", FontOrigin::System),
@@ -628,8 +675,8 @@ mod tests {
             pair("A1", FontOrigin::FontPath),
             pair("B", FontOrigin::FontPath),
         ];
-        assert_eq!(families_in_order(&enumerated_one_way), expected);
-        assert_eq!(families_in_order(&enumerated_another), expected);
+        assert_eq!(one.faces(), expected);
+        assert_eq!(another.faces(), expected);
     }
 
     #[test]
@@ -645,41 +692,9 @@ mod tests {
             ],
         );
         assert_eq!(
-            families_in_order(&set),
+            set.faces(),
             [pair("A", FontOrigin::FontPath), pair("A2", FontOrigin::System)]
         );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn the_same_file_reached_through_a_symlink_is_one_face() {
-        let tmp = assert_ok!(tempfile::tempdir());
-        let real = tmp.path().join("real");
-        assert_ok!(std::fs::create_dir(&real));
-        assert_ok!(std::fs::write(real.join("a.otf"), b"x"));
-        assert_ok!(std::os::unix::fs::symlink(&real, tmp.path().join("alias")));
-        let direct = (
-            FontPath {
-                path: real.join("a.otf"),
-                index: 0,
-            },
-            info("A", 400),
-        );
-        let aliased = (
-            FontPath {
-                path: tmp.path().join("alias/a.otf"),
-                index: 0,
-            },
-            info("A", 400),
-        );
-        let set = FontSet::assemble(
-            vec![],
-            vec![
-                group(FontOrigin::FontPath, vec![direct]),
-                group(FontOrigin::System, vec![aliased]),
-            ],
-        );
-        assert_eq!(families_in_order(&set), [pair("A", FontOrigin::FontPath)]);
     }
 
     #[test]
@@ -692,13 +707,69 @@ mod tests {
             ],
         );
         assert_eq!(
-            set.resolve(&[role("Calibri", "Carlito", Metrics::Compatible)]),
+            resolve_synthetic(&set, &[role("Calibri", "Carlito", Metrics::Compatible)]),
             [FontResolution::Preferred {
                 role: "body".into(),
                 family: "Calibri".into(),
                 origin: FontOrigin::FontPath
             }]
         );
+    }
+
+    /// The traps rsm-141.7 must design around: "the earliest face wins" holds only among equal static faces.
+    #[test]
+    fn a_later_variable_face_beats_an_earlier_static_one() {
+        let mut variable = info("Carlito", 400);
+        variable.flags = FontFlags::VARIABLE;
+        let set = FontSet::assemble(
+            vec![],
+            vec![
+                group(FontOrigin::Bundled, vec![face("/b/carlito.ttf", 0, "Carlito")]),
+                group(FontOrigin::System, vec![scanned("/s/carlito-var.ttf", 0, variable)]),
+            ],
+        );
+        let resolved = resolve_synthetic(&set, &[role("Carlito", "x", Metrics::Compatible)]);
+        assert_eq!(resolved[0].origin(), Some(FontOrigin::System), "{resolved:?}");
+    }
+
+    #[test]
+    fn a_later_closer_variant_beats_an_earlier_one() {
+        let set = FontSet::assemble(
+            vec![],
+            vec![
+                group(
+                    FontOrigin::Bundled,
+                    vec![scanned("/b/carlito-bold.ttf", 0, info("Carlito", 700))],
+                ),
+                group(
+                    FontOrigin::System,
+                    vec![scanned("/s/carlito-regular.ttf", 0, info("Carlito", 400))],
+                ),
+            ],
+        );
+        let resolved = resolve_synthetic(&set, &[role("Carlito", "x", Metrics::Compatible)]);
+        assert_eq!(resolved[0].origin(), Some(FontOrigin::System), "{resolved:?}");
+    }
+
+    #[test]
+    fn a_relative_directory_is_stored_as_the_canonical_path() {
+        let tmp = assert_ok!(tempfile::Builder::new().tempdir_in("target"));
+        assert_ok!(std::fs::write(tmp.path().join("a.otf"), b"x"));
+        let relative_dir = PathBuf::from("target").join(assert_some!(tmp.path().file_name()));
+        let relative = (
+            FontPath {
+                path: relative_dir.join("a.otf"),
+                index: 0,
+            },
+            info("A", 400),
+        );
+        assert!(relative.0.path.is_relative(), "the test needs a relative path");
+        let set = FontSet::assemble(vec![], vec![group(FontOrigin::FontPath, vec![relative])]);
+        let stored = assert_some!(set.store.source(0));
+        let any: &dyn std::any::Any = stored;
+        let path = &assert_some!(any.downcast_ref::<FontPath>()).path;
+        assert!(path.is_absolute(), "{path:?}");
+        assert_eq!(*path, assert_ok!(std::fs::canonicalize(relative_dir.join("a.otf"))));
     }
 
     // ---- the builder ------------------------------------------------------------------------
@@ -720,6 +791,7 @@ mod tests {
         assert!(!asked.load(Ordering::SeqCst), "the system scan ran in bundled mode");
         assert!(set.origins().iter().all(|o| *o == FontOrigin::Bundled));
         assert_eq!(set.origins().len(), FontSet::bundled().origins().len());
+        assert_eq!(set.mode(), FontsMode::Bundled);
     }
 
     #[test]
@@ -731,6 +803,7 @@ mod tests {
                 .build()
         );
         assert!(set.origins().contains(&FontOrigin::System));
+        assert_eq!(set.mode(), FontsMode::Auto);
     }
 
     #[test]
@@ -740,6 +813,7 @@ mod tests {
             matches!(err, Error::FontDirectory { ref path, .. } if path.ends_with("here")),
             "{err:?}"
         );
+        assert!(err.to_string().contains("here"), "{err}");
     }
 
     #[test]
@@ -759,14 +833,17 @@ mod tests {
     }
 
     #[test]
-    fn env_paths_drop_empty_entries_and_keep_order() {
-        let builder = FontSet::builder().env_paths(Some(OsStr::new(if cfg!(windows) { ";a;;b;" } else { ":a::b:" })));
+    fn env_paths_drop_empty_entries_keep_order_and_replace_earlier_calls() {
+        let value = if cfg!(windows) { ";a;;b;" } else { ":a::b:" };
+        let builder = FontSet::builder()
+            .env_paths(Some(OsStr::new("old")))
+            .env_paths(Some(OsStr::new(value)));
         assert_eq!(builder.env_paths, [PathBuf::from("a"), PathBuf::from("b")]);
         assert!(FontSet::builder().env_paths(None).env_paths.is_empty());
     }
 
     #[test]
-    fn a_panicking_system_scan_is_an_error_not_a_crash() {
+    fn a_system_scan_that_panics_twice_is_an_error_not_a_crash() {
         let err = assert_err!(
             FontSet::builder()
                 .application_dirs(vec![])
@@ -777,6 +854,56 @@ mod tests {
             matches!(err, Error::FontScanPanicked { origin: FontOrigin::System, ref message } if message.contains("database must contain")),
             "{err:?}"
         );
+    }
+
+    #[test]
+    fn a_scan_that_panics_once_is_retried() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&calls);
+        let set = assert_ok!(
+            FontSet::builder()
+                .application_dirs(vec![])
+                .system_source(move || {
+                    assert!(counter.fetch_add(1, Ordering::SeqCst) > 0, "a file vanished mid-scan");
+                    vec![face("/sys/calibri.ttf", 0, "Calibri")]
+                })
+                .build()
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert!(set.origins().contains(&FontOrigin::System));
+    }
+
+    #[test]
+    fn a_directory_scan_panic_names_the_directory_and_the_layer() {
+        let dir = assert_ok!(tempfile::tempdir());
+        for origin in [FontOrigin::FontPath, FontOrigin::Application] {
+            let err = assert_err!(scan_dir(dir.path(), origin, |_| panic!("boom")));
+            match err {
+                Error::FontScanPanicked { origin: got, message } => {
+                    assert_eq!(got, origin);
+                    assert!(
+                        message.contains("boom") && message.contains(&dir.path().display().to_string()),
+                        "{message}"
+                    );
+                }
+                other => panic!("unexpected error: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn application_directories_are_the_four_office_apps_on_macos_and_none_elsewhere() {
+        let dirs = application_dirs();
+        if cfg!(target_os = "macos") {
+            let apps: Vec<String> = dirs.iter().map(|d| d.display().to_string()).collect();
+            assert_eq!(
+                apps,
+                ["Word", "Excel", "PowerPoint", "Outlook"]
+                    .map(|a| format!("/Applications/Microsoft {a}.app/Contents/Resources/DFonts"))
+            );
+        } else {
+            assert!(dirs.is_empty());
+        }
     }
 
     #[test]
@@ -799,6 +926,20 @@ mod tests {
         assert_eq!(chosen, [word, different]);
     }
 
+    #[test]
+    fn a_directory_holding_anything_but_plain_files_is_never_skipped() {
+        let tmp = assert_ok!(tempfile::tempdir());
+        let make = |name: &str| {
+            let dir = tmp.path().join(name);
+            assert_ok!(std::fs::create_dir_all(dir.join("sub")));
+            assert_ok!(std::fs::write(dir.join("a.ttf"), b"1"));
+            dir
+        };
+        // Identical listings, so the second would be skipped if a subdirectory's own size proved anything.
+        let (one, two) = (make("one"), make("two"));
+        assert_eq!(office_dirs_to_scan(&[one.clone(), two.clone()]), [one, two]);
+    }
+
     // ---- resolution -------------------------------------------------------------------------
 
     #[test]
@@ -810,7 +951,7 @@ mod tests {
                 vec![face("/s/c.ttf", 0, "Calibri"), face("/s/k.ttf", 0, "Carlito")],
             )],
         );
-        let resolved = set.resolve(&[role("calibri", "Carlito", Metrics::Compatible)]);
+        let resolved = resolve_synthetic(&set, &[role("calibri", "Carlito", Metrics::Compatible)]);
         assert_eq!(
             resolved,
             [FontResolution::Preferred {
@@ -820,7 +961,11 @@ mod tests {
             }],
             "the lookup is case-insensitive and reports the book's own spelling"
         );
-        assert!(resolved[0].diagnostic().is_none());
+        assert!(resolved[0].diagnostic(FontsMode::Auto).is_none());
+        assert_eq!(
+            (resolved[0].role(), resolved[0].origin()),
+            ("body", Some(FontOrigin::System))
+        );
     }
 
     #[test]
@@ -829,10 +974,15 @@ mod tests {
             vec![],
             vec![group(FontOrigin::FontPath, vec![face("/b/k.ttf", 0, "Carlito")])],
         );
-        let compatible = &set.resolve(&[role("Calibri", "Carlito", Metrics::Compatible)])[0];
-        let different = &set.resolve(&[role("Calibri", "Carlito", Metrics::Different)])[0];
+        let resolved = resolve_synthetic(
+            &set,
+            &[
+                role("Calibri", "Carlito", Metrics::Compatible),
+                role("Calibri", "Carlito", Metrics::Different),
+            ],
+        );
         assert_eq!(
-            *compatible,
+            resolved[0],
             FontResolution::Fallback {
                 role: "body".into(),
                 preferred: "Calibri".into(),
@@ -841,12 +991,12 @@ mod tests {
                 metrics: Metrics::Compatible
             }
         );
-        let note = assert_some!(compatible.diagnostic());
+        let note = assert_some!(resolved[0].diagnostic(FontsMode::Auto));
         assert_eq!(
             (note.severity, note.code),
             (Severity::Note, DiagnosticCode::FontFallbackMetric)
         );
-        let warning = assert_some!(different.diagnostic());
+        let warning = assert_some!(resolved[1].diagnostic(FontsMode::Auto));
         assert_eq!(
             (warning.severity, warning.code),
             (Severity::Warning, DiagnosticCode::FontFallbackLayout)
@@ -856,8 +1006,9 @@ mod tests {
     #[test]
     fn role_resolution_reports_missing_when_neither_font_exists() {
         let resolved = &FontSet::bundled().resolve(&[role("Calibri", "Carlito", Metrics::Compatible)])[0];
-        assert!(matches!(resolved, FontResolution::Missing { .. }), "{resolved:?}");
-        let error = assert_some!(resolved.diagnostic());
+        assert_eq!(*resolved, missing());
+        assert_eq!(resolved.origin(), None);
+        let error = assert_some!(resolved.diagnostic(FontsMode::Auto));
         assert_eq!(
             (error.severity, error.code),
             (Severity::Error, DiagnosticCode::FontMissing)
@@ -872,48 +1023,85 @@ mod tests {
         let resolved = resolve_role(
             &book,
             &[FontOrigin::System],
+            |_| true,
             &role("Calibri", "Carlito", Metrics::Compatible),
         );
         assert!(matches!(resolved, FontResolution::Preferred { .. }), "{resolved:?}");
     }
 
     #[test]
+    fn a_face_that_cannot_be_read_does_not_count() {
+        let book = FontBook::from_infos([info("Calibri", 400), info("Carlito", 400)]);
+        let origins = [FontOrigin::System, FontOrigin::Bundled];
+        let r = role("Calibri", "Carlito", Metrics::Compatible);
+        let calibri_gone = resolve_role(&book, &origins, |i| i != 0, &r);
+        assert!(
+            matches!(
+                calibri_gone,
+                FontResolution::Fallback {
+                    origin: FontOrigin::Bundled,
+                    ..
+                }
+            ),
+            "{calibri_gone:?}"
+        );
+        assert_eq!(resolve_role(&book, &origins, |_| false, &r), missing());
+    }
+
+    #[test]
     fn diagnostics_say_what_was_used_and_how_to_fix_it() {
-        let fallback = |metrics| FontResolution::Fallback {
-            role: "body".into(),
-            preferred: "Calibri".into(),
-            family: "Carlito".into(),
-            origin: FontOrigin::Bundled,
-            metrics,
-        };
-        let metric = assert_some!(fallback(Metrics::Compatible).diagnostic());
+        let metric = assert_some!(fallback(Metrics::Compatible).diagnostic(FontsMode::Auto));
         assert_eq!(
             metric.message,
             "body: Calibri not found; using Carlito, which has the same character widths"
         );
-        assert!(metric.hints[0].contains("--font-path"), "{:?}", metric.hints);
-        let layout = assert_some!(fallback(Metrics::Different).diagnostic());
+        assert_eq!(
+            metric.hints,
+            ["only glyph shapes differ; install Calibri or pass --font-path <DIR> to use it"]
+        );
+        let layout = assert_some!(fallback(Metrics::Different).diagnostic(FontsMode::Auto));
         assert_eq!(
             layout.message,
             "body: Calibri not found; using Carlito, so line breaks may change"
         );
-        let missing = assert_some!(
-            FontResolution::Missing {
-                role: "body".into(),
-                preferred: "Calibri".into(),
-                fallback: "Carlito".into()
-            }
-            .diagnostic()
+        assert_eq!(
+            layout.hints,
+            ["install Calibri or pass --font-path <DIR> with its font files"]
         );
-        assert_eq!(missing.message, "body: neither Calibri nor Carlito is available");
-        for d in [metric, layout, missing] {
+        let gone = assert_some!(missing().diagnostic(FontsMode::Auto));
+        assert_eq!(gone.message, "body: neither Calibri nor Carlito is available");
+        assert_eq!(
+            gone.hints,
+            ["install Calibri or Carlito, pass --font-path <DIR>, or fix the style's font list"]
+        );
+        for d in [metric, layout, gone] {
             assert!(d.span.is_none() && d.fix.is_none());
         }
     }
 
     #[test]
-    fn origins_display_in_kebab_case() {
-        assert_eq!(FontOrigin::FontPath.to_string(), "font-path");
-        assert_eq!(FontOrigin::Bundled.as_ref() as &str, "bundled");
+    fn in_bundled_mode_the_hint_does_not_suggest_what_bundled_mode_ignores() {
+        for resolution in [fallback(Metrics::Compatible), fallback(Metrics::Different), missing()] {
+            let d = assert_some!(resolution.diagnostic(FontsMode::Bundled));
+            assert_eq!(
+                d.hints,
+                ["--fonts bundled uses only the bundled fonts; drop it to use installed fonts or --font-path"]
+            );
+        }
+    }
+
+    #[test]
+    fn font_roles_are_built_with_new() {
+        let r = FontRole::new(
+            String::from("body"),
+            "Calibri",
+            String::from("Carlito"),
+            Metrics::Different,
+        );
+        assert_eq!(
+            (r.name.as_str(), r.preferred.as_str(), r.fallback.as_str()),
+            ("body", "Calibri", "Carlito")
+        );
+        assert_eq!(r.metrics, Metrics::Different);
     }
 }

@@ -54,6 +54,22 @@ pub enum FontsMode {
     Bundled,
 }
 
+/// Where a font face came from.
+///
+/// Both `--font-path` and `RESUME_FONT_PATH` directories are `FontPath`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, EnumString, AsRefStr, EnumIter)]
+#[strum(serialize_all = "kebab-case")]
+pub enum FontOrigin {
+    /// Shipped inside the binary.
+    Bundled,
+    /// A directory the user named.
+    FontPath,
+    /// A known application font directory, such as Microsoft Office's on macOS.
+    Application,
+    /// An operating-system font directory.
+    System,
+}
+
 /// The `--max-pages` limit, 1 to 20.
 #[nutype(
     validate(greater_or_equal = 1, less_or_equal = 20),
@@ -109,6 +125,16 @@ mod tests {
         }
         assert_eq!(FontsMode::default(), FontsMode::Auto);
         assert_eq!(FontsMode::Bundled.to_string(), "bundled");
+    }
+
+    #[test]
+    fn font_origin_names_are_kebab_case_and_round_trip() {
+        let names: Vec<String> = FontOrigin::iter().map(|o| o.to_string()).collect();
+        assert_eq!(names, ["bundled", "font-path", "application", "system"]);
+        for origin in FontOrigin::iter() {
+            assert_eq!(assert_ok!(origin.to_string().parse::<FontOrigin>()), origin);
+            assert_eq!(origin.as_ref() as &str, origin.to_string());
+        }
     }
 
     #[test]

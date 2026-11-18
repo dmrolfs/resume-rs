@@ -8,7 +8,7 @@ use strum::Display;
 
 use crate::diagnostics::{Diagnostic, Severity};
 use crate::model::StyleName;
-use crate::typeset::fonts::FontOrigin;
+use crate::model::options::FontOrigin;
 
 /// A style source file as Typst read it, so a renderer can show excerpts of it.
 #[derive(Debug, Clone, PartialEq, Eq)]
