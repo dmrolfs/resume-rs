@@ -97,12 +97,14 @@ fn the_checker_detects_a_gated_dependency_and_an_ungated_script() {
 }
 
 #[test]
-fn a_gated_dependency_really_fails_to_load_on_windows() {
-    // Emulates how Windows sees the fixture by swapping `[unix]` (absent on Windows) for `[windows]` (present),
-    // which is exactly the situation that broke CI twice. Runs on every OS, so it also guards the Windows leg.
+fn a_gated_dependency_really_fails_to_load_on_another_os() {
+    // Emulates how another OS sees the fixture, which is exactly the situation that broke CI twice. On Windows
+    // the `[unix]` helper is already absent; anywhere else, swap it for `[windows]`, which is absent there.
+    // (Swapping unconditionally would make the helper exist on Windows and the file would load.) Runs on every OS.
     let fixture = std::fs::read_to_string(crate_path("tests/fixtures/justfiles/platform-violation.just"))
         .expect("fixture is readable");
-    let windows_view = fixture.replace("[unix]", "[windows]");
+    let absent_here = if cfg!(windows) { "[unix]" } else { "[windows]" };
+    let windows_view = fixture.replace("[unix]", absent_here);
     let dir = std::env::temp_dir().join(format!("resume-justfile-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");
     let path = dir.join("windows-view.just");
