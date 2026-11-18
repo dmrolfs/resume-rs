@@ -2323,6 +2323,7 @@ dependencies = [
  "typst-kit",
  "typst-layout",
  "typst-pdf",
+ "unicode-width",
  "url",
 ]
 

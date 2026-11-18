@@ -168,6 +168,25 @@ fn wide_characters_and_tabs_keep_the_caret_under_the_span() {
 }
 
 #[test]
+fn an_invisible_span_still_gets_a_caret_and_a_note() {
+    let text = "Jane\u{200b}Doe\n";
+    let mut sources = Sources::new(None);
+    sources.insert("t.md", text);
+    let d = fixable(finding(
+        Severity::Warning,
+        "a zero-width space is in the name",
+        Some(4..7),
+    ));
+    let shown = render(&sources, &[d]);
+    assert!(shown.contains("--> t.md:1:5"), "the true column\n{shown}");
+    assert!(shown.contains("^ fixable"), "a caret and the marker\n{shown}");
+    assert!(shown.contains("= note: the span has no visible width"), "{shown}");
+    // The zero-width space is shown as `<ZWSP>` only so the snapshot is readable; in the real output it
+    // has no width, which is why the caret sits under the `D` after it.
+    assert_snapshot!("invisible_span", shown.replace('\u{200b}', "<ZWSP>"));
+}
+
+#[test]
 fn a_finding_whose_source_is_missing_names_the_file_and_says_why() {
     let sources = Sources::new(None);
     let d = finding(Severity::Error, "problem", Some(0..4));

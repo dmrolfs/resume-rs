@@ -1,0 +1,11 @@
+---
+source: tests/diagnostics_test.rs
+expression: "shown.replace('\\u{200b}', \"<ZWSP>\")"
+---
+warning[unsupported-html]: a zero-width space is in the name
+  --> t.md:1:5
+  |
+1 | Jane<ZWSP>Doe
+  |     ^ fixable
+  |
+  = note: the span has no visible width; the caret marks where it sits

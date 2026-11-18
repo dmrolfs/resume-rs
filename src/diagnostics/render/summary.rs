@@ -8,8 +8,11 @@ use crate::diagnostics::{Diagnostic, Severity};
 /// Counts for the summary line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Summary {
+    /// Findings with severity `Error`.
     pub errors: usize,
+    /// Findings with severity `Warning`.
     pub warnings: usize,
+    /// Findings with severity `Note`.
     pub notes: usize,
     /// Findings of any severity that carry an Edit.
     pub fixable: usize,

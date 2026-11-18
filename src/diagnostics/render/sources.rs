@@ -6,7 +6,6 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use super::excerpt::sanitize;
 use crate::diagnostics::Span;
 use crate::diagnostics::lines::{LineIndex, Location};
 
@@ -104,13 +103,15 @@ impl<'a> Sources<'a> {
 
 /// Shows `path` relative to `base` when it is absolute and under it; never canonicalizes.
 ///
-/// Canonicalizing would turn a Windows path into `\\?\C:\...`, which no longer compares equal to `base`.
+/// The path is exact (invalid UTF-8 becomes U+FFFD): JSON carries it as is, and the human output escapes
+/// and caps it where it prints. Canonicalizing would turn a Windows path into `\\?\C:\...`, which no
+/// longer compares equal to `base`.
 pub(super) fn display_path(path: &Path, base: Option<&Path>) -> String {
     let relative = base
         .filter(|_| path.is_absolute())
         .and_then(|base| path.strip_prefix(base).ok())
         .filter(|relative| !relative.as_os_str().is_empty());
-    sanitize(&relative.unwrap_or(path).to_string_lossy(), false).into_owned()
+    relative.unwrap_or(path).to_string_lossy().into_owned()
 }
 
 #[cfg(test)]
@@ -280,7 +281,36 @@ mod tests {
     }
 
     #[test]
-    fn display_path_escapes_control_characters() {
-        assert_eq!(display_path(Path::new("a\u{1b}[31m.md"), None), "a\\u{1b}[31m.md");
+    fn display_path_is_the_path_exactly_so_json_can_carry_it() {
+        assert_eq!(display_path(Path::new("a\u{1b}[31m.md"), None), "a\u{1b}[31m.md");
+    }
+
+    /// Windows-only: std parses a drive letter into an upper-case prefix, so `c:` and `C:` are one base, and
+    /// a verbatim path (`\\?\C:\...`, what `canonicalize` returns) is a different prefix that never matches.
+    /// This is the reason `display_path` does not canonicalize.
+    #[cfg(windows)]
+    #[test]
+    fn display_path_matches_drive_letters_without_case_and_leaves_verbatim_paths_alone() {
+        let base = Path::new(r"C:\work\proj");
+        assert_eq!(
+            display_path(Path::new(r"C:\work\proj\resume.md"), Some(base)),
+            "resume.md"
+        );
+        assert_eq!(
+            display_path(Path::new(r"c:\work\proj\docs\a.md"), Some(base)),
+            r"docs\a.md"
+        );
+        let verbatim = Path::new(r"\\?\C:\work\proj\resume.md");
+        assert_eq!(display_path(verbatim, Some(base)), verbatim.to_string_lossy());
+        let sibling = Path::new(r"C:\work\project\a.md");
+        assert_eq!(display_path(sibling, Some(base)), sibling.to_string_lossy());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn display_path_replaces_invalid_utf8_rather_than_failing() {
+        use std::os::unix::ffi::OsStrExt;
+        let path = Path::new(std::ffi::OsStr::from_bytes(b"a\xffb.md"));
+        assert_eq!(display_path(path, None), "a\u{fffd}b.md");
     }
 }

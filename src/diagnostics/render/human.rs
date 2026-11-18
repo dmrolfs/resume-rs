@@ -1,17 +1,14 @@
 //! ABOUTME: Turns one finding into a codespan diagnostic: header, caret label, and notes.
 //! ABOUTME: ASCII frame only; message and hints are capped and sanitized before codespan prints them.
 
-use std::borrow::Cow;
-
 use codespan_reporting::diagnostic::{Diagnostic as Drawn, Label, Severity as DrawnSeverity};
 use codespan_reporting::term::{Chars, Config};
 
-use super::excerpt::{ELLIPSIS, Excerpt, sanitize};
+use super::excerpt::Excerpt;
+use super::sanitize::display_text;
 use super::sources::Resolved;
 use crate::diagnostics::{Diagnostic, Severity};
 
-/// Longest message or hint shown in human output; JSON stays complete.
-const MAX_TEXT_CHARS: usize = 500;
 /// The caret label of a finding that carries an Edit.
 const FIXABLE: &str = "fixable";
 
@@ -27,7 +24,7 @@ pub(super) fn config() -> Config {
 pub(super) fn to_codespan(d: &Diagnostic, resolved: &Resolved<'_>, excerpt: Option<&Excerpt>) -> Drawn<()> {
     let drawn = Drawn::new(severity(d.severity))
         .with_code(d.code)
-        .with_message(sanitize(&cap(&d.message), false))
+        .with_message(display_text(&d.message, false))
         .with_notes(notes(d, resolved, excerpt));
     match excerpt {
         Some(excerpt) => {
@@ -56,14 +53,22 @@ fn notes(d: &Diagnostic, resolved: &Resolved<'_>, excerpt: Option<&Excerpt>) -> 
             "note: excerpt shortened; the span runs from {}:{} to {}:{}",
             located.start.line, located.start.column, located.end.line, located.end.column
         )),
-        Resolved::Unlocated { name, reason } => notes.push(format!("note: in `{name}`; no excerpt: {reason}")),
+        Resolved::Located(_) if excerpt.is_some_and(|shown| shown.invisible) => {
+            notes.push("note: the span has no visible width; the caret marks where it sits".into());
+        }
+        Resolved::Unlocated { name, reason } => {
+            notes.push(format!(
+                "note: in `{}`; no excerpt: {reason}",
+                display_text(name, false)
+            ));
+        }
         Resolved::Located(_) | Resolved::NoSpan => {}
     }
     notes.extend(
         d.hints
             .iter()
-            .filter(|hint| !hint.is_empty())
-            .map(|hint| format!("help: {}", sanitize(&cap(hint), true))),
+            .filter(|hint| !hint.trim().is_empty())
+            .map(|hint| format!("help: {}", display_text(hint, true))),
     );
     if excerpt.is_none() && d.fix.is_some() {
         notes.push("note: fixable".into());
@@ -71,16 +76,9 @@ fn notes(d: &Diagnostic, resolved: &Resolved<'_>, excerpt: Option<&Excerpt>) -> 
     notes
 }
 
-/// Cuts `text` to [`MAX_TEXT_CHARS`] characters, marking the cut.
-fn cap(text: &str) -> Cow<'_, str> {
-    match text.char_indices().nth(MAX_TEXT_CHARS) {
-        Some((end, _)) => Cow::Owned(format!("{}{ELLIPSIS}", &text[..end])),
-        None => Cow::Borrowed(text),
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use super::super::sanitize::{ELLIPSIS, MAX_TEXT_CHARS};
     use super::*;
     use crate::diagnostics::render::sources::Sources;
     use crate::diagnostics::{DiagnosticCode, Edit, SourceKind, Span};
@@ -108,6 +106,20 @@ mod tests {
         let mut sources = Sources::new(None);
         if let Some(text) = text {
             sources.insert("t.md", text);
+        }
+        let resolved = sources.resolve(d.span.as_ref());
+        let excerpt = match &resolved {
+            Resolved::Located(located) => Some(Excerpt::build(located)),
+            _ => None,
+        };
+        to_codespan(d, &resolved, excerpt.as_ref())
+    }
+
+    /// Like [`convert`], for a finding whose file is whatever its span says.
+    fn convert_registered(d: &Diagnostic, text: Option<&str>) -> Drawn<()> {
+        let mut sources = Sources::new(None);
+        if let (Some(text), Some(span)) = (text, d.span.as_ref()) {
+            sources.insert(span.file.clone(), text);
         }
         let resolved = sources.resolve(d.span.as_ref());
         let excerpt = match &resolved {
@@ -158,6 +170,15 @@ mod tests {
     }
 
     #[test]
+    fn whitespace_only_hints_are_skipped_but_padding_inside_a_hint_is_kept() {
+        let drawn = convert(
+            &finding(Some(0..1), &[" ", "\t", "  \u{a0} ", " padded "], false),
+            Some("abc"),
+        );
+        assert_eq!(drawn.notes, ["help:  padded "]);
+    }
+
+    #[test]
     fn a_finding_without_a_span_has_no_label() {
         let drawn = convert(&finding(None, &["h"], false), None);
         assert!(drawn.labels.is_empty());
@@ -185,6 +206,25 @@ mod tests {
     }
 
     #[test]
+    fn the_unlocated_note_escapes_and_caps_the_file_name() {
+        let mut d = finding(Some(0..1), &[], false);
+        let name = format!("a\u{1b}[31m{}.md", "n".repeat(MAX_TEXT_CHARS));
+        d.span = d.span.map(|span| Span {
+            file: name.as_str().into(),
+            ..span
+        });
+        let drawn = convert_registered(&d, None);
+        // The cap counts source characters ("a", ESC, "[31m" are six), then the escape is written.
+        let shown = format!("a\\u{{1b}}[31m{}", "n".repeat(MAX_TEXT_CHARS - 6));
+        assert_eq!(drawn.notes.len(), 1);
+        assert!(
+            drawn.notes[0].starts_with(&format!("note: in `{shown}{ELLIPSIS}`")),
+            "{:?}",
+            drawn.notes
+        );
+    }
+
+    #[test]
     fn a_shortened_excerpt_notes_the_true_extents() {
         let text = (1..=10).map(|n| format!("line{n}")).collect::<Vec<_>>().join("\n");
         let drawn = convert(&finding(Some(0..text.len()), &["h"], false), Some(&text));
@@ -192,6 +232,20 @@ mod tests {
             drawn.notes,
             ["note: excerpt shortened; the span runs from 1:1 to 10:7", "help: h"]
         );
+    }
+
+    #[test]
+    fn an_invisible_span_says_where_the_caret_is() {
+        let drawn = convert(&finding(Some(2..8), &["h"], false), Some("ab\u{200b}\u{200b}cd"));
+        assert_eq!(
+            drawn.notes,
+            [
+                "note: the span has no visible width; the caret marks where it sits",
+                "help: h"
+            ]
+        );
+        let visible = convert(&finding(Some(0..2), &[], false), Some("abcd"));
+        assert!(visible.notes.is_empty());
     }
 
     #[test]
@@ -210,13 +264,6 @@ mod tests {
         let expected = format!("{}{ELLIPSIS}", "m".repeat(MAX_TEXT_CHARS));
         assert_eq!(drawn.message, expected);
         assert_eq!(drawn.notes, [format!("help: {expected}")]);
-    }
-
-    #[test]
-    fn text_of_exactly_the_cap_is_kept_whole() {
-        let exact = "é".repeat(MAX_TEXT_CHARS);
-        assert_eq!(cap(&exact), exact);
-        assert!(matches!(cap(&exact), Cow::Borrowed(_)));
     }
 
     #[test]

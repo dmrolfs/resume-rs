@@ -119,6 +119,7 @@ Unit tests sit beside the code in `src/diagnostics/lines.rs` and `src/diagnostic
 - [x] `tall_and_long_spans_output_is_bounded`: 500 findings over a 400 KiB line and over a 1 MiB block of one-byte lines
 - [x] Property tests: `render_never_panics_on_arbitrary_text_and_ranges` (hostile text; reversed, past-the-end, and mid-character ranges), header and JSON agree, located exactly when the span starts inside the text, output per finding bounded
 - [x] `line_index_matches_the_naive_reference` (proptest) and `line_of_counts_a_crlf_as_one_ending_wherever_the_offset_falls` (the Markdown `line_of` bug found by the design review)
+- [x] Review follow-ups (code-review-rust, then test-review-rust): a write failure keeps its `ErrorKind` in both formats (`RenderError::Write`); a span of only zero-width characters gets a caret and a note (`every_located_finding_draws_a_caret` property); a JSON record holds no Unicode line separator (property over `\u{2028}`, `\u{2029}`, `\u{85}`); the file name is exact in JSON and escaped and capped in human output; whitespace-only hints are skipped
 
 ### rsm-141.6: Typst World and PDF
 Style, world, and PDF settings (unit, in `src`):

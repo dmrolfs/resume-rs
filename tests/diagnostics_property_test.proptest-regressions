@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc eba2cd5f94eb4a3634d9e663dabaee56e076c1d9035cf83f5730ba27891ac1c3 # shrinks to (text, diagnostics) = ("", [Diagnostic { severity: Note, code: UnsupportedHtml, message: "", span: None, hints: ["\u{1b}[31m"], fix: None }])
+cc d1ea94d69fb4e59934430d4b6b09f0b40d545f19473df2e608828b089bb09d07 # shrinks to (text, diagnostics) = ("```\u{feff}𝄞", [Diagnostic { severity: Note, code: UnsupportedHtml, message: "", span: Some(Span { file: "t.md", kind: Markdown, range: 3..0 }), hints: [""], fix: None }])

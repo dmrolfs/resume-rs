@@ -13,7 +13,9 @@ pub(crate) struct Location {
     pub column: usize,
 }
 
-/// Line start offsets, built once in O(n); every lookup is O(log n) or O(1).
+/// Line start offsets, built once in O(n). Finding the line of an offset is O(log n) and a line's content
+/// range is O(1); [`LineIndex::location`] also counts the characters before the offset on its line, so it is
+/// linear in the column (about a millisecond for a column deep into a 16 MiB line).
 ///
 /// A line ends at `\n`, `\r\n`, or a lone `\r`. A leading byte order mark belongs to no line: the first
 /// line starts after it, so the first visible character is column 1.
@@ -88,6 +90,8 @@ impl LineIndex {
         let range = snap_to_boundaries(text, range);
         let start = range.start.max(self.starts[0]);
         let end = range.end.max(start);
+        // Walks back over the trailing terminators only, so it costs the length of that run: nothing for
+        // ordinary text, and bounded by the text for a span that ends in a very long run of blank lines.
         let kept = text[start..end].trim_end_matches(['\n', '\r']).len();
         start..start + kept
     }

@@ -4,6 +4,7 @@
 use std::io;
 
 use serde::Serialize;
+use serde_json::ser::Formatter;
 use snafu::ResultExt;
 
 use super::sources::{Resolved, Sources};
@@ -61,12 +62,41 @@ impl<'a> JsonDiagnostic<'a> {
     }
 }
 
+/// serde_json's compact output, except that the Unicode line separators it would write raw (U+0085,
+/// U+2028, U+2029) become `\uXXXX` escapes. Valid JSON allows them raw, but a consumer that splits lines
+/// with Unicode rules (Python's `splitlines()`) would cut the record in two; every other line break is a
+/// control character, which serde_json already escapes.
+struct LineSafe;
+
+impl Formatter for LineSafe {
+    fn write_string_fragment<W>(&mut self, writer: &mut W, fragment: &str) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        let mut rest = fragment;
+        while let Some(at) = rest.find(['\u{85}', '\u{2028}', '\u{2029}']) {
+            let (before, found) = rest.split_at(at);
+            writer.write_all(before.as_bytes())?;
+            let mut chars = found.chars();
+            // `find` just matched a character at the start of `found`.
+            let separator = chars.next().map_or(0, u32::from);
+            write!(writer, "\\u{separator:04x}")?;
+            rest = chars.as_str();
+        }
+        writer.write_all(rest.as_bytes())
+    }
+}
+
 /// Writes one record and its `\n`.
 ///
 /// The terminator is `\n` on every OS, so the stream reads the same through a pipe on Windows.
 pub(super) fn write_line(out: &mut dyn io::Write, sources: &Sources<'_>, d: &Diagnostic) -> Result<(), RenderError> {
     let resolved = sources.resolve(d.span.as_ref());
-    let mut line = serde_json::to_vec(&JsonDiagnostic::new(d, &resolved)).context(JsonSnafu)?;
+    let mut line = Vec::new();
+    let mut serializer = serde_json::Serializer::with_formatter(&mut line, LineSafe);
+    JsonDiagnostic::new(d, &resolved)
+        .serialize(&mut serializer)
+        .context(JsonSnafu)?;
     line.push(b'\n');
     out.write_all(&line).context(WriteSnafu)
 }
@@ -173,6 +203,22 @@ mod tests {
     }
 
     #[test]
+    fn the_file_is_the_path_exactly_whatever_characters_it_holds() {
+        let name = format!("a\u{1b}[31m{}.md", "n".repeat(900));
+        let mut sources = Sources::new(None);
+        sources.insert(name.as_str(), "abc");
+        let mut d = finding(Some(0..1));
+        d.span = d.span.map(|span| Span {
+            file: name.as_str().into(),
+            ..span
+        });
+        let mut out = Vec::new();
+        assert_ok!(write_line(&mut out, &sources, &d));
+        let value = parsed(&assert_ok!(String::from_utf8(out)));
+        assert_eq!(value["file"], name.as_str());
+    }
+
+    #[test]
     fn fixable_follows_the_edit_and_hints_are_kept_in_order() {
         let mut d = finding(None);
         d.hints = vec!["one".into(), "two".into()];
@@ -193,6 +239,31 @@ mod tests {
         assert!(!line.contains('\u{1b}'));
         assert_eq!(line.matches('\n').count(), 1, "the newline in the message is escaped");
         assert_eq!(parsed(&line)["message"], d.message.as_str());
+    }
+
+    /// The characters Python's `str.splitlines()` (and similar splitters) treat as line boundaries.
+    const LINE_BREAKERS: [char; 10] = [
+        '\n', '\r', '\u{b}', '\u{c}', '\u{1c}', '\u{1d}', '\u{1e}', '\u{85}', '\u{2028}', '\u{2029}',
+    ];
+
+    #[test]
+    fn a_record_holds_no_character_a_line_splitter_could_break_on() {
+        let mut d = finding(None);
+        d.message = "a\u{2028}b\u{2029}c\u{85}d\u{b}e\u{c}f\u{1c}g\r\nh".into();
+        d.hints = vec!["x\u{2028}y".into()];
+        let line = record(&d, None);
+        let body = line.strip_suffix('\n').unwrap_or(&line);
+        assert!(!body.contains(LINE_BREAKERS), "{body:?}");
+        assert!(body.contains(r"a\u2028b\u2029c\u0085d"), "{body}");
+        assert_eq!(parsed(&line)["message"], d.message.as_str(), "the escapes round-trip");
+        assert_eq!(parsed(&line)["hints"][0], "x\u{2028}y");
+    }
+
+    #[test]
+    fn ordinary_unicode_is_not_escaped() {
+        let mut d = finding(None);
+        d.message = "é 中 𝄞 · – \u{a0}".into();
+        assert!(record(&d, None).contains(&d.message));
     }
 
     #[test]

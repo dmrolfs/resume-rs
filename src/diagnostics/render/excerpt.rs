@@ -1,11 +1,12 @@
 //! ABOUTME: A bounded, sanitized copy of the lines a finding points at, for codespan to draw.
 //! ABOUTME: Labels are recomputed in the copy's coordinates; line and column report the true values.
 
-use std::borrow::Cow;
 use std::ops::Range;
 
 use codespan_reporting::files::{Error, Files};
+use unicode_width::UnicodeWidthChar;
 
+use super::sanitize::{ELLIPSIS, display_text, sanitize};
 use super::sources::Located;
 use crate::diagnostics::lines::Location;
 
@@ -15,8 +16,6 @@ const MAX_EXCERPT_LINES: usize = 6;
 const WINDOW_CHARS: usize = 120;
 /// Characters kept before the anchor when a line is cut.
 const LEFT_CONTEXT: usize = 30;
-/// Marks where a line was cut.
-pub(super) const ELLIPSIS: &str = "...";
 
 /// A bounded, sanitized copy of the shown lines; reports true line and column to codespan.
 #[derive(Debug)]
@@ -28,6 +27,8 @@ pub(super) struct Excerpt {
     start: Location,
     pub(super) label: Range<usize>,
     pub(super) shortened: bool,
+    /// The span has no visible width, so the caret marks where it sits instead of covering it.
+    pub(super) invisible: bool,
 }
 
 impl Excerpt {
@@ -54,16 +55,56 @@ impl Excerpt {
             }
             text.push_str(&shown.text);
         }
+        let (label, invisible) = if first == last {
+            visible_label(&text, label)
+        } else {
+            (label, false)
+        };
         Self {
-            name: located.name.clone(),
+            name: display_text(&located.name, false),
             text,
             line_starts,
             first_line: first,
             start: located.start,
             label,
             shortened: windowed || last < located.end.line,
+            invisible,
         }
     }
+}
+
+/// Moves a label that would draw no caret to the next visible character; the flag says it moved.
+///
+/// codespan draws a caret as wide as the text under it, and widens a zero-length label to the character
+/// at its start. A label over only zero-width characters (a zero-width space, combining marks, a variation
+/// selector) would therefore draw nothing, and those are the findings where the caret matters most. With
+/// no visible character after it, the caret goes past the end of the line.
+fn visible_label(line: &str, label: Range<usize>) -> (Range<usize>, bool) {
+    let drawn_over = if label.is_empty() {
+        line[label.start..]
+            .chars()
+            .next()
+            .map(|c| &line[label.start..label.start + c.len_utf8()])
+    } else {
+        Some(&line[label.clone()])
+    };
+    if drawn_over.is_none_or(|text| text.chars().any(is_visible)) {
+        return (label, false);
+    }
+    let moved =
+        line[label.end..]
+            .char_indices()
+            .find(|&(_, c)| is_visible(c))
+            .map_or(line.len()..line.len(), |(offset, c)| {
+                let start = label.end + offset;
+                start..start + c.len_utf8()
+            });
+    (moved, true)
+}
+
+/// True when codespan gives `c` a column: a tab always does, other characters by their display width.
+fn is_visible(c: char) -> bool {
+    c == '\t' || c.width().unwrap_or(0) > 0
 }
 
 /// One shown source line, sanitized, with the label's extent inside it.
@@ -207,41 +248,9 @@ impl<'a> Files<'a> for Excerpt {
     }
 }
 
-/// Escapes control and bidi characters as ASCII `\u{..}`; keeps tabs (and newlines when `multiline`).
-///
-/// With `multiline`, `\r\n` and a lone `\r` are first read as `\n`.
-pub(super) fn sanitize(text: &str, multiline: bool) -> Cow<'_, str> {
-    if !text.chars().any(|c| c == '\r' && multiline || escapes(c, multiline)) {
-        return Cow::Borrowed(text);
-    }
-    let mut out = String::with_capacity(text.len() + 16);
-    let mut chars = text.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '\r' && multiline {
-            chars.next_if_eq(&'\n');
-            out.push('\n');
-        } else if escapes(c, multiline) {
-            out.push_str(&format!("\\u{{{:x}}}", u32::from(c)));
-        } else {
-            out.push(c);
-        }
-    }
-    Cow::Owned(out)
-}
-
-/// True for the characters that could drive a terminal or reorder the text around them.
-fn escapes(c: char, multiline: bool) -> bool {
-    let kept = c == '\t' || (multiline && c == '\n');
-    (c.is_control() && !kept) || is_bidi_control(c)
-}
-
-/// The bidirectional formatting characters, which can make source read differently from how it is stored.
-fn is_bidi_control(c: char) -> bool {
-    matches!(c, '\u{61c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
-}
-
 #[cfg(test)]
 mod tests {
+    use super::super::sanitize::MAX_TEXT_CHARS;
     use super::*;
     use crate::diagnostics::render::sources::{Resolved, Sources};
     use crate::diagnostics::{SourceKind, Span};
@@ -272,6 +281,105 @@ mod tests {
         assert_eq!(shown.text, "hello world");
         assert_eq!(quoted(&shown), "world");
         assert!(!shown.shortened);
+    }
+
+    #[test]
+    fn a_span_of_only_zero_width_characters_points_at_the_next_visible_one() {
+        // codespan draws a caret as wide as the text under it, so zero-width text would get none.
+        let zero_width_space = excerpt("ab\u{200b}\u{200b}cd", 2..8);
+        assert_eq!(quoted(&zero_width_space), "c");
+        assert!(zero_width_space.invisible);
+        assert_eq!(
+            assert_ok!(zero_width_space.column_number((), 0, 0)),
+            3,
+            "the header keeps the true column"
+        );
+
+        let combining = excerpt("ab\u{301}\u{301}cd", 2..6);
+        assert_eq!(quoted(&combining), "c");
+        assert!(combining.invisible);
+
+        let selector = excerpt("a\u{2764}\u{fe0f}", 4..7);
+        assert_eq!(
+            quoted(&selector),
+            "",
+            "a selector at the end of the line points past it"
+        );
+        assert!(selector.invisible);
+    }
+
+    #[test]
+    fn a_zero_length_span_before_a_zero_width_character_skips_it() {
+        let shown = excerpt("ab\u{200b}cd", 2..2);
+        assert_eq!(quoted(&shown), "c");
+        assert!(shown.invisible);
+    }
+
+    #[test]
+    fn an_invisible_span_at_the_end_of_the_line_points_past_the_end() {
+        let shown = excerpt("ab\u{200b}", 2..5);
+        assert_eq!(shown.label, shown.text.len()..shown.text.len());
+        assert!(shown.invisible);
+    }
+
+    #[test]
+    fn a_run_of_zero_width_characters_is_skipped_to_the_visible_one() {
+        let shown = excerpt("a\u{200b}\u{200b}\u{200b}b", 1..4);
+        assert_eq!(quoted(&shown), "b");
+    }
+
+    #[test]
+    fn spans_with_any_visible_width_are_left_alone() {
+        let mixed = excerpt("a\u{200b}b", 1..5);
+        assert_eq!(quoted(&mixed), "\u{200b}b");
+        assert!(!mixed.invisible);
+
+        let tab = excerpt("a\tb", 1..2);
+        assert_eq!(quoted(&tab), "\t");
+        assert!(!tab.invisible, "a tab has width");
+
+        let empty = excerpt("abc", 1..1);
+        assert_eq!(empty.label, 1..1);
+        assert!(
+            !empty.invisible,
+            "a zero-length span before a visible character is drawn by codespan"
+        );
+
+        let at_end = excerpt("abc", 3..3);
+        assert!(!at_end.invisible);
+
+        let wide = excerpt("a中b", 1..4);
+        assert_eq!(quoted(&wide), "中");
+        assert!(!wide.invisible);
+    }
+
+    #[test]
+    fn multi_line_spans_are_not_moved() {
+        let shown = excerpt("ab\n\u{200b}", 0..6);
+        assert_eq!(shown.label.start, 0);
+        assert!(!shown.invisible);
+    }
+
+    #[test]
+    fn the_file_name_is_escaped_and_capped_in_the_excerpt() {
+        let mut sources = Sources::new(None);
+        let long = format!("{}.md", "n".repeat(MAX_TEXT_CHARS + 10));
+        for (name, shown) in [
+            ("a\u{1b}[31m.md".to_string(), "a\\u{1b}[31m.md".to_string()),
+            (long.clone(), format!("{}{ELLIPSIS}", "n".repeat(MAX_TEXT_CHARS))),
+        ] {
+            sources.insert(name.as_str(), "abc");
+            let span = Span {
+                file: name.as_str().into(),
+                kind: SourceKind::Markdown,
+                range: 0..1,
+            };
+            let excerpt = match sources.resolve(Some(&span)) {
+                Resolved::Located(located) => Excerpt::build(&located),
+                other => panic!("expected a located span, got {other:?}"),
+            };
+            assert_eq!(assert_ok!(excerpt.name(())), shown);
+        }
     }
 
     #[test]
@@ -425,45 +533,5 @@ mod tests {
         let shown = excerpt("a\nb\nc\nd", 4..7);
         assert_eq!(assert_ok!(shown.line_number((), 0)), 3);
         assert_eq!(assert_ok!(shown.line_number((), 1)), 4);
-    }
-
-    #[test]
-    fn sanitize_escapes_every_control_and_bidi_character() {
-        let controls = ['\0', '\u{7}', '\u{1b}', '\u{7f}', '\u{85}', '\u{9f}'];
-        let bidi = [
-            '\u{61c}', '\u{200e}', '\u{200f}', '\u{202a}', '\u{202e}', '\u{2066}', '\u{2069}',
-        ];
-        for c in controls.into_iter().chain(bidi) {
-            let text = format!("[{c}]");
-            assert_eq!(sanitize(&text, false), format!("[\\u{{{:x}}}]", u32::from(c)), "{c:?}");
-        }
-    }
-
-    #[test]
-    fn sanitize_leaves_printable_text_borrowed_and_keeps_tabs() {
-        assert!(matches!(sanitize("plain é 中 𝄞\ttab", false), Cow::Borrowed(_)));
-        assert_eq!(sanitize("a\tb", false), "a\tb");
-    }
-
-    #[test]
-    fn sanitize_does_not_escape_the_neighbours_of_the_bidi_ranges() {
-        for c in [
-            '\u{61b}', '\u{61d}', '\u{200d}', '\u{2010}', '\u{2029}', '\u{202f}', '\u{2065}', '\u{206a}',
-        ] {
-            let text = c.to_string();
-            assert!(matches!(sanitize(&text, false), Cow::Borrowed(_)), "{c:?}");
-        }
-    }
-
-    #[test]
-    fn sanitize_single_line_escapes_newlines() {
-        assert_eq!(sanitize("a\nb\rc", false), "a\\u{a}b\\u{d}c");
-    }
-
-    #[test]
-    fn sanitize_multiline_normalizes_endings_and_keeps_newlines() {
-        assert_eq!(sanitize("a\r\nb\rc\nd", true), "a\nb\nc\nd");
-        assert!(matches!(sanitize("a\nb", true), Cow::Borrowed(_)));
-        assert_eq!(sanitize("a\u{1b}\nb", true), "a\\u{1b}\nb");
     }
 }

@@ -10,7 +10,7 @@ use resume::diagnostics::{
 use serde::Deserialize;
 
 /// Pieces that stress line splitting, columns, windows, and escaping: every kind of line ending, a BOM
-/// anywhere, multi-byte and wide characters, tabs, controls, and bidi overrides.
+/// anywhere, multi-byte, wide, and zero-width characters, tabs, controls, and bidi overrides.
 const PIECES: &[&str] = &[
     "a",
     "bc",
@@ -30,9 +30,19 @@ const PIECES: &[&str] = &[
     "\u{85}",
     "\u{202e}",
     "\u{2028}",
+    "\u{2029}",
     "#",
     "```",
     "<!--",
+    "\u{200b}",
+    "\u{301}",
+    "\u{fe0f}",
+];
+
+/// The characters Python's `str.splitlines()` and similar splitters treat as line boundaries, other than
+/// the `\n` that ends each JSON record.
+const LINE_BREAKERS: [char; 9] = [
+    '\r', '\u{b}', '\u{c}', '\u{1c}', '\u{1d}', '\u{1e}', '\u{85}', '\u{2028}', '\u{2029}',
 ];
 
 /// Long runs, so lines pass the 120-character window and spans pass the 6-line limit.
@@ -124,6 +134,19 @@ proptest! {
         prop_assert_eq!(lines.matches('\n').count(), diagnostics.len(), "one line per finding");
         for line in lines.lines() {
             prop_assert!(serde_json::from_str::<Record>(line).is_ok(), "{}", line);
+            prop_assert!(!line.contains(LINE_BREAKERS), "a record must stay on one line: {:?}", line);
+        }
+    }
+
+    #[test]
+    fn every_located_finding_draws_a_caret((text, diagnostics) in case_strategy()) {
+        let mut sources = Sources::new(None);
+        sources.insert("t.md", &text);
+        for d in &diagnostics {
+            let shown = String::from_utf8(human(&sources, std::slice::from_ref(d))).unwrap_or_default();
+            let located = shown.lines().any(|l| l.trim_start().starts_with("--> "));
+            // The generated text never contains `^`, so any `^` is a caret.
+            prop_assert!(!located || shown.contains('^'), "no caret for {:?} in {:?}\n{}", d.span, text, shown);
         }
     }
 

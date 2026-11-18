@@ -5,12 +5,13 @@ mod color;
 mod excerpt;
 mod human;
 mod json;
+mod sanitize;
 mod sources;
 mod summary;
 
 use codespan_reporting::files::SimpleFile;
 use codespan_reporting::term;
-use snafu::{ResultExt, Snafu};
+use snafu::{IntoError, Snafu};
 
 use self::excerpt::Excerpt;
 use self::sources::Resolved;
@@ -26,8 +27,9 @@ pub use self::summary::Summary;
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(super)))]
 pub enum RenderError {
-    /// The excerpt renderer failed, usually because the output could not be written.
-    #[snafu(display("could not write diagnostics: {source}"))]
+    /// codespan could not draw a finding. Never an I/O failure (those are [`RenderError::Write`]), so it
+    /// means a bug in how an excerpt was built.
+    #[snafu(display("could not draw a diagnostic: {source}"))]
     Human { source: codespan_reporting::files::Error },
     /// A finding could not be serialized.
     #[snafu(display("could not serialize a diagnostic as JSON: {source}"))]
@@ -37,10 +39,20 @@ pub enum RenderError {
     Write { source: std::io::Error },
 }
 
+/// Sorts a codespan failure: an I/O error is a write failure whatever codespan wrapped it in, so a
+/// caller can treat `BrokenPipe` the same way for both formats; anything else is a rendering failure.
+fn from_codespan(error: codespan_reporting::files::Error) -> RenderError {
+    match error {
+        codespan_reporting::files::Error::Io(source) => WriteSnafu.into_error(source),
+        source => HumanSnafu.into_error(source),
+    }
+}
+
 /// Writes each diagnostic as an ASCII excerpt with hints, in the given order; no summary.
 ///
 /// # Errors
-/// - [`RenderError::Human`] - When `out` cannot be written.
+/// - [`RenderError::Write`] - When `out` cannot be written.
+/// - [`RenderError::Human`] - When codespan cannot draw a finding (a bug: the excerpt is always valid).
 pub fn emit_human<'d>(
     out: &mut dyn termcolor::WriteColor,
     sources: &Sources<'_>,
@@ -60,7 +72,7 @@ pub fn emit_human<'d>(
             Some(excerpt) => term::emit_to_write_style(out, &config, excerpt, &drawn),
             None => term::emit_to_write_style(out, &config, &no_file, &drawn),
         }
-        .context(HumanSnafu)?;
+        .map_err(from_codespan)?;
     }
     Ok(())
 }
@@ -78,4 +90,80 @@ pub fn emit_json<'d>(
     diagnostics
         .into_iter()
         .try_for_each(|diagnostic| json::write_line(out, sources, diagnostic))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostics::{DiagnosticCode, Severity, SourceKind, Span};
+    use claims::{assert_err, assert_ok};
+    use pretty_assertions::assert_eq;
+    use std::io;
+    use termcolor::NoColor;
+
+    /// A writer that always fails with `kind`.
+    struct Failing(io::ErrorKind);
+
+    impl io::Write for Failing {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::Error::from(self.0))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn finding(range: Option<std::ops::Range<usize>>) -> Diagnostic {
+        Diagnostic {
+            severity: Severity::Error,
+            code: DiagnosticCode::UnsupportedHtml,
+            message: "problem".into(),
+            span: range.map(|range| Span {
+                file: "t.md".into(),
+                kind: SourceKind::Markdown,
+                range,
+            }),
+            hints: Vec::new(),
+            fix: None,
+        }
+    }
+
+    fn write_kind(error: RenderError) -> io::ErrorKind {
+        match error {
+            RenderError::Write { source } => source.kind(),
+            other => panic!("expected a write error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_write_failure_in_human_output_is_a_write_error_that_keeps_its_kind() {
+        let mut sources = Sources::new(None);
+        sources.insert("t.md", "abc");
+        for range in [Some(0..1), None] {
+            let mut out = NoColor::new(Failing(io::ErrorKind::BrokenPipe));
+            let error = assert_err!(emit_human(&mut out, &sources, [&finding(range.clone())]));
+            assert_eq!(write_kind(error), io::ErrorKind::BrokenPipe, "{range:?}");
+        }
+    }
+
+    #[test]
+    fn a_write_failure_in_json_output_is_a_write_error_that_keeps_its_kind() {
+        let sources = Sources::new(None);
+        let error = assert_err!(emit_json(
+            &mut Failing(io::ErrorKind::BrokenPipe),
+            &sources,
+            [&finding(None)]
+        ));
+        assert_eq!(write_kind(error), io::ErrorKind::BrokenPipe);
+    }
+
+    #[test]
+    fn nothing_is_written_when_there_is_nothing_to_report() {
+        let mut out = termcolor::Buffer::no_color();
+        assert_ok!(emit_human(&mut out, &Sources::new(None), []));
+        let mut json = Vec::new();
+        assert_ok!(emit_json(&mut json, &Sources::new(None), []));
+        assert!(out.as_slice().is_empty() && json.is_empty());
+    }
 }

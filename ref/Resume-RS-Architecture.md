@@ -97,6 +97,7 @@ resume-rs/
         mod.rs           # emit_human, emit_json, RenderError
         sources.rs       # Sources: text by path, display paths, span snapping
         excerpt.rs       # the bounded, sanitized excerpt codespan draws
+        sanitize.rs      # escapes control and bidi characters; caps long text
         human.rs         # one finding -> a codespan diagnostic (header, caret, notes)
         json.rs          # the JSON-lines record
         color.rs         # ColorEnv, resolve_color
@@ -460,8 +461,9 @@ warning[period-hyphen]: dates are separated by `-`; use an en dash with a space 
 ```
 
 - The header is `severity[code]: message`, then `--> file:line:column`. The caret label says `fixable` when the finding carries an Edit; the Edit text itself is not shown, because the hints already carry the corrected text.
-- Each non-empty hint is a `= help:` note. A finding with no span prints only its header and notes; a fixable one adds `= note: fixable`.
+- Each hint that is not blank is a `= help:` note. A finding with no span prints only its header and notes; a fixable one adds `= note: fixable`.
 - The advice summary is not shown here. `doctor` and `--explain` show it, because most messages already say the same thing.
+- A span with no visible width (a zero-width space, combining marks, a variation selector) would get no caret from codespan, which sizes carets by display width. The caret moves to the next visible character (or past the end of the line) and a `= note: the span has no visible width; the caret marks where it sits` says so; the header column stays the true one.
 - A finding whose source was not registered, or whose span starts past the end of the text, is *unlocated*: it prints a note naming the file and the reason (`= note: in `style.typ`; no excerpt: source not available`) rather than a misleading location.
 - The frame is always ASCII (`-->`, `|`), with no option: legacy Windows consoles, CI logs, and text pasted into issues all render it. The quoted source line is the user's own text, so it can still contain `·` and `–`.
 - `Summary`'s `Display` is `N errors, N warnings[, N notes][; N fixable]` (singular for 1; notes and fixable appear only when non-zero; a clean run is `0 errors, 0 warnings`). `has_errors()` is all the renderer says about exit codes; mapping to codes belongs to the CLI.
@@ -472,7 +474,7 @@ warning[period-hyphen]: dates are separated by `-`; use an en dash with a space 
 |---|---|
 | Source lines shown for one finding | 6, with a `= note: excerpt shortened; the span runs from 10:3 to 9000:1` |
 | Characters shown from one line | 120, around the span, with `...` where the line is cut (30 characters of context before the span) |
-| Message and each hint (human output only) | 500 characters, then `...` |
+| Message, each hint, and the file name (human output only) | 500 characters, then `...`; JSON stays complete |
 | Control and bidi characters (C0, C1, DEL, U+061C, U+200E/F, U+202A-E, U+2066-9), in the excerpt, message, hints, and file name | written as ASCII `\u{1b}`; tabs are kept |
 | Line and column in the header | always the true values, whatever was cut |
 
@@ -501,9 +503,9 @@ So 500 findings on a 400 KiB line produce about 300 KB, not 400 MB, and `--color
 | `hints` | array of strings | Possibly empty |
 | `fixable` | bool | The finding carries an Edit; `doctor --fix` applies it |
 
-The contract is additive only: new keys may be appended, existing keys never change meaning or type, and consumers must ignore keys they do not know. There is no version field, summary object, or `fix` object (the exact Edit stays with `doctor --fix`). A finding that cannot be located keeps its `file`. Control characters in a file name appear as `\u{..}` escapes. The record is a private serde type, not `Serialize` on `Diagnostic`, so the public contract does not depend on the internal byte-range representation.
+The contract is additive only: new keys may be appended, existing keys never change meaning or type, and consumers must ignore keys they do not know. There is no version field, summary object, or `fix` object (the exact Edit stays with `doctor --fix`). A finding that cannot be located keeps its `file`, and `file` is the path exactly (invalid UTF-8 becomes U+FFFD); only the human output escapes and caps it. A record never contains a character that a line splitter could break on: control characters and U+0085, U+2028, and U+2029 are written as `\u` escapes, so Python's `splitlines()` and `\n` agree. The record is a private serde type, not `Serialize` on `Diagnostic`, so the public contract does not depend on the internal byte-range representation.
 
-**Streams** (for the CLI): human diagnostics and the summary go to stderr, like cargo and rustc; JSON lines go to stdout and nothing else does. Use termcolor's `BufferedStandardStream` (codespan writes one character at a time, and stderr is unbuffered), and treat `BrokenPipe` as a quiet exit.
+**Streams** (for the CLI): human diagnostics and the summary go to stderr, like cargo and rustc; JSON lines go to stdout and nothing else does. Use termcolor's `BufferedStandardStream` (codespan writes one character at a time, and stderr is unbuffered), and treat `BrokenPipe` as a quiet exit: both emitters report every write failure as `RenderError::Write`, whose `source.kind()` is the original `io::ErrorKind`.
 
 ### Typst Integration (`src/typeset/`)
 
