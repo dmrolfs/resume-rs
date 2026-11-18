@@ -1,0 +1,37 @@
+---
+source: tests/diagnostics_test.rs
+expression: "format!(\"{shown}{summary}\\n\")"
+---
+error[content-before-section]: content before the name heading
+  --> errors-content-before-section.md:4:1
+  |
+4 | Stray intro before the name.
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = help: only the name and the contact line may come before the first `## Section`; move this under a section
+
+error[content-before-section]: content before the first section
+   --> errors-content-before-section.md:10:1
+   |
+10 | A stray paragraph.
+   | ^^^^^^^^^^^^^^^^^^
+   |
+   = help: only the name and the contact line may come before the first `## Section`; move this under a section
+
+error[content-before-section]: content before the first section
+   --> errors-content-before-section.md:12:1
+   |
+12 | - a stray bullet
+   | ^^^^^^^^^^^^^^^^
+   |
+   = help: only the name and the contact line may come before the first `## Section`; move this under a section
+
+error[content-before-section]: content before the first section
+   --> errors-content-before-section.md:14:1
+   |
+14 | ### A stray role · 2015 – 2017
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: only the name and the contact line may come before the first `## Section`; move this under a section
+
+4 errors, 0 warnings

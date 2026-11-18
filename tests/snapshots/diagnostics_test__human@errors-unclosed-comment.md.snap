@@ -1,0 +1,13 @@
+---
+source: tests/diagnostics_test.rs
+expression: "format!(\"{shown}{summary}\\n\")"
+---
+error[unsupported-html]: the comment is never closed; everything after line 12 is hidden
+   --> errors-unclosed-comment.md:12:1
+   |
+12 | <!-- this comment is never closed
+   | ^^^^
+   |
+   = help: end the comment with `-->`
+
+1 error, 0 warnings

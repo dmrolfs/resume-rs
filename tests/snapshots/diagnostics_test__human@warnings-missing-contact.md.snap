@@ -1,0 +1,13 @@
+---
+source: tests/diagnostics_test.rs
+expression: "format!(\"{shown}{summary}\\n\")"
+---
+warning[missing-contact]: the name has no contact line
+  --> warnings-missing-contact.md:4:1
+  |
+4 | # Ada Lovelace
+  | ^^^^^^^^^^^^^^
+  |
+  = help: add a line with location, email, phone, and links right after the name, separated by ` · `
+
+0 errors, 1 warning

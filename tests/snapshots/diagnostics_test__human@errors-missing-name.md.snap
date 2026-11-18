@@ -1,0 +1,13 @@
+---
+source: tests/diagnostics_test.rs
+expression: "format!(\"{shown}{summary}\\n\")"
+---
+error[missing-name]: the resume has no `# Name` heading
+  --> errors-missing-name.md:4:1
+  |
+4 | ## Summary
+  | ^
+  |
+  = help: start the file with `# Your Name` (comments may come first)
+
+1 error, 0 warnings

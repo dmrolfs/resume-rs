@@ -1,0 +1,77 @@
+---
+source: tests/diagnostics_test.rs
+expression: "format!(\"{shown}{summary}\\n\")"
+---
+warning[period-present-spelling]: write `Present` for an ongoing role
+   --> warnings-fixable.md:10:33
+   |
+10 | ### Epsilon · Engineer · 2019 – Current
+   |                                 ^^^^^^^ fixable
+   |
+   = help: write `2019 – Present`
+
+warning[period-present-spelling]: write `Present` for an ongoing role
+   --> warnings-fixable.md:12:30
+   |
+12 | ### Zeta · Engineer · 2018 – now
+   |                              ^^^ fixable
+   |
+   = help: write `2018 – Present`
+
+warning[period-hyphen]: dates are separated by `-`; use an en dash with a space on each side
+   --> warnings-fixable.md:14:27
+   |
+14 | ### Acme · Engineer · 2015 - 2017
+   |                           ^^^ fixable
+   |
+   = help: write `2015 – 2017`
+
+warning[hard-break]: a hard line break is rendered as a space
+   --> warnings-fixable.md:16:15
+   |
+16 | - Led the team  
+   |               ^^ fixable
+   |
+   = help: remove the trailing spaces or backslash; a blank line starts a new paragraph
+
+warning[hard-break]: a hard line break is rendered as a space
+   --> warnings-fixable.md:18:17
+   |
+18 | - Wrote the plan\
+   |                 ^ fixable
+   |
+   = help: remove the trailing spaces or backslash; a blank line starts a new paragraph
+
+warning[period-hyphen]: dates are separated by `-`; use an en dash with a space on each side
+   --> warnings-fixable.md:21:27
+   |
+21 | ### Beta · Engineer · 2013-2015
+   |                           ^ fixable
+   |
+   = help: write `2013 – 2015`
+
+warning[period-hyphen]: dates are separated by `--`; use an en dash with a space on each side
+   --> warnings-fixable.md:23:28
+   |
+23 | ### Gamma · Engineer · 2011 -- 2013
+   |                            ^^^^ fixable
+   |
+   = help: write `2011 – 2013`
+
+warning[period-hyphen]: dates are separated by `—`; use an en dash with a space on each side
+   --> warnings-fixable.md:25:28
+   |
+25 | ### Delta · Engineer · 2009 — 2011
+   |                            ^^^ fixable
+   |
+   = help: write `2009 – 2011`
+
+warning[mid-sentence-bold]: bold inside a sentence
+   --> warnings-fixable.md:27:3
+   |
+27 | - **Label**: colon outside the bold
+   |   ^^^^^^^^^ fixable
+   |
+   = help: bold only titles, companies, dates, and headings; for a lead-in write `**Label:** text`, with the colon inside
+
+0 errors, 9 warnings; 9 fixable

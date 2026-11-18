@@ -108,9 +108,17 @@ Unit tests sit beside the code in `src/markdown/{tree,blocks,role,inline,period,
 - [x] `baselines_parse_without_errors` (ignored; set `RESUME_BASELINES`, it fails loudly when unset). Each baseline emits exactly one `too-many-contact-items` warning, because each has five contact items and the book says at most four.
 
 ### rsm-141.5: Diagnostic rendering
-- [ ] `human_error_shows_excerpt_and_hint` (snapshot)
-- [ ] `json_lines_one_object_per_diagnostic`
-- [ ] `summary_counts_errors_and_warnings`
+Unit tests sit beside the code in `src/diagnostics/lines.rs` and `src/diagnostics/render/`; integration tests are in `tests/diagnostics_test.rs` and `tests/diagnostics_property_test.rs` (`tests/render_test.rs` is reserved for Typst).
+- [x] `human_error_shows_excerpt_and_hint` (snapshot)
+- [x] `json_lines_one_object_per_diagnostic`: every line deserializes into a `deny_unknown_fields` record, every key is present, LF only
+- [x] `summary_counts_errors_warnings_and_fixable`
+- [x] `human@<fixture>` snapshots: every fixture renders in both formats, with its summary line
+- [x] `human_header_and_json_agree_on_line_and_column` (every finding in every fixture), and an independent count of line and column
+- [x] `lf_crlf_and_cr_render_identical_excerpts`, `bom_does_not_shift_columns`, and a span inside the BOM
+- [x] `never_and_no_color_emit_no_escape_bytes` (the source itself contains `\x1b[31m`), `always_emits_ansi_but_still_neutralizes_the_source`, `color_never_and_no_color_emit_no_ansi_end_to_end`, `the_summary_is_ascii`
+- [x] `tall_and_long_spans_output_is_bounded`: 500 findings over a 400 KiB line and over a 1 MiB block of one-byte lines
+- [x] Property tests: `render_never_panics_on_arbitrary_text_and_ranges` (hostile text; reversed, past-the-end, and mid-character ranges), header and JSON agree, located exactly when the span starts inside the text, output per finding bounded
+- [x] `line_index_matches_the_naive_reference` (proptest) and `line_of_counts_a_crlf_as_one_ending_wherever_the_offset_falls` (the Markdown `line_of` bug found by the design review)
 
 ### rsm-141.6: Typst World and PDF
 - [ ] `compiles_minimal_style_to_pdf`: the output starts with `%PDF` and has 1 page.

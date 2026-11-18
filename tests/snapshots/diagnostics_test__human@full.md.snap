@@ -1,0 +1,5 @@
+---
+source: tests/diagnostics_test.rs
+expression: "format!(\"{shown}{summary}\\n\")"
+---
+0 errors, 0 warnings

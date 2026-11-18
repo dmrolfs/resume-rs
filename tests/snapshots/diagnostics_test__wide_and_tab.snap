@@ -1,0 +1,9 @@
+---
+source: tests/diagnostics_test.rs
+expression: "render_over(text, \"target\")"
+---
+error[unsupported-html]: problem
+  --> t.md:1:10
+  |
+1 | a   中文 x · target tail
+  |              ^^^^^^

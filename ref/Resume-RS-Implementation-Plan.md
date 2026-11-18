@@ -102,7 +102,8 @@ RESUME_BASELINES=~/Documents/vrm/my/job/drafts cargo test --test parse_test -- -
 **Purpose:** Diagnostics should read like `rustc` and `typst` output, and tools should be able to consume them.
 
 **Scope:**
-- Modify: `src/diagnostics.rs` (codespan rendering, JSON lines, summary)
+- Create: `src/diagnostics/lines.rs` (shared line index), `src/diagnostics/render/{mod,sources,excerpt,human,json,color,summary}.rs` (codespan rendering, JSON lines, summary); `tests/diagnostics_test.rs`, `tests/diagnostics_property_test.rs`
+- Modify: `src/model/options.rs` (`ColorMode`), `src/markdown/mod.rs` (delegates `line_of` and span snapping to `lines.rs`)
 
 **Complexity:** Small integration.
 

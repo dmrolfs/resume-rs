@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc eba2cd5f94eb4a3634d9e663dabaee56e076c1d9035cf83f5730ba27891ac1c3 # shrinks to (text, diagnostics) = ("", [Diagnostic { severity: Note, code: UnsupportedHtml, message: "", span: None, hints: ["\u{1b}[31m"], fix: None }])

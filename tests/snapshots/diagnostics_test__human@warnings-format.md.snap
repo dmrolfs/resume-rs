@@ -1,0 +1,78 @@
+---
+source: tests/diagnostics_test.rs
+expression: "format!(\"{shown}{summary}\\n\")"
+---
+warning[too-many-contact-items]: the contact line has 5 items; at most 4 are recommended
+  --> warnings-format.md:6:1
+  |
+6 | London, UK · 206-555-0100 · ada@example.com · [LinkedIn](https://l.in/ada) · [GitHub](https://g.h/ada)
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = help: keep the contact line to location, email, phone, and one or two links
+
+warning[nested-list]: nested lists are flattened to one level
+   --> warnings-format.md:13:3
+   |  
+13 | /   - Nested bullet one
+14 | |   - Nested bullet two
+   | \---------------------^
+   |  
+   = help: keep bullets to one level: fold the detail into the parent bullet or make it a sibling
+
+warning[mid-sentence-bold]: bold inside a sentence
+   --> warnings-format.md:15:11
+   |
+15 | - Shipped **fast** and well
+   |           ^^^^^^^^
+   |
+   = help: bold only titles, companies, dates, and headings; for a lead-in write `**Label:** text`, with the colon inside
+
+warning[mid-sentence-bold]: bold inside a sentence
+   --> warnings-format.md:16:3
+   |
+16 | - **Languages**: Rust
+   |   ^^^^^^^^^^^^^ fixable
+   |
+   = help: bold only titles, companies, dates, and headings; for a lead-in write `**Label:** text`, with the colon inside
+
+warning[mid-sentence-bold]: bold inside a sentence
+   --> warnings-format.md:17:3
+   |
+17 | - **Notes**:no space after the colon
+   |   ^^^^^^^^^
+   |
+   = help: bold only titles, companies, dates, and headings; for a lead-in write `**Label:** text`, with the colon inside
+
+warning[mid-sentence-bold]: bold inside a sentence
+   --> warnings-format.md:18:7
+   |
+18 | - Use **Rust**: bold in the middle
+   |       ^^^^^^^^
+   |
+   = help: bold only titles, companies, dates, and headings; for a lead-in write `**Label:** text`, with the colon inside
+
+warning[image]: images are not rendered on a resume
+   --> warnings-format.md:20:1
+   |
+20 | ![A photo](me.png)
+   | ^^^^^^^^^^^^^^^^^^
+   |
+   = help: remove the image; a resume has no photos or graphics
+
+warning[heading-marker-spacing]: `###` has no space after it, so this line is text, not a heading
+   --> warnings-format.md:22:1
+   |
+22 | ###Acme · Eng · 2019 – 2021
+   | ^^^
+   |
+   = help: write `### ` with a space, or remove the `#` if this is meant to be text
+
+warning[role-order]: `New Co` ended after the role above it
+   --> warnings-format.md:24:5
+   |
+24 | ### New Co · Engineer · 2018 – 2020
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: list roles newest first: move it above `Old Co`
+
+0 errors, 9 warnings; 1 fixable

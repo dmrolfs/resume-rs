@@ -1,0 +1,6 @@
+---
+source: tests/diagnostics_test.rs
+expression: shown
+---
+error[unsupported-html]: problem
+ = note: in `t.md`; no excerpt: source not available

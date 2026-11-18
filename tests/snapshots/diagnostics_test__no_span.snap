@@ -1,0 +1,7 @@
+---
+source: tests/diagnostics_test.rs
+expression: "render(&sources, &[d])"
+---
+warning[unsupported-html]: the resume has no name
+ = help: add a `# Name` line
+ = note: fixable

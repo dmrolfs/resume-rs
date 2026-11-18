@@ -1,0 +1,13 @@
+---
+source: tests/diagnostics_test.rs
+expression: "format!(\"{shown}{summary}\\n\")"
+---
+error[duplicate-name]: a resume has one `# ` name heading
+  --> errors-duplicate-name.md:8:1
+  |
+8 | # Grace Hopper
+  | ^^^^^^^^^^^^^^
+  |
+  = help: make the extra heading a `## Section`, or remove it
+
+1 error, 0 warnings

@@ -1,0 +1,11 @@
+---
+source: tests/diagnostics_test.rs
+expression: shown
+---
+error[unsupported-html]: problem
+  --> t.md:1:301
+  |
+1 | ...xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxTARGETyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy...
+  |                                  ^^^^^^
+  |
+  = note: excerpt shortened; the span runs from 1:301 to 1:307

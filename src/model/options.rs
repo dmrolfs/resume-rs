@@ -32,6 +32,17 @@ pub enum OutputFormat {
     Json,
 }
 
+/// When diagnostics are colored (`--color`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum, Display, EnumString, AsRefStr, EnumIter)]
+#[strum(serialize_all = "lowercase")]
+pub enum ColorMode {
+    /// Color only when writing to an interactive terminal that allows it.
+    #[default]
+    Auto,
+    Always,
+    Never,
+}
+
 /// The `--max-pages` limit, 1 to 20.
 #[nutype(
     validate(greater_or_equal = 1, less_or_equal = 20),
@@ -42,8 +53,10 @@ pub struct PageLimit(u8);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use claims::{assert_err, assert_ok};
+    use claims::{assert_err, assert_ok, assert_some};
+    use clap::ValueEnum;
     use pretty_assertions::assert_eq;
+    use strum::IntoEnumIterator;
 
     #[test]
     fn paper_as_ref_str_matches_typst_names() {
@@ -62,6 +75,17 @@ mod tests {
     fn output_format_displays_lowercase() {
         assert_eq!(OutputFormat::Json.to_string(), "json");
         assert_eq!(OutputFormat::default(), OutputFormat::Human);
+    }
+
+    #[test]
+    fn color_mode_names_match_clap_and_strum() {
+        for mode in ColorMode::iter() {
+            let clap_name = assert_some!(mode.to_possible_value()).get_name().to_string();
+            assert_eq!(clap_name, mode.to_string());
+            assert_eq!(mode.as_ref(), mode.to_string());
+            assert_eq!(assert_ok!(clap_name.parse::<ColorMode>()), mode);
+        }
+        assert_eq!(ColorMode::default(), ColorMode::Auto);
     }
 
     #[test]

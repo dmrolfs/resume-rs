@@ -3,6 +3,8 @@
 
 mod advice;
 pub mod code;
+pub(crate) mod lines;
+mod render;
 
 use std::ops::Range;
 use std::path::PathBuf;
@@ -11,6 +13,7 @@ use serde::Serialize;
 use strum::{AsRefStr, Display, EnumString};
 
 pub use self::code::{Advice, Category, DiagnosticCode};
+pub use self::render::{ColorEnv, RenderError, Sources, Summary, emit_human, emit_json, resolve_color, termcolor};
 
 /// How serious a finding is; ordered so `Error` is the greatest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Display, AsRefStr, EnumString)]

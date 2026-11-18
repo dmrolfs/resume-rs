@@ -1,0 +1,9 @@
+---
+source: tests/diagnostics_test.rs
+expression: "{\n    let mut sources = Sources::new(None);\n    sources.insert(\"t.md\", \"First line\\nsecond\\n\"); let d =\n    finding(Severity::Error, \"missing name\", Some(0..0));\n    render(&sources, &[d])\n}"
+---
+error[unsupported-html]: missing name
+  --> t.md:1:1
+  |
+1 | First line
+  | ^

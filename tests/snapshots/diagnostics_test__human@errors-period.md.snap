@@ -1,0 +1,61 @@
+---
+source: tests/diagnostics_test.rs
+expression: "format!(\"{shown}{summary}\\n\")"
+---
+error[period-end-before-start]: the period ends before it starts
+   --> errors-period.md:10:9
+   |
+10 | ### A · 2020 – 2018
+   |         ^^^^^^^^^^^
+   |
+   = help: swap the dates, or check the years
+
+error[period-unparseable]: year 1949 is outside 1950–2100
+   --> errors-period.md:12:9
+   |
+12 | ### B · 1949 – 2017
+   |         ^^^^
+   |
+   = help: years must be between 1950 and 2100
+
+error[period-unparseable]: can't read `to` as part of a date
+   --> errors-period.md:14:14
+   |
+14 | ### C · 2015 to 2017
+   |              ^^
+   |
+   = help: separate the dates with an en dash: `Aug 2017 – 2020`
+
+error[period-unparseable]: can't read `08/2017` as part of a date
+   --> errors-period.md:16:9
+   |
+16 | ### D · 08/2017 – 2018
+   |         ^^^^^^^
+   |
+   = help: numeric months aren't supported; write the month name, like `Aug 2017`
+
+error[period-unparseable]: can't read `Aug,` as part of a date
+   --> errors-period.md:18:9
+   |
+18 | ### E · Aug, 2017 – 2018
+   |         ^^^^
+   |
+   = help: remove the comma: `Aug 2017`
+
+error[role-line-shape]: this `###` heading is not a role line
+   --> errors-period.md:20:5
+   |
+20 | ### F · ２０２０ – ２０２１
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: level-3 headings are reserved for roles: a role line is `### Company · Title · 2019 – 2023` or `### Company · 2019 – 2023`; use `## ` for a section or `**Name · Period**` for an era
+
+error[period-unparseable]: can't read `Prsent` as part of a date
+   --> errors-period.md:22:20
+   |
+22 | ### G · Aug 2017 – Prsent
+   |                    ^^^^^^
+   |
+   = help: expected a month (`Aug`), a season (`Fall`), or a year (`2017`)
+
+7 errors, 0 warnings

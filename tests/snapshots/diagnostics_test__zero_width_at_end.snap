@@ -1,0 +1,9 @@
+---
+source: tests/diagnostics_test.rs
+expression: shown
+---
+error[unsupported-html]: unexpected end
+  --> t.md:1:4
+  |
+1 | abc
+  |    ^

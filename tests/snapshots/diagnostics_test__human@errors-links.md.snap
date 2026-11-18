@@ -1,0 +1,53 @@
+---
+source: tests/diagnostics_test.rs
+expression: "format!(\"{shown}{summary}\\n\")"
+---
+error[invalid-link]: `http://` is not a valid link
+  --> errors-links.md:6:10
+  |
+6 | London · [home](http://) · [notes](notes.md)
+  |          ^^^^^^^^^^^^^^^
+  |
+  = help: empty host; links need a full address like https://example.com
+
+error[invalid-link]: `notes.md` is not a valid link
+  --> errors-links.md:6:28
+  |
+6 | London · [home](http://) · [notes](notes.md)
+  |                            ^^^^^^^^^^^^^^^^^
+  |
+  = help: relative URL without a base; links need a full address like https://example.com
+
+error[unsupported-link]: `ftp:` links are not supported
+   --> errors-links.md:10:5
+   |
+10 | - A [file](ftp://example.com/r.pdf) and a [script](javascript:alert(1)).
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: use https://, http://, or mailto: links
+
+error[unsupported-link]: `javascript:` links are not supported
+   --> errors-links.md:10:43
+   |
+10 | - A [file](ftp://example.com/r.pdf) and a [script](javascript:alert(1)).
+   |                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: use https://, http://, or mailto: links
+
+error[invalid-link]: the link has no visible text
+   --> errors-links.md:11:6
+   |
+11 | - An [](https://example.com) empty link and an [undefined][ref] reference.
+   |      ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: describe the link: [LinkedIn](https://www.linkedin.com/in/you)
+
+error[invalid-link]: link reference is not defined
+   --> errors-links.md:11:48
+   |
+11 | - An [](https://example.com) empty link and an [undefined][ref] reference.
+   |                                                ^^^^^^^^^^^^^^^^
+   |
+   = help: write the link inline: [text](https://example.com)
+
+6 errors, 0 warnings

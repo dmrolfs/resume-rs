@@ -92,7 +92,15 @@ resume-rs/
       mod.rs             # Diagnostic, Severity, Span, SourceKind
       code.rs            # DiagnosticCode (strum), Category, Advice
       advice.rs          # the advice catalog: DiagnosticCode::advice()
-      render.rs          # codespan-reporting human output; JSON lines
+      lines.rs           # LineIndex: one definition of a line, shared by the parser and the renderer
+      render/
+        mod.rs           # emit_human, emit_json, RenderError
+        sources.rs       # Sources: text by path, display paths, span snapping
+        excerpt.rs       # the bounded, sanitized excerpt codespan draws
+        human.rs         # one finding -> a codespan diagnostic (header, caret, notes)
+        json.rs          # the JSON-lines record
+        color.rs         # ColorEnv, resolve_color
+        summary.rs       # Summary: the one-line counts
     markdown/
       mod.rs             # parse(path, text) -> Parsed (valid() / best_effort()); Sink, limits, BOM and CR handling
       tree.rs            # phase 1: events -> located tree (iterative, depth-capped; text-to-source segment map)
@@ -122,7 +130,7 @@ resume-rs/
   fonts/                 # bundled OFL/GUST-licensed fonts + LICENSES.md
   tests/
     fixtures/            # synthetic resumes covering every convention and error
-    parse_test.rs  render_test.rs  doctor_test.rs  cli_test.rs
+    parse_test.rs  diagnostics_test.rs  render_test.rs  doctor_test.rs  cli_test.rs
 ```
 
 ### Model (`src/model/`)
@@ -384,7 +392,7 @@ impl DiagnosticCode {
 }
 
 pub struct Advice {
-    pub summary: &'static str,          // one line, shown with every finding
+    pub summary: &'static str,          // one line, shown by `doctor` and `--explain` (the renderer prints the hints instead)
     pub why: &'static str,              // rationale, citing the book where applicable
     pub fix: &'static str,              // what to change
     pub example: Option<(&'static str, &'static str)>,  // (before, after)
@@ -418,6 +426,83 @@ Using `strum` on `DiagnosticCode` gives:
 Advice lives in a `match` in `advice.rs`, not in strum attributes, because multi-line rationale and before/after examples read poorly inside attributes. The match is exhaustive with no wildcard, so adding a code forces a decision. Format codes are filled in; the owner of each other category writes its entries, and its test then tightens "every Format code has advice" to "every code has advice". A rationale cites *The Tech Resume Inside Out* only where the book says it, and otherwise starts "Project convention:".
 
 Markdown and Typst diagnostics share one type and are rendered with `codespan-reporting` 0.13, the same renderer Typst's own CLI uses. Typst diagnostics are converted by resolving each span's `FileId` through `ResumeWorld` back to the style file path and byte range. `--format json` emits diagnostics as JSON lines for editors and scripts.
+
+#### Rendering (`src/diagnostics/render/`)
+
+```rust
+pub fn emit_human<'d>(out: &mut dyn termcolor::WriteColor, sources: &Sources<'_>,
+                      diagnostics: impl IntoIterator<Item = &'d Diagnostic>) -> Result<(), RenderError>;
+pub fn emit_json<'d>(out: &mut dyn io::Write, sources: &Sources<'_>,
+                     diagnostics: impl IntoIterator<Item = &'d Diagnostic>) -> Result<(), RenderError>;
+
+pub struct Sources<'a> { /* text by path */ }
+impl<'a> Sources<'a> {
+    pub fn new(base_dir: Option<PathBuf>) -> Self;       // paths under base_dir are shown relative to it
+    pub fn insert(&mut self, path: impl Into<PathBuf>, text: &'a str);
+}
+pub struct Summary { pub errors: usize, pub warnings: usize, pub notes: usize, pub fixable: usize }
+pub fn resolve_color(mode: ColorMode, env: ColorEnv) -> termcolor::ColorChoice;   // never `Auto`
+```
+
+The renderer does no input I/O: every caller registers the text its spans index into, under the same path the spans carry. The CLI registers the file it read. Built-in styles register their embedded text under a recognizable relative path such as `builtin/pragmatic/style.typ`, so it does not read as a real absolute path. Typst sources are borrowed from `typst::Source::text()` for the duration of one render. Output is written in the order given; sorting and grouping belong to the caller (`doctor` calls `emit_human` once per category).
+
+**Human output** is a rustc-style excerpt with an ASCII frame, one block per finding:
+
+```
+warning[period-hyphen]: dates are separated by `-`; use an en dash with a space on each side
+   --> drafts/Resume-Org-Leader.md:41:51
+    |
+ 41 | ### Globex · Engineering Director, Platform · 2015 - 2017
+    |                                                  ^^^ fixable
+    |
+    = help: write `2015 – 2017`
+```
+
+- The header is `severity[code]: message`, then `--> file:line:column`. The caret label says `fixable` when the finding carries an Edit; the Edit text itself is not shown, because the hints already carry the corrected text.
+- Each non-empty hint is a `= help:` note. A finding with no span prints only its header and notes; a fixable one adds `= note: fixable`.
+- The advice summary is not shown here. `doctor` and `--explain` show it, because most messages already say the same thing.
+- A finding whose source was not registered, or whose span starts past the end of the text, is *unlocated*: it prints a note naming the file and the reason (`= note: in `style.typ`; no excerpt: source not available`) rather than a misleading location.
+- The frame is always ASCII (`-->`, `|`), with no option: legacy Windows consoles, CI logs, and text pasted into issues all render it. The quoted source line is the user's own text, so it can still contain `·` and `–`.
+- `Summary`'s `Display` is `N errors, N warnings[, N notes][; N fixable]` (singular for 1; notes and fixable appear only when non-zero; a clean run is `0 errors, 0 warnings`). `has_errors()` is all the renderer says about exit codes; mapping to codes belongs to the CLI.
+
+**Bounded and inert.** Source text is untrusted, so an excerpt is a bounded copy, never the raw lines:
+
+| Rule | Value |
+|---|---|
+| Source lines shown for one finding | 6, with a `= note: excerpt shortened; the span runs from 10:3 to 9000:1` |
+| Characters shown from one line | 120, around the span, with `...` where the line is cut (30 characters of context before the span) |
+| Message and each hint (human output only) | 500 characters, then `...` |
+| Control and bidi characters (C0, C1, DEL, U+061C, U+200E/F, U+202A-E, U+2066-9), in the excerpt, message, hints, and file name | written as ASCII `\u{1b}`; tabs are kept |
+| Line and column in the header | always the true values, whatever was cut |
+
+So 500 findings on a 400 KiB line produce about 300 KB, not 400 MB, and `--color never` or `NO_COLOR` output cannot contain an escape byte even when the source does. A span that is not on character boundaries, is reversed, starts inside a BOM, or ends on a line terminator is snapped to the text first (`LineIndex::snap`); it never panics.
+
+**Lines and columns** (`lines.rs`, used by the parser, the human header, and JSON, so they agree by construction): a line ends at `\n`, `\r\n`, or a lone `\r`; a leading BOM belongs to no line; lines are 1-based; columns are 1-based and count Unicode scalar values from the start of the line (a tab counts as 1, and so does a wide or combining character). An editor that wants UTF-16 offsets converts from the line text.
+
+**Color** (`ColorMode`: `auto` (default), `always`, `never`). `resolve_color` returns only `Always` or `Never`, because termcolor's own `Auto` does not check for a terminal and treats an empty `NO_COLOR` as set. The rules: `always` wins, even over `NO_COLOR` (no-color.org); `never` is never colored; `auto` colors only when the stream is a terminal, `NO_COLOR` is unset or empty, and `TERM` is not `dumb`. The CLI passes `ColorEnv::detect(stderr().is_terminal())`.
+
+**JSON lines** (`--format json`): one object per finding, one finding per line, each terminated by `\n` on every OS. Every key is always present; `null` means unknown.
+
+```json
+{"type":"diagnostic","severity":"warning","code":"period-hyphen","category":"format","message":"dates are separated by `-`; use an en dash with a space on each side","file":"drafts/Resume-Org-Leader.md","line":41,"column":51,"end_line":41,"end_column":54,"hints":["write `2015 – 2017`"],"fixable":true}
+```
+
+| Key | Type | Meaning |
+|---|---|---|
+| `type` | string | Always `"diagnostic"`, so later line types (for example a build result) can share the stream |
+| `severity` | string | `note`, `warning`, or `error` |
+| `code` | string | The stable kebab-case code |
+| `category` | string | `format`, `content`, `layout`, or `setup` |
+| `message` | string | Specific to this occurrence; never truncated |
+| `file` | string or null | The path as shown to people (relative to the current directory when under it); `null` when the finding has no span |
+| `line`, `column` | number or null | 1-based start; `null` when the finding has no span or cannot be located |
+| `end_line`, `end_column` | number or null | Just past the span (exclusive), in the same units |
+| `hints` | array of strings | Possibly empty |
+| `fixable` | bool | The finding carries an Edit; `doctor --fix` applies it |
+
+The contract is additive only: new keys may be appended, existing keys never change meaning or type, and consumers must ignore keys they do not know. There is no version field, summary object, or `fix` object (the exact Edit stays with `doctor --fix`). A finding that cannot be located keeps its `file`. Control characters in a file name appear as `\u{..}` escapes. The record is a private serde type, not `Serialize` on `Diagnostic`, so the public contract does not depend on the internal byte-range representation.
+
+**Streams** (for the CLI): human diagnostics and the summary go to stderr, like cargo and rustc; JSON lines go to stdout and nothing else does. Use termcolor's `BufferedStandardStream` (codespan writes one character at a time, and stderr is unbuffered), and treat `BrokenPipe` as a quiet exit.
 
 ### Typst Integration (`src/typeset/`)
 
@@ -528,7 +613,7 @@ A cross-built Windows binary can't run its tests on macOS, so behavior on Window
 - **Program name:** clap derives its display name from `argv[0]`, which is `resume.exe` on Windows, so `Cli` pins `bin_name = "resume"`.
 - **Replacing output files:** write to a temp file in the same directory and persist it with `tempfile` 3, which replaces atomically on both platforms. On Windows a PDF that is open in a viewer can lock the file. That case becomes `OutputLocked { path }`, with the hint "close the PDF viewer or use `-o`".
 - **Opening files:** `watch --open` uses the `opener` 0.9 crate, which maps to `open` on macOS and `ShellExecuteW` on Windows.
-- **Terminal output:** codespan-reporting's `termcolor` handles Windows consoles. `--color auto|always|never` and `NO_COLOR` are respected, and summary markers are ASCII (`ok`, `error`) so legacy Windows consoles render them.
+- **Terminal output:** codespan-reporting's `termcolor` handles Windows consoles. `--color auto|always|never` and `NO_COLOR` are respected (rules under Rendering), and the excerpt frame and summary markers are ASCII (`ok`, `error`) so legacy Windows consoles render them. Source text is sanitized, so `--color never` output never contains an escape byte.
 - **File watching:** `notify` 8 uses its default backend on each platform (FSEvents on macOS, ReadDirectoryChangesW on Windows).
 
 ### Layout Report (`src/layout.rs`)
@@ -556,11 +641,14 @@ Checks, run on every render:
 resume doctor drafts/Resume-Org-Leader.md --style mono --max-pages 3
 
 Format   2 findings
-  warning[period-hyphen]: period uses a hyphen instead of an en dash
-    ┌─ drafts/Resume-Org-Leader.md:41:56
-    │  ### Globex · Engineering Director, Platform · 2015 - 2017
-    │                                                ^^^^^^^^^^^ fixable
-    = fix: write `2015 – 2017` (en dash: Option+hyphen)
+  warning[period-hyphen]: dates are separated by `-`; use an en dash with a space on each side
+     --> drafts/Resume-Org-Leader.md:41:51
+      |
+   41 | ### Globex · Engineering Director, Platform · 2015 - 2017
+      |                                                  ^^^ fixable
+      |
+      = help: write `2015 – 2017`
+      = fix: use an en dash (Option+hyphen on a Mac)
 Content  5 findings
   warning[unquantified-bullet]: bullet has no number
     ...
@@ -628,7 +716,7 @@ resume [--dry-run] [--format human|json] [--color auto|always|never] <COMMAND>
 
 `check` is a read-only alias of `doctor`. It runs the same assessment and prints the same report, but it doesn't accept `--fix` or `--explain`, so `check` in a script or a pre-commit hook can never modify files. `doctor` is the command for fixing (`--fix`) and learning (`--explain`). A no-write build is `build --dry-run`.
 
-- `build` prints one summary line per file, for example `✓ out/Resume-Org-Leader.pdf  experienced  3 pages  1 warning  built in 84ms`, followed by the diagnostics.
+- `build` prints one summary line per file, for example `ok out/Resume-Org-Leader.pdf  experienced  3 pages  1 warning  built in 84ms`, followed by the diagnostics.
 - **Exit codes:** 0 on success (warnings allowed), 1 on any error diagnostic or failed build, 2 on a usage error (from clap).
 - **Defaults:** `--style pragmatic`, `--out out`, `--paper letter`, `--fonts auto`, `--color auto`, `--debounce 150ms`.
 

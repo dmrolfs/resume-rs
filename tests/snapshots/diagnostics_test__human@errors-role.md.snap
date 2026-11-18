@@ -1,0 +1,125 @@
+---
+source: tests/diagnostics_test.rs
+expression: "format!(\"{shown}{summary}\\n\")"
+---
+error[role-line-shape]: this `###` heading is not a role line
+   --> errors-role.md:10:5
+   |
+10 | ### Projects
+   |     ^^^^^^^^
+   |
+   = help: level-3 headings are reserved for roles: a role line is `### Company · Title · 2019 – 2023` or `### Company · 2019 – 2023`; use `## ` for a section or `**Name · Period**` for an era
+
+error[role-separator]: role parts must be separated by ` · `, not `|`
+   --> errors-role.md:12:5
+   |
+12 | ### Acme | Engineer | 2015 – 2017
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ fixable
+   |
+   = help: did you mean `### Acme · Engineer · 2015 – 2017`?
+
+error[role-separator]: role parts must be separated by ` · `, not `•`
+   --> errors-role.md:14:5
+   |
+14 | ### Acme • Engineer · 2013 – 2015
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ fixable
+   |
+   = help: did you mean `### Acme · Engineer · 2013 – 2015`?
+
+error[role-separator]: role parts must be separated by ` · `, not `-`
+   --> errors-role.md:16:5
+   |
+16 | ### Gusto-Webtab - 2011 – 2013
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^ fixable
+   |
+   = help: did you mean `### Gusto-Webtab · 2011 – 2013`?
+
+error[role-separator]: role parts must be separated by ` · `, not `-`
+   --> errors-role.md:18:5
+   |
+18 | ### Acme - Engineer - 2009 – 2011
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: if this is a company and a title, write `### Acme · Engineer · 2009 – 2011`; a hyphen could also belong to the company name
+
+error[role-separator]: role parts must be separated by ` · `, not `-`
+   --> errors-role.md:20:5
+   |
+20 | ### Rolls - Royce - Engineer - 2007 – 2009
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: can't tell where the company ends; write `### Company · Title · 2019 – 2023`
+
+error[empty-role-part]: the company is empty
+   --> errors-role.md:22:5
+   |
+22 | ### · Engineer · 2005 – 2007
+   |     ^^
+   |
+   = help: a role line is `Company · Title · Period` or `Company · Period`; every part needs text
+
+error[empty-role-part]: the title is empty
+   --> errors-role.md:24:12
+   |
+24 | ### Acme ·  · 2003 – 2005
+   |            ^^^
+   |
+   = help: a role line is `Company · Title · Period` or `Company · Period`; every part needs text
+
+error[role-line-shape]: the role line has too many ` · ` parts
+   --> errors-role.md:26:5
+   |
+26 | ### A · B · C · 2001 – 2003
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: a role line is `### Company · Title · 2019 – 2023` or `### Company · 2019 – 2023`; use a comma inside a title
+
+error[role-line-shape]: role lines must be plain text
+   --> errors-role.md:28:5
+   |
+28 | ### **Bold** · Engineer · 1999 – 2001
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: write `### Company · Title · Period` without bold, italics, links, or code; styles format it
+
+error[period-end-before-start]: the period ends before it starts
+   --> errors-role.md:30:12
+   |
+30 | ### Acme · 2020 – 2018
+   |            ^^^^^^^^^^^
+   |
+   = help: swap the dates, or check the years
+
+error[role-separator]: a separator-like character is inside the company or title
+   --> errors-role.md:32:5
+   |
+32 | ### Acme \· Eng · 2019 – 2021
+   |     ^^^^^^^^^^^
+   |
+   = help: separate the parts with ` · `: U+00B7 with a space on each side
+
+warning[role-order]: `Acme \· Eng` ended after the role above it
+   --> errors-role.md:32:5
+   |
+32 | ### Acme \· Eng · 2019 – 2021
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: list roles newest first: move it above `Acme`
+
+error[period-unparseable]: can't read `Present` as part of a date
+   --> errors-role.md:34:18
+   |
+34 | ### Acme · Eng · Present – 2019
+   |                  ^^^^^^^
+   |
+   = help: expected a month (`Aug`), a season (`Fall`), or a year (`2017`)
+
+error[empty-heading]: the role line is empty
+   --> errors-role.md:36:1
+   |
+36 | ###
+   | ^^^
+   |
+   = help: write `### Company · Title · 2019 – 2023`
+
+14 errors, 1 warning; 3 fixable

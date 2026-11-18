@@ -1,0 +1,12 @@
+---
+source: tests/diagnostics_test.rs
+expression: "render(&sources, &[d])"
+---
+error[unsupported-html]: code blocks are not supported
+  --> t.md:3:1
+  |  
+3 | / ```
+4 | | line a
+5 | | line b
+6 | | ```
+  | \---^

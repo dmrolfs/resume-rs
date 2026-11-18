@@ -1,0 +1,11 @@
+---
+source: tests/diagnostics_test.rs
+expression: shown
+---
+error[role-separator]: role parts must be separated by ` · `, not `|`
+   --> errors-role.md:12:5
+   |
+12 | ### Acme | Engineer | 2015 – 2017
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ fixable
+   |
+   = help: did you mean `### Acme · Engineer · 2015 – 2017`?

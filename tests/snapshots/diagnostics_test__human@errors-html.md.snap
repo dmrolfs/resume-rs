@@ -1,0 +1,62 @@
+---
+source: tests/diagnostics_test.rs
+expression: "format!(\"{shown}{summary}\\n\")"
+---
+error[unsupported-html]: raw HTML `<br>` can't be typeset
+  --> errors-html.md:6:25
+  |
+6 | London · ada@example.com<br>Seattle
+  |                         ^^^^
+  |
+  = help: use Markdown (**bold**, *italic*, [links](https://example.com)); only comments and the page-break marker are allowed
+
+error[unsupported-html]: raw HTML can't be typeset
+   --> errors-html.md:10:1
+   |
+10 | <div class="note">A raw block.</div>
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: use Markdown; only comments and `<div class="page-break"></div>` are allowed
+
+error[unsupported-html]: raw HTML `<b>` can't be typeset
+   --> errors-html.md:12:6
+   |
+12 | Some <b>inline</b> markup.
+   |      ^^^
+   |
+   = help: use Markdown (**bold**, *italic*, [links](https://example.com)); only comments and the page-break marker are allowed
+
+error[unsupported-html]: raw HTML `</b>` can't be typeset
+   --> errors-html.md:12:15
+   |
+12 | Some <b>inline</b> markup.
+   |               ^^^^
+   |
+   = help: use Markdown (**bold**, *italic*, [links](https://example.com)); only comments and the page-break marker are allowed
+
+error[unsupported-html]: text after a comment on the same line is hidden
+   --> errors-html.md:14:1
+   |
+14 | <!-- a comment --> visible?
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: put the text on its own line, after a blank line
+
+error[unsupported-html]: the page-break marker swallowed the lines after it
+   --> errors-html.md:16:1
+   |  
+16 | / <div class="page-break"></div>
+17 | | swallowed line
+   | \--------------^
+   |  
+   = help: add a blank line after `<div class="page-break"></div>`
+
+error[unsupported-html]: the comment is never closed, so its text would print on the resume
+   --> errors-html.md:19:9
+   |
+19 | A stray <!-- opener in text.
+   |         ^^^^
+   |
+   = help: end the comment with `-->`, or remove the `<!--`
+
+7 errors, 0 warnings

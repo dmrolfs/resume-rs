@@ -20,6 +20,7 @@ use std::borrow::Cow;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
+use crate::diagnostics::lines::{LineIndex, snap_to_boundaries};
 use crate::diagnostics::{Diagnostic, DiagnosticCode, Edit, Severity, SourceKind, Span};
 use crate::model::Resume;
 
@@ -123,20 +124,6 @@ fn normalize_lone_cr(text: &str) -> Cow<'_, str> {
     String::from_utf8(fixed).map_or(Cow::Borrowed(text), Cow::Owned)
 }
 
-/// Snaps `range` into the bounds of `text` and onto character boundaries: the start moves back and
-/// the end moves forward, so the result covers at least what the range named.
-fn snap(text: &str, range: Range<usize>) -> Range<usize> {
-    let mut start = range.start.min(text.len());
-    while !text.is_char_boundary(start) {
-        start -= 1;
-    }
-    let mut end = range.end.min(text.len());
-    while !text.is_char_boundary(end) {
-        end += 1;
-    }
-    start..end.max(start)
-}
-
 /// Snaps every span and Edit of `diagnostics` into bounds and onto character boundaries, returning how
 /// many needed repair.
 fn repair_spans(diagnostics: &mut [Diagnostic], text: &str) -> usize {
@@ -148,7 +135,7 @@ fn repair_spans(diagnostics: &mut [Diagnostic], text: &str) -> usize {
             .map(|span| &mut span.range)
             .chain(diagnostic.fix.iter_mut().map(|edit| &mut edit.range));
         for range in ranges {
-            let snapped = snap(text, range.clone());
+            let snapped = snap_to_boundaries(text, range.clone());
             repaired += usize::from(snapped != *range);
             *range = snapped;
         }
@@ -183,14 +170,10 @@ pub(crate) struct Source<'a> {
 
 impl<'a> Source<'a> {
     /// The 1-based line number of `offset`, counting `\n`, `\r\n`, and a lone `\r` as line endings.
+    ///
+    /// Builds the line index each call, so it is for rare findings, not a hot loop.
     pub fn line_of(&self, offset: usize) -> usize {
-        let bytes = &self.text.as_bytes()[..offset.min(self.text.len())];
-        let endings = bytes
-            .iter()
-            .enumerate()
-            .filter(|&(i, &b)| b == b'\n' || (b == b'\r' && bytes.get(i + 1) != Some(&b'\n')))
-            .count();
-        endings + 1
+        LineIndex::new(self.text).line_of(offset) + 1
     }
 
     /// Slices the original text; an out-of-range or non-boundary range yields an empty string.
@@ -511,12 +494,16 @@ mod tests {
     #[test]
     fn snap_moves_a_range_onto_character_boundaries() {
         let text = "a–b"; // the en dash occupies bytes 1..4
-        assert_eq!(snap(text, 2..3), 1..4);
-        assert_eq!(snap(text, 1..4), 1..4);
-        assert_eq!(snap(text, 0..99), 0..5);
+        assert_eq!(snap_to_boundaries(text, 2..3), 1..4);
+        assert_eq!(snap_to_boundaries(text, 1..4), 1..4);
+        assert_eq!(snap_to_boundaries(text, 0..99), 0..5);
         let reversed = Range { start: 4, end: 2 };
-        assert_eq!(snap(text, reversed), 4..4, "a reversed range collapses to its start");
-        assert_eq!(snap("", 3..9), 0..0);
+        assert_eq!(
+            snap_to_boundaries(text, reversed),
+            4..4,
+            "a reversed range collapses to its start"
+        );
+        assert_eq!(snap_to_boundaries("", 3..9), 0..0);
     }
 
     #[test]
@@ -628,5 +615,21 @@ mod tests {
     #[should_panic(expected = "were not on character boundaries")]
     fn enforcing_the_span_contract_fails_loudly_in_debug_builds() {
         enforce_span_contract(&mut [diagnostic_at(2..3, None)], "a–b");
+    }
+
+    #[test]
+    fn line_of_counts_a_crlf_as_one_ending_wherever_the_offset_falls() {
+        // Looking ahead inside a truncated slice used to count the `\r` of a CRLF as a lone CR when the
+        // offset fell on its `\n`, reporting the next line.
+        let text = "a\r\nb\rc\nd";
+        let source = Source { text };
+        let lines: Vec<usize> = (0..=text.len()).map(|offset| source.line_of(offset)).collect();
+        assert_eq!(
+            lines,
+            vec![1, 1, 1, 2, 2, 3, 3, 4, 4],
+            "a, CR, LF, b, CR, c, LF, d, end"
+        );
+        assert_eq!(source.line_of(999), 4, "past the end is the last line");
+        assert_eq!(Source { text: "\u{FEFF}x" }.line_of(1), 1);
     }
 }

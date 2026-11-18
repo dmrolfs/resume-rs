@@ -1,0 +1,16 @@
+---
+source: tests/diagnostics_test.rs
+expression: shown
+---
+error[unsupported-html]: block is too tall
+  --> t.md:1:1
+  |  
+1 | / line 1
+2 | | line 2
+3 | | line 3
+4 | | line 4
+5 | | line 5
+6 | | line 6
+  | \------^
+  |  
+  = note: excerpt shortened; the span runs from 1:1 to 20:8

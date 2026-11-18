@@ -1,0 +1,93 @@
+---
+source: tests/diagnostics_test.rs
+expression: "format!(\"{shown}{summary}\\n\")"
+---
+error[era-shape]: the era line has no dates
+   --> errors-era.md:12:1
+   |
+12 | **AI platforms · recent work**
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: an era line is a whole bold paragraph: `**Era name · 2020 – 2023**`
+
+error[era-shape]: the era line has too many ` · ` parts
+   --> errors-era.md:14:1
+   |
+14 | **A · B · 2015 – 2016**
+   | ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: an era line is a whole bold paragraph: `**Era name · 2020 – 2023**`
+
+warning[mid-sentence-bold]: bold inside a sentence
+   --> errors-era.md:16:1
+   |
+16 | **AI platforms · 2015 – 2016** with trailing words
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: bold only titles, companies, dates, and headings; for a lead-in write `**Label:** text`, with the colon inside
+
+error[era-shape]: text follows the era line
+   --> errors-era.md:16:1
+   |
+16 | **AI platforms · 2015 – 2016** with trailing words
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: an era line is only the bold text; move the rest into its own paragraph
+
+error[era-shape]: era parts must be separated by ` · `, not `-`
+   --> errors-era.md:18:1
+   |
+18 | **AI platforms - 2016 – 2017**
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ fixable
+   |
+   = help: did you mean `**AI platforms · 2016 – 2017**`?
+
+error[era-shape]: era parts must be separated by ` · `, not `-`
+   --> errors-era.md:20:1
+   |
+20 | **Gusto - Webtab - 2012 – 2013**
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: an era is `**Era name · 2020 – 2023**`; the name can't contain separators
+
+error[era-shape]: era lines must be plain text
+   --> errors-era.md:22:1
+   |
+22 | **Platform *x* · 2016**
+   | ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: write it without italics, links, or code: `**Era name · 2020 – 2023**`
+
+error[era-shape]: era parts must be separated by ` · `
+   --> errors-era.md:24:1
+   |
+24 | **Class of 2010 | 2016 – 2017**
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: write `**Era name · 2020 – 2023**`; the name contains a year, so no automatic fix is offered
+
+error[era-shape]: era parts must be separated by ` · `, not `-`
+   --> errors-era.md:26:1
+   |
+26 | **Award - 2019**
+   | ^^^^^^^^^^^^^^^^
+   |
+   = help: if this is an era, write `**Award · 2019**`; a hyphen can also be ordinary bold text, so no automatic fix is offered
+
+error[era-shape]: the era name is empty
+   --> errors-era.md:28:1
+   |
+28 | **| 2020 – 2021**
+   | ^^^^^^^^^^^^^^^^^
+   |
+   = help: write `**Era name · 2020 – 2023**`
+
+error[era-outside-role]: an era line must be inside a role
+   --> errors-era.md:32:1
+   |
+32 | **Outside · 2015 – 2016**
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: put it under a `### Company · Title · Period` role line
+
+10 errors, 1 warning; 1 fixable
