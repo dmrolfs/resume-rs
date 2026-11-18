@@ -34,8 +34,16 @@ const TYPESET_STACK_BYTES: usize = 16 * 1024 * 1024;
 
 /// What a render may vary: only the paper size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub struct RenderOptions {
     pub paper: Paper,
+}
+
+impl RenderOptions {
+    #[must_use]
+    pub fn new(paper: Paper) -> Self {
+        Self { paper }
+    }
 }
 
 /// Compiles resumes with a style; cheap to clone and to share between renders.
@@ -44,10 +52,24 @@ pub struct Typesetter {
     fonts: Arc<FontSet>,
 }
 
+impl std::fmt::Debug for Typesetter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Typesetter").field("fonts", &self.fonts).finish()
+    }
+}
+
 impl Typesetter {
     #[must_use]
     pub fn new(fonts: Arc<FontSet>) -> Self {
         Self { fonts }
+    }
+
+    /// Evicts memoized results not used in the last `max_age` compiles.
+    ///
+    /// Typst memoizes layout work in a process-wide cache that never shrinks on its own, so a
+    /// long-running caller such as `watch` should call this after each build.
+    pub fn evict_cache(max_age: usize) {
+        typst::comemo::evict(max_age);
     }
 
     /// Compiles `resume` with `style` into a laid-out document.
@@ -57,19 +79,20 @@ impl Typesetter {
     /// - `Error::SpawnTypesetThread` - the compile thread could not start
     /// - `Error::TypesetPanicked` - Typst panicked
     /// - `Error::Compile` - the style has errors; carries every diagnostic and the style text
-    pub fn compile(&self, resume: &Resume, style: &StyleSource, options: &RenderOptions) -> Result<Compiled, Error> {
+    pub fn compile(&self, resume: &Resume, style: &StyleSource, options: RenderOptions) -> Result<Compiled, Error> {
         let json = serde_json::to_vec(resume).context(SerializeResumeSnafu)?;
-        let world = ResumeWorld::new(style, Arc::clone(&self.fonts), json, options.paper);
+        let world = ResumeWorld::new(style.clone(), Arc::clone(&self.fonts), json, options.paper);
         let Warned { output, warnings } = isolated(Stage::Compile, || typst::compile::<PagedDocument>(&world))?;
         let sources = world.served_sources();
         match output {
             Ok(document) => Ok(Compiled {
                 document,
-                warnings: diag::convert(Some(&world), warnings),
+                warnings: diag::convert(&world, warnings),
                 sources,
+                world,
             }),
             Err(errors) => CompileSnafu {
-                diagnostics: diag::convert(Some(&world), errors.into_iter().chain(warnings)),
+                diagnostics: diag::convert(&world, errors.into_iter().chain(warnings)),
                 sources,
             }
             .fail(),
@@ -78,11 +101,22 @@ impl Typesetter {
 }
 
 /// A compiled, laid-out document.
-#[derive(Debug)]
 pub struct Compiled {
     document: PagedDocument,
     warnings: Vec<Diagnostic>,
     sources: StyleSources,
+    /// Kept so export errors can be located in the style files, like compile errors.
+    world: ResumeWorld,
+}
+
+impl std::fmt::Debug for Compiled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Compiled")
+            .field("pages", &self.page_count())
+            .field("warnings", &self.warnings.len())
+            .field("sources", &self.sources.len())
+            .finish()
+    }
 }
 
 impl Compiled {
@@ -111,7 +145,7 @@ impl Compiled {
     pub fn export_pdf(&self, ident: &str) -> Result<Vec<u8>, Error> {
         isolated(Stage::ExportPdf, || pdf::export(&self.document, ident))?.map_err(|errors| {
             ExportPdfSnafu {
-                diagnostics: diag::convert(None, errors),
+                diagnostics: diag::convert(&self.world, errors),
                 sources: self.sources.clone(),
             }
             .build()
@@ -148,7 +182,7 @@ fn panic_message(payload: &(dyn Any + Send)) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use claims::assert_err;
+    use claims::{assert_err, assert_ok};
 
     #[test]
     fn a_panic_becomes_a_typeset_error_with_its_message() {
@@ -170,7 +204,9 @@ mod tests {
 
     #[test]
     fn isolated_work_runs_on_the_named_thread() {
-        let name = isolated(Stage::Compile, || std::thread::current().name().map(str::to_string));
-        assert_eq!(name.ok().flatten().as_deref(), Some("resume-typeset"));
+        let name = assert_ok!(isolated(Stage::Compile, || std::thread::current()
+            .name()
+            .map(str::to_string)));
+        assert_eq!(name.as_deref(), Some("resume-typeset"));
     }
 }

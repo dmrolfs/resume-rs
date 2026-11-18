@@ -126,17 +126,17 @@ Style, world, and PDF settings (unit, in `src`):
 - [x] `world.rs`: `style_files_resolve_through_virtual_path_components`, `today_is_none`, `resume_json_is_served_from_memory_and_shadows_disk`, `package_roots_are_refused_with_a_clear_message`, `served_sources_record_only_style_files_in_display_order`, `backslash_style_path_is_rejected_by_virtual_path`, `virtualize_builds_from_path_components_not_strings`, `virtualize_and_realize_handle_drive_letter_roots` (`cfg(windows)`)
 - [x] `pdf.rs`: `pdf_options_are_deterministic`. `fonts.rs`: the bundled set loads, is sorted and unique. `diag.rs`: error, warning, detached span, in-memory resume span, hints and trace, order. `typeset/mod.rs`: a panic becomes `TypesetPanicked`, the work runs on the named thread.
 
-`tests/render_test.rs` (fixtures in `tests/fixtures/styles/`):
+`tests/render_test.rs` (fixtures in `tests/fixtures/styles/`). Added after review: BOM and CRLF render the same bytes, a non-UTF-8 style names its file, an error in a shared file is located there, errors precede warnings in a failed compile, the requested font is the embedded one, the PDF is tagged with the resume-rs creator and no dates, an embedded style renders the same bytes as the same files on disk and reports `<built-in>` paths, and export works after the cache is evicted.
+
 - [x] `compiles_minimal_style_to_pdf`: `%PDF-` ... `%%EOF`, 1 page, an embedded subset font, and the title equals the resume name (proves `/resume.json` was read).
 - [x] `paper_input_selects_page_size`: MediaBox 612x792 and about 595x842.
 - [x] `style_syntax_error_maps_to_style_file_line`, `compile_errors_carry_the_style_text_for_excerpts`
 - [x] `today_is_unavailable`, `relative_path_escaping_the_root_is_denied`, `absolute_path_is_root_relative_and_never_reads_the_host`, `package_import_is_refused_without_network`, `symlink_pointing_out_of_the_styles_directory_is_denied_end_to_end` (unix)
 - [x] `root_relative_import_through_the_style_parent`, `content_style_renders_every_node_kind_without_warnings`
 - [x] `unknown_font_family_in_a_stack_warns`: pins the Typst warning that rsm-141.7 resolves.
-- [x] `same_input_twice_is_byte_identical`: non-vacuous (size check).
 
 `tests/determinism_test.rs` (cross-process cases re-run the test binary through an `#[ignore]` child entry point):
-- [x] `repeated_in_process_renders_are_identical` (20), `cold_and_warm_comemo_cache_agree`, `different_content_gives_different_bytes` (negative control), `a_different_ident_changes_the_bytes_and_the_same_ident_does_not`, `pdf_has_no_dates`
+- [x] `repeated_in_process_renders_are_identical` (20; the content fixture has at least five pages, and the child proves `RAYON_NUM_THREADS` reached rayon's pool), `cold_and_warm_comemo_cache_agree`, `different_content_gives_different_bytes` (negative control), `a_different_ident_changes_the_bytes_and_the_same_ident_does_not`, `pdf_has_no_dates`
 - [x] `rayon_thread_count_does_not_change_bytes` (1, 2, 8), `file_id_numbering_does_not_change_bytes` (500 ids interned first), `a_fresh_process_matches_this_warm_one`
 
 `tests/nesting_test.rs` (child processes, because a stack overflow aborts the harness):

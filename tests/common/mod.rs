@@ -49,3 +49,50 @@ pub fn subject_matches(code: DiagnosticCode, source: &str) -> bool {
         _ => true,
     }
 }
+
+/// What a child test process did.
+pub struct ChildRun {
+    pub success: bool,
+    pub stderr: String,
+}
+
+/// Runs `command`, killing it if it takes longer than `timeout`, and captures its stderr.
+///
+/// A hung child must fail the test, not hang the suite, and a crashed one must say why.
+pub fn run_child(mut command: std::process::Command, timeout: std::time::Duration) -> ChildRun {
+    use std::io::Read;
+    use std::process::Stdio;
+    use std::time::Instant;
+
+    let mut child = command
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the child process starts");
+    let mut stderr_pipe = child.stderr.take().expect("stderr is piped");
+    let reader = std::thread::spawn(move || {
+        let mut text = String::new();
+        let _ = stderr_pipe.read_to_string(&mut text);
+        text
+    });
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("the child can be polled") {
+            break Some(status);
+        }
+        if started.elapsed() > timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    let mut stderr = reader.join().unwrap_or_default();
+    if status.is_none() {
+        stderr.push_str(&format!("\n[killed after {timeout:?}]"));
+    }
+    ChildRun {
+        success: status.is_some_and(|s| s.success()),
+        stderr,
+    }
+}

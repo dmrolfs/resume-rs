@@ -6,11 +6,20 @@ use std::path::PathBuf;
 use snafu::Snafu;
 use strum::Display;
 
-use crate::diagnostics::Diagnostic;
+use crate::diagnostics::{Diagnostic, Severity};
 use crate::model::StyleName;
 
-/// The text of every style file Typst read, keyed by display path, so a renderer can show excerpts.
-pub type StyleSources = Vec<(PathBuf, String)>;
+/// A style source file as Typst read it, so a renderer can show excerpts of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StyleFile {
+    /// The path to show users.
+    pub path: PathBuf,
+    /// The decoded text; byte ranges in diagnostics index into this.
+    pub text: String,
+}
+
+/// The style source files read during one compile, ordered by path.
+pub type StyleSources = Vec<StyleFile>;
 
 /// The pipeline stage that was running when a panic was caught.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Display)]
@@ -30,6 +39,9 @@ pub enum Error {
     #[snafu(display("style directory {} has no style.typ", dir.display()))]
     StyleMissingMain { dir: PathBuf },
 
+    #[snafu(display("style directory {} resolves outside the styles directory (a symlink?)", dir.display()))]
+    StyleOutsideRoot { dir: PathBuf },
+
     #[snafu(display("cannot open styles directory {}: {source}", path.display()))]
     StyleRoot { path: PathBuf, source: std::io::Error },
 
@@ -42,15 +54,19 @@ pub enum Error {
     #[snafu(display("typesetting panicked during {stage}: {message}"))]
     TypesetPanicked { stage: Stage, message: String },
 
-    #[snafu(display("the style failed to compile ({} diagnostics)", diagnostics.len()))]
+    #[snafu(display("the style failed to compile ({} errors)", errors_in(diagnostics)))]
     Compile {
         diagnostics: Vec<Diagnostic>,
         sources: StyleSources,
     },
 
-    #[snafu(display("PDF export failed ({} diagnostics)", diagnostics.len()))]
+    #[snafu(display("PDF export failed ({} errors)", errors_in(diagnostics)))]
     ExportPdf {
         diagnostics: Vec<Diagnostic>,
         sources: StyleSources,
     },
+}
+
+fn errors_in(diagnostics: &[Diagnostic]) -> usize {
+    diagnostics.iter().filter(|d| d.severity == Severity::Error).count()
 }

@@ -15,6 +15,9 @@ use resume::style::StyleSource;
 use resume::typeset::fonts::FontSet;
 use resume::typeset::{Compiled, RenderOptions, Typesetter};
 
+static EMBEDDED_STYLES: include_dir::Dir<'static> =
+    include_dir::include_dir!("$CARGO_MANIFEST_DIR/tests/fixtures/styles");
+
 fn crate_path(relative: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(relative)
 }
@@ -40,7 +43,7 @@ fn typesetter() -> Typesetter {
 }
 
 fn compile_with(style_name: &str, paper: Paper) -> Result<Compiled, Error> {
-    typesetter().compile(&full_resume(), &style(style_name), &RenderOptions { paper })
+    typesetter().compile(&full_resume(), &style(style_name), RenderOptions::new(paper))
 }
 
 fn compile(style_name: &str) -> Result<Compiled, Error> {
@@ -146,7 +149,7 @@ fn style_syntax_error_maps_to_style_file_line() {
     assert_eq!(error.code, DiagnosticCode::TypstError);
     let span = error.span.as_ref().expect("a span in the style file");
     assert_eq!(span.kind, SourceKind::Style);
-    assert!(span.file.ends_with("syntax-error/style.typ"), "{:?}", span.file);
+    assert_eq!(span.file, crate_path("tests/fixtures/styles/syntax-error/style.typ"));
     let text = assert_ok!(std::fs::read_to_string(&span.file));
     let line = text[..span.range.start].matches('\n').count() + 1;
     assert_eq!(line, 4, "the unclosed `(` is on line 4: {error:?}");
@@ -199,22 +202,14 @@ fn unknown_font_family_in_a_stack_warns() {
 fn compile_errors_carry_the_style_text_for_excerpts() {
     match assert_err!(compile("syntax-error")) {
         Error::Compile { sources, .. } => {
+            let expected = crate_path("tests/fixtures/styles/syntax-error/style.typ");
             assert!(
-                sources
-                    .iter()
-                    .any(|(path, text)| path.ends_with("syntax-error/style.typ") && text.contains("broken"))
+                sources.iter().any(|f| f.path == expected && f.text.contains("broken")),
+                "{sources:?}"
             );
         }
         other => panic!("expected a compile failure, got {other:?}"),
     }
-}
-
-#[test]
-fn same_input_twice_is_byte_identical() {
-    let a = pdf_of("minimal");
-    let b = pdf_of("minimal");
-    assert!(a.len() > 1000, "a vacuously small PDF proves nothing");
-    assert!(a == b, "two renders of the same input differ");
 }
 
 #[test]
@@ -241,7 +236,7 @@ fn symlink_pointing_out_of_the_styles_directory_is_denied_end_to_end() {
     ));
     assert_ok!(std::os::unix::fs::symlink(&secret, styles.join("leaky/leak.txt")));
     let source = assert_ok!(StyleSource::directory(&styles, assert_ok!(StyleName::try_new("leaky"))));
-    let result = typesetter().compile(&full_resume(), &source, &RenderOptions::default());
+    let result = typesetter().compile(&full_resume(), &source, RenderOptions::default());
     match assert_err!(result) {
         Error::Compile { diagnostics, .. } => {
             let messages: Vec<&str> = diagnostics.iter().map(|d| d.message.as_str()).collect();
@@ -250,4 +245,168 @@ fn symlink_pointing_out_of_the_styles_directory_is_denied_end_to_end() {
         }
         other => panic!("expected a compile failure, got {other:?}"),
     }
+}
+
+/// A styles directory with one style `s` whose `style.typ` has the given bytes.
+fn temp_style(bytes: &[u8]) -> (tempfile::TempDir, StyleSource) {
+    let tmp = assert_ok!(tempfile::tempdir());
+    assert_ok!(std::fs::create_dir(tmp.path().join("s")));
+    assert_ok!(std::fs::write(tmp.path().join("s/style.typ"), bytes));
+    let source = assert_ok!(StyleSource::directory(tmp.path(), assert_ok!(StyleName::try_new("s"))));
+    (tmp, source)
+}
+
+fn pdf_with(style: &StyleSource) -> Vec<u8> {
+    let compiled = assert_ok!(typesetter().compile(&full_resume(), style, RenderOptions::default()));
+    assert_ok!(compiled.export_pdf("fixture"))
+}
+
+const SMALL_STYLE: &str =
+    "#set page(paper: sys.inputs.paper, margin: 1cm)\n#set text(font: \"Libertinus Serif\")\nHello\n";
+
+#[test]
+fn a_utf8_bom_does_not_change_the_output() {
+    let (_plain_dir, plain) = temp_style(SMALL_STYLE.as_bytes());
+    let with_bom = [b"\xEF\xBB\xBF".as_slice(), SMALL_STYLE.as_bytes()].concat();
+    let (_bom_dir, bom) = temp_style(&with_bom);
+    assert!(pdf_with(&plain) == pdf_with(&bom), "a BOM changed the PDF");
+}
+
+#[test]
+fn crlf_line_endings_do_not_change_the_output() {
+    let (_lf_dir, lf) = temp_style(SMALL_STYLE.as_bytes());
+    let (_crlf_dir, crlf) = temp_style(SMALL_STYLE.replace('\n', "\r\n").as_bytes());
+    assert!(pdf_with(&lf) == pdf_with(&crlf), "CRLF changed the PDF");
+}
+
+#[test]
+fn a_style_that_is_not_utf8_fails_naming_the_file() {
+    let (_tmp, source) = temp_style(b"#let x = \xFF\xFE\n");
+    match assert_err!(typesetter().compile(&full_resume(), &source, RenderOptions::default())) {
+        Error::Compile { diagnostics, .. } => {
+            let message = &diagnostics[0].message;
+            assert!(
+                message.contains("style.typ") && message.contains("not valid UTF-8"),
+                "{message}"
+            );
+        }
+        other => panic!("expected a compile failure, got {other:?}"),
+    }
+}
+
+#[test]
+fn an_error_in_a_shared_file_is_located_in_that_file() {
+    let Error::Compile { diagnostics, sources } = assert_err!(compile("lib-error")) else {
+        panic!("expected a compile failure");
+    };
+    let error = diagnostics
+        .iter()
+        .find(|d| d.severity == Severity::Error)
+        .expect("an error");
+    let span = error.span.as_ref().expect("a span");
+    assert_eq!(span.file, crate_path("tests/fixtures/styles/lib/broken.typ"));
+    assert_eq!(error.message, "unclosed delimiter");
+    let paths: Vec<_> = sources.iter().map(|f| f.path.clone()).collect();
+    assert!(
+        paths.contains(&crate_path("tests/fixtures/styles/lib/broken.typ")),
+        "{paths:?}"
+    );
+    assert!(
+        paths.contains(&crate_path("tests/fixtures/styles/lib-error/style.typ")),
+        "{paths:?}"
+    );
+}
+
+#[test]
+fn a_failed_compile_reports_the_error_before_the_warnings() {
+    let diagnostics = compile_errors("warn-then-error");
+    let severities: Vec<Severity> = diagnostics.iter().map(|d| d.severity).collect();
+    assert_eq!(severities.first(), Some(&Severity::Error), "{diagnostics:?}");
+    assert!(
+        diagnostics
+            .last()
+            .is_some_and(|d| d.code == DiagnosticCode::TypstWarning),
+        "{diagnostics:?}"
+    );
+    assert!(
+        diagnostics[0].message.contains("deliberate failure"),
+        "{}",
+        diagnostics[0].message
+    );
+}
+
+#[test]
+fn a_successful_compile_keeps_the_style_text_for_later_diagnostics() {
+    let compiled = assert_ok!(compile("lib-import"));
+    let paths: Vec<_> = compiled.sources().iter().map(|f| f.path.clone()).collect();
+    assert_eq!(
+        paths,
+        [
+            crate_path("tests/fixtures/styles/lib-import/style.typ"),
+            crate_path("tests/fixtures/styles/lib/helper.typ")
+        ]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>()
+    );
+    assert!(compiled.sources().iter().any(|f| f.text.contains("greeting")));
+}
+
+#[test]
+fn the_requested_font_is_the_one_embedded() {
+    let pdf = pdf_of("font-dejavu");
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(text.contains("+DejaVuSansMono"), "DejaVu Sans Mono was not embedded");
+    assert!(
+        !text.contains("LibertinusSerif"),
+        "the default font leaked into the output"
+    );
+}
+
+#[test]
+fn the_pdf_is_tagged_and_names_the_creator_without_dates() {
+    let doc = assert_ok!(Document::load_mem(&pdf_of("minimal")));
+    let root = assert_ok!(doc.trailer.get(b"Root"))
+        .as_reference()
+        .expect("a reference");
+    let catalog = assert_ok!(doc.get_dictionary(root));
+    assert!(catalog.get(b"StructTreeRoot").is_ok(), "the PDF is not tagged");
+    let info = assert_ok!(assert_ok!(doc.trailer.get(b"Info")).as_reference());
+    let creator = pdf_string(assert_ok!(assert_ok!(doc.get_dictionary(info)).get(b"Creator"))).expect("a creator");
+    assert_eq!(creator, format!("resume-rs {}", env!("CARGO_PKG_VERSION")));
+}
+
+#[test]
+fn an_embedded_style_renders_the_same_bytes_as_the_same_files_on_disk() {
+    let name = assert_ok!(StyleName::try_new("lib-import"));
+    let embedded = assert_ok!(StyleSource::embedded(&EMBEDDED_STYLES, name));
+    let on_disk = style("lib-import");
+    assert!(
+        pdf_with(&embedded) == pdf_with(&on_disk),
+        "embedded and directory styles differ"
+    );
+}
+
+#[test]
+fn errors_in_an_embedded_style_show_the_built_in_path() {
+    let name = assert_ok!(StyleName::try_new("syntax-error"));
+    let embedded = assert_ok!(StyleSource::embedded(&EMBEDDED_STYLES, name));
+    match assert_err!(typesetter().compile(&full_resume(), &embedded, RenderOptions::default())) {
+        Error::Compile { diagnostics, .. } => {
+            let span = diagnostics[0].span.as_ref().expect("a span");
+            assert_eq!(
+                span.file,
+                PathBuf::from("<built-in>").join("syntax-error").join("style.typ")
+            );
+        }
+        other => panic!("expected a compile failure, got {other:?}"),
+    }
+}
+
+#[test]
+fn export_works_after_the_memoization_cache_is_evicted() {
+    let compiled = assert_ok!(compile("minimal"));
+    Typesetter::evict_cache(0);
+    assert!(assert_ok!(compiled.export_pdf("fixture")).starts_with(b"%PDF-"));
 }

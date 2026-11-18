@@ -2311,6 +2311,7 @@ dependencies = [
  "pretty_assertions",
  "proptest",
  "pulldown-cmark",
+ "rayon",
  "regex",
  "serde",
  "serde_json",

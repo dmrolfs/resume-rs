@@ -6,9 +6,10 @@ use std::path::{Path, PathBuf};
 use include_dir::Dir;
 use snafu::{OptionExt, ResultExt};
 use typst::diag::{FileError, FileResult};
+use typst::foundations::Bytes;
 use typst::syntax::VirtualPath;
 
-use crate::error::{Error, StyleMissingMainSnafu, StyleRootSnafu, UnknownStyleSnafu};
+use crate::error::{Error, StyleMissingMainSnafu, StyleOutsideRootSnafu, StyleRootSnafu, UnknownStyleSnafu};
 use crate::model::StyleName;
 
 /// Display root for files served from the embedded set. Angle brackets are invalid in Windows
@@ -52,6 +53,13 @@ impl StyleSource {
         let style_dir = canonical_root.join(name.as_ref() as &str);
         if !style_dir.is_dir() {
             return UnknownStyleSnafu { name, searched: root }.fail();
+        }
+        let resolved_dir = std::fs::canonicalize(&style_dir).context(StyleRootSnafu { path: &style_dir })?;
+        if !is_within(&canonical_root, &resolved_dir) {
+            return StyleOutsideRootSnafu {
+                dir: root.join(name.as_ref() as &str),
+            }
+            .fail();
         }
         if !style_dir.join(MAIN_FILE).is_file() {
             return StyleMissingMainSnafu {
@@ -108,7 +116,7 @@ impl StyleSource {
     /// # Errors
     /// `FileError::AccessDenied` when the path resolves outside the style root (for example a
     /// symlink pointing out of it), `NotFound`, `IsDirectory`, or the underlying I/O failure.
-    pub(crate) fn read(&self, vpath: &VirtualPath) -> FileResult<Vec<u8>> {
+    pub(crate) fn read(&self, vpath: &VirtualPath) -> FileResult<Bytes> {
         match &self.files {
             StyleFiles::Embedded(dir) => read_embedded(dir, vpath),
             StyleFiles::Directory { canonical_root, .. } => read_directory(canonical_root, vpath),
@@ -118,18 +126,23 @@ impl StyleSource {
     /// The path to show users for a virtual path.
     #[must_use]
     pub(crate) fn display_path(&self, vpath: &VirtualPath) -> PathBuf {
-        let relative = Path::new(vpath.get_without_slash());
-        match &self.files {
-            StyleFiles::Embedded(_) => PathBuf::from(BUILT_IN).join(relative),
-            StyleFiles::Directory { root, .. } => root.join(relative),
-        }
+        let base = match &self.files {
+            StyleFiles::Embedded(_) => PathBuf::from(BUILT_IN),
+            StyleFiles::Directory { root, .. } => root.clone(),
+        };
+        // Push each segment so Windows gets one separator style, not `\\` mixed with `/`.
+        vpath
+            .get_without_slash()
+            .split('/')
+            .filter(|s| !s.is_empty())
+            .fold(base, |path, segment| path.join(segment))
     }
 }
 
-fn read_embedded(dir: &Dir<'_>, vpath: &VirtualPath) -> FileResult<Vec<u8>> {
+fn read_embedded(dir: &'static Dir<'static>, vpath: &VirtualPath) -> FileResult<Bytes> {
     let relative = vpath.get_without_slash();
     if let Some(file) = dir.get_file(relative) {
-        return Ok(file.contents().to_vec());
+        return Ok(Bytes::new(file.contents()));
     }
     if dir.get_dir(relative).is_some() || vpath.is_root() {
         return Err(FileError::IsDirectory);
@@ -137,17 +150,31 @@ fn read_embedded(dir: &Dir<'_>, vpath: &VirtualPath) -> FileResult<Vec<u8>> {
     Err(FileError::NotFound(PathBuf::from(relative)))
 }
 
-fn read_directory(canonical_root: &Path, vpath: &VirtualPath) -> FileResult<Vec<u8>> {
+fn read_directory(canonical_root: &Path, vpath: &VirtualPath) -> FileResult<Bytes> {
     let relative = Path::new(vpath.get_without_slash());
     let target = vpath.realize(canonical_root).map_err(FileError::Realize)?;
     let resolved = std::fs::canonicalize(&target).map_err(|e| FileError::from_io(e, relative))?;
-    if !resolved.starts_with(canonical_root) {
+    if !is_within(canonical_root, &resolved) {
         return Err(FileError::AccessDenied);
     }
-    if resolved.is_dir() {
+    let metadata = std::fs::metadata(&resolved).map_err(|e| FileError::from_io(e, relative))?;
+    if metadata.is_dir() {
         return Err(FileError::IsDirectory);
     }
-    std::fs::read(&resolved).map_err(|e| FileError::from_io(e, relative))
+    if !metadata.is_file() {
+        // A FIFO or device inside the root would block the read forever.
+        return Err(FileError::Other(Some("not a regular file".into())));
+    }
+    std::fs::read(&resolved)
+        .map(Bytes::new)
+        .map_err(|e| FileError::from_io(e, relative))
+}
+
+/// True when `path` is `root` or lies under it, compared by path components, not string prefix.
+///
+/// Both arguments must already be canonical.
+fn is_within(root: &Path, path: &Path) -> bool {
+    path.starts_with(root)
 }
 
 #[cfg(test)]
@@ -247,6 +274,76 @@ mod tests {
             let err = assert_err!(style.read(&vpath("/lib")));
             assert!(matches!(err, FileError::IsDirectory), "{err:?}");
         }
+    }
+
+    #[test]
+    fn is_within_compares_components_not_string_prefixes() {
+        let root = Path::new("/tmp/styles");
+        assert!(is_within(root, Path::new("/tmp/styles/lib/helper.typ")));
+        assert!(is_within(root, root));
+        assert!(
+            !is_within(root, Path::new("/tmp/styles-evil/x.typ")),
+            "a sibling sharing a string prefix is outside"
+        );
+        assert!(!is_within(root, Path::new("/tmp/other/styles/x.typ")));
+    }
+
+    #[test]
+    fn dot_segments_in_the_given_root_are_resolved_but_shown_as_given() {
+        let given = fixtures_path().join("minimal").join("..");
+        let style = assert_ok!(StyleSource::directory(&given, name("minimal")));
+        assert_ok!(style.read(&vpath("/minimal/style.typ")));
+        assert_eq!(
+            style.display_path(&vpath("/minimal/style.typ")),
+            given.join("minimal").join("style.typ")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn style_directory_symlinked_outside_the_root_is_refused_up_front() {
+        let tmp = assert_ok!(tempfile::tempdir());
+        assert_ok!(std::fs::create_dir_all(tmp.path().join("elsewhere/mine")));
+        assert_ok!(std::fs::write(tmp.path().join("elsewhere/mine/style.typ"), ""));
+        assert_ok!(std::fs::create_dir(tmp.path().join("styles")));
+        assert_ok!(std::os::unix::fs::symlink(
+            tmp.path().join("elsewhere/mine"),
+            tmp.path().join("styles/mine")
+        ));
+        let err = assert_err!(StyleSource::directory(tmp.path().join("styles"), name("mine")));
+        assert!(matches!(err, Error::StyleOutsideRoot { .. }), "{err:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_inside_the_root_is_readable_and_a_dangling_one_is_not_found() {
+        let tmp = assert_ok!(tempfile::tempdir());
+        let dir = tmp.path().join("ok");
+        assert_ok!(std::fs::create_dir(&dir));
+        assert_ok!(std::fs::write(dir.join("style.typ"), "real"));
+        assert_ok!(std::os::unix::fs::symlink(dir.join("style.typ"), dir.join("alias.typ")));
+        assert_ok!(std::os::unix::fs::symlink(
+            dir.join("gone.typ"),
+            dir.join("dangling.typ")
+        ));
+        let style = assert_ok!(StyleSource::directory(tmp.path(), name("ok")));
+        assert_eq!(assert_ok!(style.read(&vpath("/ok/alias.typ"))).as_slice(), b"real");
+        let err = assert_err!(style.read(&vpath("/ok/dangling.typ")));
+        assert!(matches!(err, FileError::NotFound(_)), "{err:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_is_rejected_instead_of_blocking_the_read() {
+        let tmp = assert_ok!(tempfile::tempdir());
+        let dir = tmp.path().join("pipe");
+        assert_ok!(std::fs::create_dir(&dir));
+        assert_ok!(std::fs::write(dir.join("style.typ"), ""));
+        let made = std::process::Command::new("mkfifo").arg(dir.join("fifo")).status();
+        assert!(assert_ok!(made).success());
+        let style = assert_ok!(StyleSource::directory(tmp.path(), name("pipe")));
+        let err = assert_err!(style.read(&vpath("/pipe/fifo")));
+        assert!(matches!(err, FileError::Other(_)), "{err:?}");
     }
 
     #[cfg(unix)]

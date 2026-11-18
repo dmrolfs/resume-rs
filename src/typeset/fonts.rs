@@ -13,6 +13,12 @@ pub struct FontSet {
     store: FontStore,
 }
 
+impl std::fmt::Debug for FontSet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FontSet").field("families", &self.families()).finish()
+    }
+}
+
 impl FontSet {
     /// The fonts embedded in typst-kit: Libertinus Serif, New Computer Modern, and DejaVu Sans Mono.
     #[must_use]
@@ -43,9 +49,17 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn bundled_set_contains_libertinus_serif() {
-        let families = FontSet::bundled().families();
-        assert!(families.contains(&"Libertinus Serif".to_string()), "{families:?}");
+    fn bundled_set_is_exactly_the_typst_kit_fonts() {
+        // The font set is an input to every PDF byte, so a typst-kit bump that changes it must fail here.
+        assert_eq!(
+            FontSet::bundled().families(),
+            [
+                "DejaVu Sans Mono",
+                "Libertinus Serif",
+                "New Computer Modern",
+                "New Computer Modern Math"
+            ]
+        );
     }
 
     #[test]

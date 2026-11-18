@@ -47,3 +47,10 @@
     else if b.kind == "page-break" { pagebreak() }
   }
 }
+
+// Several more pages, so layout has independent page runs to spread over worker threads.
+#for i in range(4) {
+  pagebreak()
+  heading(level: 1, [Filler #i])
+  lorem(120)
+}

@@ -508,19 +508,21 @@ The contract is additive only: new keys may be appended, existing keys never cha
 ### Typst Integration (`src/typeset/`)
 
 ```rust
-pub(crate) struct ResumeWorld<'a> {
+pub(crate) struct ResumeWorld {
     library: LazyHash<Library>,       // Library::builder().with_inputs(inputs).build()
     fonts: Arc<FontSet>,              // shared by every render; book() and font(i) delegate to it
     main: FileId,                     // /<style>/style.typ
     resume_id: FileId,                // /resume.json
     resume_json: Bytes,               // served from memory, ahead of disk
-    style: &'a StyleSource,           // built-in (include_dir) or a directory on disk
-    sources: Mutex<HashMap<FileId, Source>>,  // per render; also the text diagnostics are shown against
+    style: StyleSource,               // built-in (include_dir) or a directory on disk; cloned in, so a Compiled can outlive the caller's
+    files: Mutex<HashMap<FileId, FileResult<Bytes>>>,  // every style file is read once per render, failures included
+    sources: Mutex<HashMap<FileId, Source>>,  // decoded text (BOM stripped); also what diagnostics are shown against
 }
-impl typst::World for ResumeWorld<'_> { /* library, book, main, source, file, font, today */ }
+impl typst::World for ResumeWorld { /* library, book, main, source, file, font, today */ }
 
 pub struct Typesetter { fonts: Arc<FontSet> }
-impl Typesetter { pub fn compile(&self, &Resume, &StyleSource, &RenderOptions) -> Result<Compiled, Error>; }
+impl Typesetter { pub fn compile(&self, &Resume, &StyleSource, RenderOptions) -> Result<Compiled, Error>;
+                  pub fn evict_cache(max_age: usize); }  // for watch: Typst's memoization cache never shrinks by itself
 impl Compiled { pub fn page_count(&self) -> usize; pub fn warnings(&self) -> &[Diagnostic];
                 pub fn sources(&self) -> &StyleSources; pub fn export_pdf(&self, ident: &str) -> Result<Vec<u8>, Error>; }
 ```
@@ -529,11 +531,13 @@ Compile and PDF export are separate steps, so `--dry-run`, `doctor`, and the lay
 
 - **Pinned dependencies:** `typst`, `typst-pdf`, `typst-kit`, and `typst-layout` are all `=0.15.1`. `typst-layout` is needed because `PagedDocument` lives there and `typst` does not re-export it. `typst-kit` has no `FontSearcher` in 0.15.1; it provides `FontStore`, `FontSource`, `embedded()`, `system()`, and `scan()`. rsm-141.6 enables only `embedded-fonts`; rsm-141.18 adds `scan-fonts`. `typst-as-lib` is not used, because its README says its API is unstable and it adds a second layer that would lag Typst releases. `tests/dependencies_test.rs` enforces the pins and that no network crate (`ureq`, `openssl`, `native-tls`, `reqwest`, `hyper`, `rustls`) is in `Cargo.lock`.
 - **Virtual root:** the style directory's parent, so a style can import `/lib/components.typ`. Typst rejects `..` above the root and backslashes before the `World` is called (`path ... would escape the project root`), and treats an absolute path as root-relative (so `/etc/passwd` is "file not found"). Our `AccessDenied` covers what remains: a symlink inside a style directory that resolves outside it. That is deliberately stricter than Typst's own CLI. Embedded styles are case-sensitive, directories are not on macOS and Windows.
+- **Style root and symlinks:** the whole styles directory is readable, not only the chosen style, because styles share `/lib`. A style can therefore read any file under the directory passed as `--styles-dir`, so that flag must never default to a directory that holds private files (rsm-141.10). `StyleSource::directory` refuses a style directory that is a symlink leaving the root (`StyleOutsideRoot`) and every read re-checks containment by path components after canonicalizing, so `styles-evil` is not inside `styles`. FIFOs and devices are refused.
+- **Reads are consistent per render:** each style file is read once and served from memory, so a file edited mid-compile cannot answer differently for the same id (Typst assumes a pure `World`). A UTF-8 byte order mark is stripped from sources, as the Typst CLI does, so a Windows-saved style renders the same. Invalid UTF-8 is reported with the file name.
 - **Packages are refused:** a `VirtualRoot::Package` file gets `FileError::Package` with "packages are not supported; copy the file into the style directory". No downloader code is linked.
 - **`today()` returns `None`,** so a style can't make output depend on the date. `datetime.today()` is then a hard error, "unable to get the current date", at the call.
 - **`sys.inputs` carries render options only:** `paper` (`"us-letter"` or `"a4"`). An `accent` override is deferred until a CLI flag produces it. Content always comes from `/resume.json`; a file of that name on disk is shadowed.
 - **PDF export:** `PdfOptions { ident: Smart::Custom(<file stem>), creator: Smart::Custom(Some("resume-rs <version>")), timestamp: None, tagged: true, ..Default::default() }`. Tagged output is kept on for accessible reading order.
-- **Diagnostics:** Typst errors become `TypstError` and warnings `TypstWarning`, with a style-file span from the byte range. Hints and trace frames become hint strings. Files embedded in the binary are shown as `<built-in>/<style>/style.typ`. Spans in `/resume.json` or outside the style files have no span.
+- **Diagnostics:** Typst errors become `TypstError` and warnings `TypstWarning`, with a style-file span from the byte range. Hints and trace frames become hint strings. Files embedded in the binary are shown as `<built-in>/<style>/style.typ`. Spans in `/resume.json` or outside the style files have no span. Line numbers use Typst's own line index (`\r`, `\r\n`, and Unicode breaks). PDF export errors are located too, because `Compiled` keeps its world. Spans into data files read with `json()` or `read()` have a path but no entry in `sources`, so a renderer must show those without an excerpt.
 - **Determinism, verified on one machine (`tests/determinism_test.rs`):** 20 repeated renders, a cold versus warm memoization cache, `RAYON_NUM_THREADS` 1, 2, and 8, 500 file ids interned first, and a fresh process all give the same bytes. A different ident or different content changes them. No dates are written. Cross-OS equality is rsm-141.15.
 - **Depth limits (`tests/nesting_test.rs`):** nesting beyond about 35 blocks gives "maximum layout depth exceeded", and beyond the parser cap "maximum parsing depth exceeded". Both are diagnostics; the cap is reached long before any stack limit, and the largest passing depth also compiles with worker stacks at a quarter of the default.
 
@@ -818,3 +822,4 @@ Total: about 11.5 working days.
 - 2026-11-18 (rsm-141.14 follow-up): the shipped MSVC exe imported VCRUNTIME140.dll. Added the self-contained check for the release build and `crt-static` for the MSVC target; verified before and after on CI.
 - 2026-11-18 (rsm-141.14, oracle analysis in history/): universal2 is built with two builds plus `lipo` and re-signed. The windows-gnu local build needs no `.cargo/config.toml`. The cross-OS PDF comparison moved to rsm-141.15 (owner decision: not critical, pursued because GitHub runners are free for public repos). The owner declined a blocking link from rsm-141.3 to rsm-141.14. `tempfile` and `opener` are not added in the platform task (cargo 1.100 warns on unused dependencies); they arrive with their first users. `cargo-zigbuild` removed as a Windows option.
 - 2026-11-18 (rsm-141.6, oracle analysis in history/): corrected the Typst Integration section to the 0.15.1 API (no `FontSearcher`; `typst-layout` is a direct dependency; `FileId` is built from a `RootedPath`). The World is per render and borrows the `StyleSource`; fonts are an `Arc<FontSet>`. Typst's own path rules reject `..` and backslashes before our `AccessDenied`, which now covers symlinks. Compile and export are separate steps on a 16 MiB thread. Atomic persist and `OutputLocked` moved to rsm-141.10, and font layering and role resolution moved to the new rsm-141.18. The `accent` input is deferred. New code `typst-warning`. Typst warns "unknown font family" for every missing preferred font in a font list, which rsm-141.7 must resolve.
+- 2026-11-18 (rsm-141.6 review): independent code and test reviews (history/rsm-141.6_code-review.md, history/rsm-141.6_test-review.md) led to: a UTF-8 BOM stripped from sources (a BOM style rendered two pages instead of one); each style file read once per render and cached; export errors located through an owned world; a symlinked style directory refused up front (`StyleOutsideRoot`); non-regular files refused; `RenderOptions` is `#[non_exhaustive]` with `new`; `StyleFile { path, text }` replaces the positional tuple; `Typesetter::evict_cache` for `watch`; Typst's own line index for hint lines; one separator style in display paths. Open for rsm-141.10: an `Error` to `DiagnosticCode` mapping, the default styles-dir, and whether the default panic hook's stderr output is kept.

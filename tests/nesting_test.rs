@@ -1,9 +1,12 @@
 //! ABOUTME: Deeply nested styles must end in a diagnostic or a PDF, never a stack overflow that aborts.
 //! ABOUTME: Each case runs in a child process, because an overflow aborts the whole test harness.
 
+mod common;
+
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
+use std::time::Duration;
 
 use claims::assert_ok;
 use resume::model::StyleName;
@@ -39,19 +42,22 @@ fn child_nesting() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/full.md");
     let text = assert_ok!(std::fs::read_to_string(&path));
     let resume = resume::markdown::parse(&path, &text).into_parts().0.expect("a resume");
-    let outcome =
-        match Typesetter::new(Arc::new(FontSet::bundled())).compile(&resume, &style, &RenderOptions::default()) {
-            Ok(_) => "compiled".to_string(),
-            Err(resume::error::Error::Compile { diagnostics, .. }) => {
-                format!("diagnostic: {}", diagnostics.first().map_or("", |d| d.message.as_str()))
-            }
-            Err(other) => format!("error: {other}"),
-        };
+    let outcome = match Typesetter::new(Arc::new(FontSet::bundled())).compile(&resume, &style, RenderOptions::default())
+    {
+        Ok(_) => "compiled".to_string(),
+        Err(resume::error::Error::Compile { diagnostics, .. }) => {
+            format!("diagnostic: {}", diagnostics.first().map_or("", |d| d.message.as_str()))
+        }
+        Err(other) => format!("error: {other}"),
+    };
     assert_ok!(std::fs::write(out, outcome));
 }
 
+const CHILD_TIMEOUT: Duration = Duration::from_secs(120);
+
 struct Outcome {
     exited_normally: bool,
+    stderr: String,
     recorded: String,
 }
 
@@ -61,16 +67,16 @@ fn nest_in_child(depth: usize, stack_env: Option<&str>) -> Outcome {
     let mut command = Command::new(assert_ok!(std::env::current_exe()));
     command
         .args(["--ignored", "--exact", "child_nesting", "--test-threads=1"])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .env_remove("RUST_MIN_STACK")
         .env(DEPTH_ENV, depth.to_string())
         .env(OUT_ENV, &out);
     if let Some(bytes) = stack_env {
         command.env("RUST_MIN_STACK", bytes);
     }
-    let status = assert_ok!(command.status());
+    let run = common::run_child(command, CHILD_TIMEOUT);
     Outcome {
-        exited_normally: status.success(),
+        exited_normally: run.success,
+        stderr: run.stderr,
         recorded: std::fs::read_to_string(&out).unwrap_or_default(),
     }
 }
@@ -83,7 +89,7 @@ const A_QUARTER_OF_THE_DEFAULT_WORKER_STACK: &str = "524288";
 #[test]
 fn nesting_just_under_the_layout_cap_compiles() {
     let o = nest_in_child(LARGEST_DEPTH_UNDER_LAYOUT_CAP, None);
-    assert!(o.exited_normally);
+    assert!(o.exited_normally, "{}", o.stderr);
     assert_eq!(o.recorded, "compiled");
 }
 
@@ -93,7 +99,11 @@ fn nesting_just_under_the_cap_survives_quarter_size_worker_stacks() {
         LARGEST_DEPTH_UNDER_LAYOUT_CAP,
         Some(A_QUARTER_OF_THE_DEFAULT_WORKER_STACK),
     );
-    assert!(o.exited_normally, "the child crashed with a small worker stack");
+    assert!(
+        o.exited_normally,
+        "the child crashed with a small worker stack:\n{}",
+        o.stderr
+    );
     assert_eq!(o.recorded, "compiled");
 }
 
@@ -101,7 +111,7 @@ fn nesting_just_under_the_cap_survives_quarter_size_worker_stacks() {
 fn nesting_beyond_the_layout_cap_is_a_diagnostic_not_a_crash() {
     for depth in [LARGEST_DEPTH_UNDER_LAYOUT_CAP + 2, 100] {
         let o = nest_in_child(depth, None);
-        assert!(o.exited_normally, "depth {depth} crashed the child");
+        assert!(o.exited_normally, "depth {depth} crashed the child:\n{}", o.stderr);
         assert_eq!(o.recorded, "diagnostic: maximum layout depth exceeded", "depth {depth}");
     }
 }
@@ -109,6 +119,6 @@ fn nesting_beyond_the_layout_cap_is_a_diagnostic_not_a_crash() {
 #[test]
 fn nesting_beyond_the_parse_cap_is_a_diagnostic_not_a_crash() {
     let o = nest_in_child(1000, None);
-    assert!(o.exited_normally);
+    assert!(o.exited_normally, "{}", o.stderr);
     assert_eq!(o.recorded, "diagnostic: maximum parsing depth exceeded");
 }

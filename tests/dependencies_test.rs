@@ -51,3 +51,36 @@ fn no_network_stack_in_dependency_tree() {
         .collect();
     assert!(present.is_empty(), "network crates in Cargo.lock: {present:?}");
 }
+
+/// `(name, version)` of every package in `Cargo.lock`.
+fn locked_packages() -> Vec<(String, String)> {
+    let lock = read_project_file("Cargo.lock");
+    let mut packages = Vec::new();
+    let mut name: Option<String> = None;
+    for line in lock.lines() {
+        if let Some(n) = line.strip_prefix("name = \"") {
+            name = n.strip_suffix('"').map(str::to_string);
+        } else if let (Some(v), Some(n)) = (line.strip_prefix("version = \""), name.take()) {
+            packages.push((n, v.trim_end_matches('"').to_string()));
+        }
+    }
+    packages
+}
+
+#[test]
+fn every_typst_crate_in_the_lock_file_is_the_pinned_version() {
+    let typst: Vec<_> = locked_packages()
+        .into_iter()
+        .filter(|(n, _)| n == "typst" || n.starts_with("typst-"))
+        .collect();
+    assert!(typst.len() >= 8, "expected the whole Typst family, found {typst:?}");
+    let off: Vec<_> = typst.iter().filter(|(_, v)| v != "0.15.1").collect();
+    assert!(off.is_empty(), "Typst crates not at 0.15.1: {off:?}");
+}
+
+#[test]
+fn the_pdf_writer_is_the_version_the_output_was_verified_with() {
+    // krilla writes the PDF bytes; a bump can change them, so it moves only with a deliberate decision.
+    let krilla: Vec<_> = locked_packages().into_iter().filter(|(n, _)| n == "krilla").collect();
+    assert_eq!(krilla, [("krilla".to_string(), "0.8.2".to_string())]);
+}
