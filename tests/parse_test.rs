@@ -2,9 +2,10 @@
 //! ABOUTME: Per-convention and per-code unit tests live beside the code in `src/markdown`.
 
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 use std::{env, fs, thread};
 
-use claims::{assert_ok, assert_some};
+use claims::{assert_none, assert_ok, assert_some};
 use insta::assert_json_snapshot;
 use pretty_assertions::assert_eq;
 use proptest::prelude::*;
@@ -12,6 +13,9 @@ use resume::diagnostics::{Category, Diagnostic, DiagnosticCode, Edit, Severity};
 use resume::markdown::{MAX_INPUT_BYTES, Parsed, parse};
 use serde::Serialize;
 use strum::IntoEnumIterator;
+
+mod common;
+use common::{apply_edits, edits_of, subject_matches};
 
 fn fixture_path(name: &str) -> PathBuf {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -90,21 +94,6 @@ fn views(text: &str, diagnostics: &[Diagnostic]) -> Vec<View> {
         .collect()
 }
 
-/// Applies non-overlapping edits from the end of the text backwards, so earlier offsets stay valid.
-fn apply_edits(text: &str, edits: &[&Edit]) -> String {
-    let mut sorted = edits.to_vec();
-    sorted.sort_by_key(|e| std::cmp::Reverse(e.range.start));
-    let mut out = text.to_string();
-    for edit in sorted {
-        out.replace_range(edit.range.clone(), &edit.replacement);
-    }
-    out
-}
-
-fn edits_of(diagnostics: &[Diagnostic]) -> Vec<&Edit> {
-    diagnostics.iter().filter_map(|d| d.fix.as_ref()).collect()
-}
-
 fn to_crlf(text: &str) -> String {
     text.replace('\n', "\r\n")
 }
@@ -148,7 +137,7 @@ fn error_fixtures_block_the_build_and_warning_fixtures_do_not() {
         let (_, parsed) = parse_fixture(name);
         if name.starts_with("errors-") {
             assert!(parsed.has_errors(), "{name}");
-            assert!(parsed.valid().is_none(), "{name}");
+            assert_none!(parsed.valid(), "{name}");
         } else {
             assert!(!parsed.has_errors(), "{name}: {:#?}", parsed.diagnostics());
             assert_some!(parsed.valid(), "{name}");
@@ -170,6 +159,22 @@ fn every_finding_is_located_hinted_and_in_bounds() {
             assert!(text.is_char_boundary(span.range.start) && text.is_char_boundary(span.range.end));
             assert_eq!(span.file, fixture_path(name));
             assert!(!d.hints.is_empty(), "{name}: {} has no hint", d.code);
+        }
+    }
+}
+
+#[test]
+fn every_finding_quotes_what_its_code_names() {
+    for name in FINDING_FIXTURES {
+        let (text, parsed) = parse_fixture(name);
+        for d in parsed.diagnostics() {
+            let range = assert_some!(d.span.as_ref()).range.clone();
+            assert!(
+                subject_matches(d.code, &text[range.clone()]),
+                "{name}: {} quotes {:?}",
+                d.code,
+                &text[range]
+            );
         }
     }
 }
@@ -327,6 +332,23 @@ fn bom_is_ignored_for_the_model_and_spans_shift() {
 // ---------------------------------------------------------------------------------------------
 
 const TOKENS: &[&str] = &[
+    ":",
+    "Label",
+    "**Label**:",
+    "<!-->",
+    "<!--->",
+    "###Acme",
+    "\\·",
+    "&ndash;",
+    "Aug",
+    "Spring",
+    "![img](a.png)",
+    "\u{ff65}",
+    " – ",
+    "2015 – 2017",
+    "\n- ",
+    "\n### ",
+    "Present – 2019",
     "# ",
     "## ",
     "### ",
@@ -416,6 +438,12 @@ fn check_invariants(text: &str, parsed: &Parsed) -> Result<(), TestCaseError> {
             d.code
         );
         prop_assert!(!d.hints.is_empty(), "{} has no hint", d.code);
+        prop_assert!(
+            subject_matches(d.code, &text[span.range.clone()]),
+            "{} quotes {:?}",
+            d.code,
+            &text[span.range.clone()]
+        );
         if let Some(edit) = &d.fix {
             prop_assert!(edit.range.end <= text.len(), "{}: {:?}", d.code, edit.range);
             prop_assert!(text.is_char_boundary(edit.range.start) && text.is_char_boundary(edit.range.end));
@@ -528,6 +556,7 @@ fn pathological_inputs() -> Vec<(&'static str, String)> {
                     .collect::<String>(),
             ),
         ),
+        ("comment blocks", line(&"<!--x-->\n\n".repeat(90_000))),
         ("unclosed comment", line(&format!("<!--{}", "x".repeat(500 * 1024)))),
         (
             "huge role line",
@@ -555,6 +584,34 @@ fn pathological_inputs_do_not_overflow_a_small_stack() {
     }
 }
 
+/// Parses `text` and fails if it takes longer than `limit`, so a quadratic regression fails crisply.
+fn assert_parses_within(name: &str, text: &str, limit: Duration) {
+    let started = Instant::now();
+    let parsed = parse("r.md", text);
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < limit,
+        "{name}: parsing {} bytes took {elapsed:?} (limit {limit:?})",
+        text.len()
+    );
+    assert!(parsed.diagnostics().len() <= 501, "{name}: diagnostics are capped");
+}
+
+#[test]
+fn many_html_blocks_parse_in_linear_time() {
+    // A run of comment blocks was quadratic: every block rescanned all the blocks after it.
+    let head = "# Ada\n\nHere\n\n## S\n\n";
+    for (name, block) in [
+        ("comment blocks", "<!--x-->\n\n"),
+        ("empty comments", "<!-->\n\n"),
+        ("page breaks", "<div class=\"page-break\"></div>\n\n"),
+        ("unsupported html", "<div>x</div>\n\n"),
+    ] {
+        let text = format!("{head}{}", block.repeat(20_000));
+        assert_parses_within(name, &text, Duration::from_secs(5));
+    }
+}
+
 #[test]
 fn nesting_beyond_the_cap_is_reported_not_crashed_on() {
     let delimiter = |i: usize| if i.is_multiple_of(2) { "*" } else { "_" };
@@ -577,7 +634,7 @@ fn oversized_input_is_one_error_and_no_model() {
     assert_eq!(parsed.diagnostics().len(), 1);
     assert_eq!(parsed.diagnostics()[0].code, DiagnosticCode::InputLimit);
     assert_eq!(parsed.diagnostics()[0].severity, Severity::Error);
-    assert!(parsed.best_effort().is_none());
+    assert_none!(parsed.best_effort());
 }
 
 // ---------------------------------------------------------------------------------------------

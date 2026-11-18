@@ -95,11 +95,67 @@ expression: "views(&text, parsed.diagnostics())"
     "fix": null
   },
   {
+    "code": "era-shape",
+    "severity": "error",
+    "range": [
+      469,
+      493
+    ],
+    "source": "**Platform *x* · 2016**",
+    "message": "era lines must be plain text",
+    "hints": [
+      "write it without italics, links, or code: `**Era name · 2020 – 2023**`"
+    ],
+    "fix": null
+  },
+  {
+    "code": "era-shape",
+    "severity": "error",
+    "range": [
+      495,
+      528
+    ],
+    "source": "**Class of 2010 | 2016 – 2017**",
+    "message": "era parts must be separated by ` · `",
+    "hints": [
+      "write `**Era name · 2020 – 2023**`; the name contains a year, so no automatic fix is offered"
+    ],
+    "fix": null
+  },
+  {
+    "code": "era-shape",
+    "severity": "error",
+    "range": [
+      530,
+      546
+    ],
+    "source": "**Award - 2019**",
+    "message": "era parts must be separated by ` · `, not `-`",
+    "hints": [
+      "if this is an era, write `**Award · 2019**`; a hyphen can also be ordinary bold text, so no automatic fix is offered"
+    ],
+    "fix": null
+  },
+  {
+    "code": "era-shape",
+    "severity": "error",
+    "range": [
+      548,
+      567
+    ],
+    "source": "**| 2020 – 2021**",
+    "message": "the era name is empty",
+    "hints": [
+      "write `**Era name · 2020 – 2023**`"
+    ],
+    "fix": null
+  },
+  {
     "code": "era-outside-role",
     "severity": "error",
     "range": [
-      479,
-      507
+      579,
+      607
     ],
     "source": "**Outside · 2015 – 2016**",
     "message": "an era line must be inside a role",

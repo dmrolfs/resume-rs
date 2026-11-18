@@ -35,11 +35,20 @@ Builds mechanical computers for scientific customers.
 
 Closing remarks about the role.
 
+**Infrastructure ·
+2022 – 2023**
+
+- Kept the engine running.
+
 ### Babbage & Co · Fall 2012 – Sept 2017
 
 - Calculated tables.
 
 <!-- A comment between blocks is dropped. -->
+
+<!-->
+
+<!--->
 
 <div class="page-break"></div>
 

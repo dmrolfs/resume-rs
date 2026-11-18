@@ -16,4 +16,6 @@ Some <b>inline</b> markup.
 <div class="page-break"></div>
 swallowed line
 
+A stray <!-- opener in text.
+
 Text after.

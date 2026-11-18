@@ -188,6 +188,15 @@ impl DiagnosticCode {
                 fix: "Write the heading text, or remove the heading.",
                 example: Some(("##", "## Experience")),
             }),
+            HeadingMarkerSpacing => Some(&Advice {
+                summary: "A line starts with `#` but has no space after it, so it is text, not a heading.",
+                why: "Project convention: Markdown needs a space after the `#` markers (`### Acme`); without one the hashes are printed and the line does not start a role or section.",
+                fix: "Add a space after the `#` markers, or remove them if the line is meant to be text.",
+                example: Some((
+                    "###Acme · Staff Engineer · 2019 – 2023",
+                    "### Acme · Staff Engineer · 2019 – 2023",
+                )),
+            }),
             InputLimit => Some(&Advice {
                 summary: "The input exceeds a size or nesting limit.",
                 why: "Project convention: limits protect the tool from pathological files: 1 MiB of Markdown, 8 levels of nested emphasis or lists, and 500 findings.",
@@ -223,7 +232,6 @@ mod tests {
     use crate::diagnostics::Category;
 
     const BOOK: &str = "The Tech Resume Inside Out";
-
     use claims::assert_some;
     use strum::IntoEnumIterator;
 

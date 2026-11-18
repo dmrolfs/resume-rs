@@ -31,9 +31,23 @@ pub(crate) fn link_url(dest: &str, email: bool) -> Result<LinkUrl, LinkProblem> 
     LinkUrl::try_new(url).map_err(|_| LinkProblem::Scheme(scheme))
 }
 
-/// Converts an inline run; adjacent text is merged and breaks become spaces.
+/// Where an inline run sits; decides which lints and Edits apply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Run {
+    /// Inside emphasis, strong, or a link.
+    Nested,
+    /// The top level of a paragraph, blurb, or contact line.
+    Paragraph,
+    /// The top level of a bullet, where a leading bold run may be a label.
+    Bullet,
+}
+
+/// Converts the top level of a paragraph, blurb, or contact line.
+///
+/// Adjacent text is merged, breaks become spaces, and the spaces that dropped comments or images
+/// leave at the edges and joins are removed.
 pub(crate) fn convert(nodes: &[InlineNode], src: &Source<'_>, sink: &mut Sink<'_>) -> Vec<Inline> {
-    convert_run(nodes, true, src, sink)
+    convert_run(nodes, Run::Paragraph, src, sink)
 }
 
 /// Splits a leading `**Label:**` from a bullet's nodes and converts both parts.
@@ -44,17 +58,37 @@ pub(crate) fn label_and_content(
     src: &Source<'_>,
     sink: &mut Sink<'_>,
 ) -> (Option<Vec<Inline>>, Vec<Inline>) {
-    let Some((children, rest)) = split_label(nodes) else {
-        return (None, convert(nodes, src, sink));
+    let label_children = split_label(nodes).filter(|(children, _)| !label_is_empty(children));
+    let Some((children, rest)) = label_children else {
+        return (None, convert_run(nodes, Run::Bullet, src, sink));
     };
-    let mut label = convert_run(children, false, src, sink);
+    let mut label = convert_run(children, Run::Nested, src, sink);
     strip_trailing_colon(&mut label);
-    if label.is_empty() {
-        return (None, convert(nodes, src, sink));
-    }
-    let mut content = convert(rest, src, sink);
-    trim_leading_space(&mut content);
-    (Some(label), content)
+    let content = convert_run(rest, Run::Paragraph, src, sink);
+    ((!label.is_empty()).then_some(label), content)
+}
+
+/// True when a label's text is only colons and whitespace, so the bold run is not a label at all.
+///
+/// Decided from the text alone, so the children are converted (and their findings reported) once.
+fn label_is_empty(children: &[InlineNode]) -> bool {
+    flatten_text(children).trim_end_matches(':').trim().is_empty()
+}
+
+/// All visible text of `nodes`, with markup removed; comments, images, and raw HTML contribute nothing.
+pub(crate) fn flatten_text(nodes: &[InlineNode]) -> String {
+    nodes
+        .iter()
+        .map(|node| match node {
+            InlineNode::Text(text) => text.text.clone(),
+            InlineNode::Code { text, .. } => text.clone(),
+            InlineNode::Strong { children, .. }
+            | InlineNode::Emph { children, .. }
+            | InlineNode::Link { children, .. } => flatten_text(children),
+            InlineNode::Break { .. } => " ".to_string(),
+            InlineNode::Html { .. } | InlineNode::Image { .. } | InlineNode::Unsupported { .. } => String::new(),
+        })
+        .collect()
 }
 
 /// The children of a leading bold run whose text ends in a colon, and the nodes after it.
@@ -77,26 +111,20 @@ fn strip_trailing_colon(label: &mut Vec<Inline>) {
     }
 }
 
-fn trim_leading_space(content: &mut Vec<Inline>) {
-    if let Some(Inline::Text { text }) = content.first_mut() {
-        *text = text.trim_start().to_string();
-        if text.is_empty() {
-            content.remove(0);
-        }
-    }
-}
-
 /// Plain text of heading or era content, joined across inline comments; `None` if it has any markup.
+///
+/// A soft line break reads as a space, so an era line wrapped over two lines is still one line.
 pub(crate) fn plain_text(nodes: &[InlineNode]) -> Option<TextNode> {
-    let mut texts = Vec::new();
+    let mut joined = TextNode::default();
     for node in nodes {
         match node {
-            InlineNode::Text(text) => texts.push(text),
+            InlineNode::Text(text) => joined = TextNode::concat([&joined, text]),
+            InlineNode::Break { range, hard: false } => joined.push(" ", range.clone(), false),
             InlineNode::Html { text, .. } if is_comment(text) => {}
             _ => return None,
         }
     }
-    Some(TextNode::concat(texts))
+    Some(joined)
 }
 
 /// True for a complete inline HTML comment.
@@ -109,7 +137,6 @@ pub(crate) fn is_blank(node: &InlineNode) -> bool {
     match node {
         InlineNode::Text(text) => text.text.trim().is_empty(),
         InlineNode::Html { text, .. } => is_comment(text),
-        InlineNode::Break { .. } => true,
         _ => false,
     }
 }
@@ -123,12 +150,19 @@ fn is_sole_strong(nodes: &[InlineNode]) -> bool {
     )
 }
 
-fn convert_run(nodes: &[InlineNode], top: bool, src: &Source<'_>, sink: &mut Sink<'_>) -> Vec<Inline> {
-    let sole = top && is_sole_strong(nodes);
+fn convert_run(nodes: &[InlineNode], run: Run, src: &Source<'_>, sink: &mut Sink<'_>) -> Vec<Inline> {
+    let sole = run != Run::Nested && is_sole_strong(nodes);
     let mut out = Vec::new();
     for (index, node) in nodes.iter().enumerate() {
-        let next = nodes.get(index + 1);
-        convert_node(node, Context { sole, next }, src, sink, &mut out);
+        let ctx = Context {
+            sole,
+            next: nodes.get(index + 1),
+            label_position: run == Run::Bullet && index == 0,
+        };
+        convert_node(node, ctx, src, sink, &mut out);
+    }
+    if run != Run::Nested {
+        trim_edges(&mut out);
     }
     out
 }
@@ -138,22 +172,48 @@ struct Context<'n> {
     /// This node is the only visible content of its paragraph or bullet.
     sole: bool,
     next: Option<&'n InlineNode>,
+    /// This node starts a bullet, the only place `**Label**:` can be fixed by moving the colon.
+    label_position: bool,
+}
+
+/// Removes the spaces that dropped comments or images leave at the start and end of a run.
+fn trim_edges(out: &mut Vec<Inline>) {
+    if let Some(Inline::Text { text }) = out.first_mut() {
+        *text = text.trim_start().to_string();
+        if text.is_empty() {
+            out.remove(0);
+        }
+    }
+    if let Some(Inline::Text { text }) = out.last_mut() {
+        *text = text.trim_end().to_string();
+        if text.is_empty() {
+            out.pop();
+        }
+    }
 }
 
 fn convert_node(node: &InlineNode, ctx: Context<'_>, src: &Source<'_>, sink: &mut Sink<'_>, out: &mut Vec<Inline>) {
     match node {
-        InlineNode::Text(text) => push_text(out, &text.text),
+        InlineNode::Text(text) => {
+            report_unclosed_comment(text, src, sink);
+            push_text(out, &text.text);
+        }
         InlineNode::Strong { range, children } => {
             if !ctx.sole {
-                lint::mid_sentence_bold(range.clone(), colon_fix(range, ctx.next, src), sink);
+                let edit = if ctx.label_position {
+                    colon_fix(range, ctx.next, src)
+                } else {
+                    None
+                };
+                lint::mid_sentence_bold(range.clone(), edit, sink);
             }
-            let content = convert_run(children, false, src, sink);
+            let content = convert_run(children, Run::Nested, src, sink);
             if !content.is_empty() {
                 out.push(Inline::Strong { content });
             }
         }
         InlineNode::Emph { children, .. } => {
-            let content = convert_run(children, false, src, sink);
+            let content = convert_run(children, Run::Nested, src, sink);
             if !content.is_empty() {
                 out.push(Inline::Emph { content });
             }
@@ -197,7 +257,7 @@ fn convert_link(
     sink: &mut Sink<'_>,
     out: &mut Vec<Inline>,
 ) {
-    let content = convert_run(children, false, src, sink);
+    let content = convert_run(children, Run::Nested, src, sink);
     let visible = content
         .iter()
         .any(|inline| !matches!(inline, Inline::Text { text } if text.trim().is_empty()));
@@ -242,6 +302,23 @@ fn link_finding(range: &Range<usize>, dest: &str, problem: &LinkProblem) -> Find
     }
 }
 
+/// A `<!--` in text never closed (a closed one is an inline HTML node), so everything after it would
+/// print on the resume, with `--` turned into an en dash.
+fn report_unclosed_comment(text: &TextNode, src: &Source<'_>, sink: &mut Sink<'_>) {
+    let range = text.range();
+    let Some(at) = src.slice(&range).find("<!--") else {
+        return;
+    };
+    let start = range.start + at;
+    let finding = Finding::new(
+        DiagnosticCode::UnsupportedHtml,
+        start..start + 4,
+        "the comment is never closed, so its text would print on the resume",
+    )
+    .hint("end the comment with `-->`, or remove the `<!--`");
+    sink.report(finding);
+}
+
 fn report_inline_html(range: &Range<usize>, html: &str, sink: &mut Sink<'_>) {
     let finding = Finding::new(DiagnosticCode::UnsupportedHtml, range.clone(), format!("raw HTML `{html}` can't be typeset"))
         .hint("use Markdown (**bold**, *italic*, [links](https://example.com)); only comments and the page-break marker are allowed");
@@ -269,17 +346,24 @@ fn report_hard_break(range: &Range<usize>, src: &Source<'_>, sink: &mut Sink<'_>
     sink.report(finding);
 }
 
-/// For `**Label**: text`, the edit that moves the colon inside the bold: `**Label:** text`.
+/// For a leading `**Label**: text`, the edit that moves the colon inside the bold: `**Label:** text`.
 fn colon_fix(strong: &Range<usize>, next: Option<&InlineNode>, src: &Source<'_>) -> Option<Edit> {
     let Some(InlineNode::Text(text)) = next else {
         return None;
     };
-    if !text.text.starts_with(':') || strong.len() < 4 {
+    if !text.text.starts_with(':') {
         return None;
     }
+    // The colon must be a literal `:` in the source (not an entity such as `&#58;`) right after the
+    // closing delimiter, which is the last two bytes of a bold span.
     let colon = strong.end..strong.end + 1;
-    let delimiter = strong.end - 2..strong.end;
-    if src.slice(&colon) != ":" || !matches!(src.slice(&delimiter), "**" | "__") {
+    let delimiter = strong.end.checked_sub(2)?..strong.end;
+    if src.slice(&colon) != ":" {
+        return None;
+    }
+    // After the Edit the closing delimiter follows a colon, so CommonMark only closes the bold if
+    // whitespace (or the end of the text) comes next; `**Label:**text` would not close.
+    if !src.text[colon.end..].chars().next().is_none_or(char::is_whitespace) {
         return None;
     }
     Some(Edit {
@@ -300,9 +384,16 @@ pub(crate) fn append_with_space(out: &mut Vec<Inline>, more: Vec<Inline>) {
 }
 
 /// Appends text, merging with a preceding text run.
+///
+/// Two text runs only meet when a node between them was dropped (a comment or an image), so the
+/// space on both sides of the gap becomes one. Spacing inside a single run is the author's.
 fn push_text(out: &mut Vec<Inline>, text: &str) {
     if let Some(Inline::Text { text: last }) = out.last_mut() {
-        last.push_str(text);
+        last.push_str(if last.ends_with(' ') {
+            text.trim_start_matches(' ')
+        } else {
+            text
+        });
     } else {
         out.push(Inline::Text { text: text.to_string() });
     }
@@ -312,8 +403,9 @@ fn push_text(out: &mut Vec<Inline>, text: &str) {
 mod tests {
     use super::*;
     use crate::diagnostics::Diagnostic;
+    use crate::markdown::testutil::codes;
     use crate::markdown::tree::{self, BlockNode};
-    use claims::assert_some;
+    use claims::{assert_none, assert_ok, assert_some};
     use pretty_assertions::assert_eq;
     use serde_json::{Value, json};
     use std::path::Path;
@@ -336,10 +428,6 @@ mod tests {
         run(markdown, |nodes, src, sink| {
             serde_json::to_value(convert(nodes, src, sink)).unwrap_or(Value::Null)
         })
-    }
-
-    fn codes(diagnostics: &[Diagnostic]) -> Vec<DiagnosticCode> {
-        diagnostics.iter().map(|d| d.code).collect()
     }
 
     #[test]
@@ -415,14 +503,14 @@ mod tests {
     #[test]
     fn inline_comment_is_dropped() {
         let (value, diagnostics) = converted("a <!-- note --> b");
-        assert_eq!(value, json!([{"kind": "text", "text": "a  b"}]));
+        assert_eq!(value, json!([{"kind": "text", "text": "a b"}]));
         assert_eq!(diagnostics, vec![]);
     }
 
     #[test]
     fn image_warns_and_is_dropped() {
         let (value, diagnostics) = converted("see ![photo](me.png) here");
-        assert_eq!(value, json!([{"kind": "text", "text": "see  here"}]));
+        assert_eq!(value, json!([{"kind": "text", "text": "see here"}]));
         assert_eq!(codes(&diagnostics), vec![DiagnosticCode::Image]);
     }
 
@@ -497,7 +585,7 @@ mod tests {
     fn empty_link_text_is_invalid_link() {
         let (value, diagnostics) = converted("a [](https://example.com) b");
         assert_eq!(codes(&diagnostics), vec![DiagnosticCode::InvalidLink]);
-        assert_eq!(value, json!([{"kind": "text", "text": "a  b"}]));
+        assert_eq!(value, json!([{"kind": "text", "text": "a b"}]));
     }
 
     #[test]
@@ -532,9 +620,16 @@ mod tests {
         assert_eq!(codes(&diagnostics), vec![DiagnosticCode::MidSentenceBold]);
     }
 
+    fn bullet(markdown: &str) -> (Value, Vec<Diagnostic>) {
+        run(markdown, |nodes, src, sink| {
+            let (label, content) = label_and_content(nodes, src, sink);
+            json!({"label": label, "content": content})
+        })
+    }
+
     #[test]
     fn label_colon_outside_bold_warns_with_edit() {
-        let (_, diagnostics) = converted("**Languages**: Rust");
+        let (_, diagnostics) = bullet("**Languages**: Rust");
         assert_eq!(codes(&diagnostics), vec![DiagnosticCode::MidSentenceBold]);
         let fix = assert_some!(diagnostics[0].fix.as_ref());
         let mut fixed = "**Languages**: Rust".to_string();
@@ -544,7 +639,7 @@ mod tests {
 
     #[test]
     fn underscore_bold_colon_outside_is_fixed_too() {
-        let (_, diagnostics) = converted("__Languages__: Rust");
+        let (_, diagnostics) = bullet("__Languages__: Rust");
         let fix = assert_some!(diagnostics[0].fix.as_ref());
         let mut fixed = "__Languages__: Rust".to_string();
         fixed.replace_range(fix.range.clone(), &fix.replacement);
@@ -599,13 +694,168 @@ mod tests {
             panic!("paragraph")
         };
         assert_eq!(assert_some!(plain_text(&first.content)).text, "A  B");
-        assert!(plain_text(&second.content).is_none());
+        assert_none!(plain_text(&second.content));
     }
 
     #[test]
     fn link_url_reports_the_scheme() {
         assert_eq!(link_url("ftp://x.y", false), Err(LinkProblem::Scheme("ftp".into())));
         assert!(matches!(link_url("nope", false), Err(LinkProblem::Invalid(_))));
-        assert!(link_url("a@b.co", true).is_ok());
+        assert_ok!(link_url("a@b.co", true));
+    }
+
+    #[test]
+    fn colon_edit_needs_whitespace_after_the_colon() {
+        // `**Label:**text` would not close the bold (the closing `**` is not right-flanking).
+        let (_, diagnostics) = bullet("**Label**:text here");
+        assert_eq!(codes(&diagnostics), vec![DiagnosticCode::MidSentenceBold]);
+        assert_eq!(diagnostics[0].fix, None);
+        let (_, diagnostics) = bullet("**Label**:");
+        assert_some!(diagnostics[0].fix.as_ref(), "a colon at the end of the line is fine");
+    }
+
+    #[test]
+    fn colon_edit_is_only_offered_at_label_position() {
+        for markdown in ["Use **Rust**: fast", "a **B**: c"] {
+            let (_, diagnostics) = bullet(markdown);
+            assert_eq!(diagnostics[0].fix, None, "{markdown}");
+        }
+        // A paragraph, a blurb, or the contact line is not a label position.
+        let (_, diagnostics) = converted("**Email**: a@b.co");
+        assert_eq!(codes(&diagnostics), vec![DiagnosticCode::MidSentenceBold]);
+        assert_eq!(diagnostics[0].fix, None);
+    }
+
+    #[test]
+    fn only_the_leading_bold_of_a_bullet_gets_the_colon_edit() {
+        let (_, diagnostics) = bullet("**L**: a **M**: b");
+        assert_eq!(diagnostics.len(), 2);
+        assert_some!(diagnostics[0].fix.as_ref());
+        assert_eq!(diagnostics[1].fix, None);
+    }
+
+    #[test]
+    fn unclosed_inline_comment_is_unsupported_html() {
+        let (_, diagnostics) = converted("Text <!-- more");
+        assert_eq!(codes(&diagnostics), vec![DiagnosticCode::UnsupportedHtml]);
+        assert_eq!(assert_some!(diagnostics[0].span.as_ref()).range, 5..9);
+        assert!(
+            diagnostics[0].message.contains("never closed"),
+            "{}",
+            diagnostics[0].message
+        );
+        let (_, diagnostics) = converted("`<!--` in code and <!-- closed --> are fine");
+        assert_eq!(diagnostics, vec![]);
+    }
+
+    #[test]
+    fn dropped_nodes_do_not_leave_stray_spaces() {
+        let (value, _) = converted("![me](me.png) Seattle");
+        assert_eq!(value, json!([{"kind": "text", "text": "Seattle"}]));
+        let (value, _) = converted("**Bold** <!-- c -->");
+        assert_eq!(
+            value,
+            json!([{"kind": "strong", "content": [{"kind": "text", "text": "Bold"}]}])
+        );
+        let (value, _) = converted("a <!-- one --> <!-- two --> b");
+        assert_eq!(value, json!([{"kind": "text", "text": "a b"}]));
+    }
+
+    #[test]
+    fn authored_inner_spacing_is_kept() {
+        let (value, _) = converted("a  b");
+        assert_eq!(value, json!([{"kind": "text", "text": "a  b"}]));
+    }
+
+    #[test]
+    fn empty_label_reports_findings_once() {
+        let (value, diagnostics) = bullet("**![i](a.png):** text");
+        let images = diagnostics.iter().filter(|d| d.code == DiagnosticCode::Image).count();
+        assert_eq!(images, 1, "{diagnostics:?}");
+        assert_eq!(value["label"], Value::Null);
+        let kept = value["content"].to_string();
+        assert!(
+            kept.contains(":") && kept.contains("text"),
+            "the bold text is kept, not dropped: {kept}"
+        );
+    }
+
+    #[test]
+    fn a_label_may_be_only_a_link() {
+        let (value, diagnostics) = bullet("**[Acme](https://acme.co):** led it");
+        assert_eq!(value["label"][0]["kind"], json!("link"));
+        assert_eq!(
+            value["label"].as_array().map(Vec::len),
+            Some(1),
+            "the colon is not a label of its own"
+        );
+        assert_eq!(value["content"], json!([{"kind": "text", "text": "led it"}]));
+        assert_eq!(diagnostics, vec![]);
+    }
+
+    #[test]
+    fn a_dropped_image_before_bold_leaves_no_leading_space() {
+        let (value, _) = converted("![i](a.png) **Bold**");
+        assert_eq!(
+            value,
+            json!([{"kind": "strong", "content": [{"kind": "text", "text": "Bold"}]}])
+        );
+    }
+
+    #[test]
+    fn an_invalid_link_keeps_its_formatted_content() {
+        let (value, diagnostics) = converted("[**x**](ftp://a.b)");
+        assert!(
+            codes(&diagnostics).contains(&DiagnosticCode::UnsupportedLink),
+            "{diagnostics:?}"
+        );
+        assert_eq!(
+            value,
+            json!([{"kind": "strong", "content": [{"kind": "text", "text": "x"}]}])
+        );
+    }
+
+    #[test]
+    fn colon_edit_is_withheld_when_the_delimiters_are_not_a_plain_pair() {
+        for markdown in ["***Label***: x", "**Label** : x", "**Label**; x"] {
+            let (_, diagnostics) = bullet(markdown);
+            assert!(
+                !diagnostics.is_empty(),
+                "{markdown}: bold followed by text is a finding"
+            );
+            assert_eq!(diagnostics[0].fix, None, "{markdown}");
+        }
+    }
+
+    #[test]
+    fn a_bold_colon_alone_is_not_a_label() {
+        let (value, diagnostics) = bullet("**:** text");
+        assert_eq!(value["label"], Value::Null);
+        assert_eq!(codes(&diagnostics), vec![DiagnosticCode::MidSentenceBold]);
+        assert_eq!(value["content"][0]["kind"], json!("strong"));
+    }
+
+    #[test]
+    fn a_bold_run_followed_only_by_a_comment_is_still_the_whole_paragraph() {
+        let (_, diagnostics) = converted("**Bold** <!-- note -->");
+        assert_eq!(diagnostics, vec![]);
+    }
+
+    #[test]
+    fn colon_edit_needs_a_literal_colon() {
+        // `&#58;` decodes to a colon, but the source bytes after the bold are not `:`.
+        let (_, diagnostics) = bullet("**Label**&#58; text");
+        assert_eq!(codes(&diagnostics), vec![DiagnosticCode::MidSentenceBold]);
+        assert_eq!(diagnostics[0].fix, None);
+    }
+
+    #[test]
+    fn a_comment_needs_both_ends() {
+        for complete in ["<!-- x -->", "<!-->", "<!--->", "<!---->"] {
+            assert!(is_comment(complete), "{complete}");
+        }
+        for other in ["<!-- x", "x -->", "<b>", "-->", "<!-"] {
+            assert!(!is_comment(other), "{other}");
+        }
     }
 }

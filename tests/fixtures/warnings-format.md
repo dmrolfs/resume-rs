@@ -14,8 +14,12 @@ London, UK · 206-555-0100 · ada@example.com · [LinkedIn](https://l.in/ada) ·
   - Nested bullet two
 - Shipped **fast** and well
 - **Languages**: Rust
+- **Notes**:no space after the colon
+- Use **Rust**: bold in the middle
 
 ![A photo](me.png)
+
+###Acme · Eng · 2019 – 2021
 
 ### New Co · Engineer · 2018 – 2020
 

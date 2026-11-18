@@ -3,6 +3,7 @@
 
 use std::ops::Range;
 
+use super::inline;
 use super::tree::{InlineNode, ListNode};
 use super::{Finding, Sink};
 use crate::diagnostics::{DiagnosticCode, Edit};
@@ -115,8 +116,8 @@ fn count_contact_items(nodes: &[InlineNode]) -> usize {
                     in_item = !piece.trim().is_empty();
                 }
             }
-            InlineNode::Break { .. } => {}
-            InlineNode::Html { text, .. } if text.starts_with("<!--") => {}
+            // A dropped comment is not part of any item; everything else (a link, bold, a tag) is.
+            other if inline::is_blank(other) => {}
             _ => in_item = true,
         }
     }
@@ -127,16 +128,13 @@ fn count_contact_items(nodes: &[InlineNode]) -> usize {
 mod tests {
     use super::*;
     use crate::diagnostics::Diagnostic;
+    use crate::markdown::testutil::year;
     use crate::markdown::tree::{self, BlockNode};
-    use crate::model::{PartialDate, Season, Year};
+    use crate::model::{PartialDate, Season};
     use claims::assert_some;
     use pretty_assertions::assert_eq;
     use std::path::Path;
     use time::Month;
-
-    fn year(y: u16) -> Year {
-        assert_some!(Year::try_new(y).ok())
-    }
 
     fn month_end(y: u16, m: Month) -> PeriodEnd {
         PeriodEnd::Date(PartialDate::Month {
@@ -338,5 +336,15 @@ mod tests {
     fn trailing_and_leading_separators_do_not_create_items() {
         let line = "· A · B · C · D ·";
         assert_eq!(contact_diagnostics(line), vec![]);
+    }
+
+    #[test]
+    fn a_comment_in_the_contact_line_is_not_an_item() {
+        assert_eq!(contact_diagnostics("A · <!-- c --> · B · C · D"), vec![]);
+    }
+
+    #[test]
+    fn a_tag_in_the_contact_line_is_an_item() {
+        assert_eq!(contact_diagnostics("A · B · C · <br> · D").len(), 1);
     }
 }

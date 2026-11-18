@@ -6,7 +6,7 @@ use std::ops::Range;
 use super::inline;
 use super::period::{self, PeriodProblem, contains_year};
 use super::tree::{HeadingNode, InlineNode, ParagraphNode, TextNode};
-use super::{Finding, MAX_ROLE_LINE_BYTES, Sink, Source};
+use super::{Finding, MAX_ROLE_LINE_BYTES, Sink, Source, trim_range};
 use crate::diagnostics::DiagnosticCode;
 use crate::model::text::{CompanyError, EraNameError, TitleError};
 use crate::model::{Company, EraName, Period, Title};
@@ -15,8 +15,9 @@ use crate::model::{Company, EraName, Period, Title};
 const SEPARATOR: &str = " · ";
 /// Most separator candidates examined in one line; bounds recovery cost on pathological input.
 const MAX_CANDIDATES: usize = 16;
-/// Look-alike separators that are never part of a company, title, or era name.
-const STRAY: [char; 9] = ['|', '｜', '•', '∙', '⋅', '・', '‧', '\u{387}', '⸱'];
+/// Look-alike separators (a middle dot in any spacing, a pipe, bullet-like dots) that are never part of
+/// a company, title, or era name. One list serves both recovery and the stray-separator check.
+const LOOKALIKES: [char; 11] = ['·', '|', '｜', '•', '∙', '⋅', '・', '‧', '\u{387}', '⸱', '･'];
 
 /// A parsed `###` role line.
 #[derive(Debug)]
@@ -97,7 +98,7 @@ pub(crate) fn era_line(paragraph: &ParagraphNode, src: &Source<'_>, sink: &mut S
     };
     let has_trailing = visible.next().is_some();
     let Some(text) = inline::plain_text(children) else {
-        return EraCheck::NotEra;
+        return marked_up_era(children, range, sink);
     };
     let split = split_canonical(&text.text);
     let era_shaped = split.parts.len() == 2 && split.parts.last().is_some_and(|p| contains_year(&text.text[p.clone()]));
@@ -114,14 +115,40 @@ pub(crate) fn era_line(paragraph: &ParagraphNode, src: &Source<'_>, sink: &mut S
         }
         return build_era(&text, &split, range, src, sink);
     }
-    if split.parts.len() >= 2 {
+    // Bold text followed by prose (`**Python · Rust** are my favourite languages`) is not an era attempt.
+    if split.parts.len() >= 2 && !has_trailing {
         sink.report(era_shape_finding(&text.text, &split, range.clone()));
         return EraCheck::Malformed;
     }
     match recover(&text.text) {
         Some(recovery) => recovered_era(&text, &recovery, range, src, sink),
+        None if lookalike_before_period(&text.text) => {
+            let finding = Finding::new(
+                DiagnosticCode::EraShape,
+                range.clone(),
+                "era parts must be separated by ` · `",
+            )
+            .hint("write `**Era name · 2020 – 2023**`; the name contains a year, so no automatic fix is offered");
+            sink.report(finding);
+            EraCheck::Malformed
+        }
         None => EraCheck::NotEra,
     }
+}
+
+/// A bold span with markup, or wrapped over lines, that has the shape of an era line is an attempted
+/// era: say so instead of letting it become the role's description.
+fn marked_up_era(children: &[InlineNode], bold: &Range<usize>, sink: &mut Sink<'_>) -> EraCheck {
+    let flat = inline::flatten_text(children);
+    let split = split_canonical(&flat);
+    let era_shaped = split.parts.len() == 2 && split.parts.last().is_some_and(|p| contains_year(&flat[p.clone()]));
+    if !era_shaped {
+        return EraCheck::NotEra;
+    }
+    let finding = Finding::new(DiagnosticCode::EraShape, bold.clone(), "era lines must be plain text")
+        .hint("write it without italics, links, or code: `**Era name · 2020 – 2023**`");
+    sink.report(finding);
+    EraCheck::Malformed
 }
 
 /// Parts and separators of a line split on the canonical ` · `; ranges index the text.
@@ -144,13 +171,6 @@ fn split_canonical(text: &str) -> Split {
     Split { parts, seps }
 }
 
-fn trim_range(text: &str, range: Range<usize>) -> Range<usize> {
-    let slice = &text[range.clone()];
-    let start = range.start + (slice.len() - slice.trim_start().len());
-    let end = range.end - (slice.len() - slice.trim_end().len());
-    start..end.max(start)
-}
-
 /// True when no company or title part contains a look-alike separator and the dates parse.
 fn canonical_is_clean(text: &TextNode, split: &Split) -> bool {
     let (period, names) = split
@@ -162,7 +182,7 @@ fn canonical_is_clean(text: &TextNode, split: &Split) -> bool {
 }
 
 fn has_stray_separator(part: &str) -> bool {
-    part.chars().any(|c| STRAY.contains(&c) || c == '·')
+    part.chars().any(|c| LOOKALIKES.contains(&c))
 }
 
 fn canonical(
@@ -340,9 +360,7 @@ struct Recovery {
 /// start (`08/2017 – 2018`), whose own dash must not be read as a role separator.
 fn recover(text: &str) -> Option<Recovery> {
     let candidates = candidates(text);
-    let at = candidates
-        .iter()
-        .position(|c| is_period_suffix(&text[c.range.end..]) && !contains_year(&text[..c.range.start]))?;
+    let at = (0..candidates.len()).find(|&i| is_split_point(text, &candidates, i))?;
     if candidates[..=at].iter().all(|c| c.kind == Kind::Canonical) {
         return None;
     }
@@ -360,10 +378,29 @@ fn recover(text: &str) -> Option<Recovery> {
     })
 }
 
+/// True when candidate `i` is where the dates start: the text after it is a period, and the text
+/// before it is not itself part of a period (a year anywhere before it, or a lone `Present`, `Aug`,
+/// or `Spring` just before it, means that candidate is the period's own dash).
+fn is_split_point(text: &str, candidates: &[Candidate], i: usize) -> bool {
+    let candidate = &candidates[i];
+    let previous_end = i.checked_sub(1).map_or(0, |p| candidates[p].range.end);
+    let part_before = text[previous_end..candidate.range.start].trim();
+    is_period_suffix(&text[candidate.range.end..])
+        && !contains_year(&text[..candidate.range.start])
+        && !period::is_date_word(part_before)
+}
+
+/// True when a look-alike separator (not a hyphen) directly precedes a period, whatever the name holds.
+fn lookalike_before_period(text: &str) -> bool {
+    candidates(text)
+        .iter()
+        .any(|c| c.kind == Kind::Other && is_period_suffix(&text[c.range.end..]))
+}
+
 /// True when `suffix` is a period, including one that is well-formed but invalid (end before start,
 /// year out of range): that is still where the dates start, so scanning must not continue past it.
 fn is_period_suffix(suffix: &str) -> bool {
-    if suffix.is_empty() || !contains_year(suffix) {
+    if !contains_year(suffix) {
         return false;
     }
     match period::parse_text(suffix) {
@@ -379,10 +416,14 @@ fn candidates(text: &str) -> Vec<Candidate> {
         if found.len() >= MAX_CANDIDATES {
             break;
         }
+        // `\·` is not a CommonMark escape, so the backslash stays in the text; it marks a literal.
+        if i > 0 && chars[i - 1].1 == '\\' {
+            continue;
+        }
         let spaced = i > 0 && chars[i - 1].1.is_whitespace() && chars.get(i + 1).is_some_and(|n| n.1.is_whitespace());
         let kind = match c {
             '-' | '–' | '—' if spaced => Kind::Hyphenish,
-            '·' | '|' | '｜' | '•' | '∙' | '⋅' | '・' | '‧' | '\u{387}' | '⸱' | '･' => Kind::Other,
+            c if LOOKALIKES.contains(&c) => Kind::Other,
             _ => continue,
         };
         let range = expand_whitespace(text, at..at + c.len_utf8());
@@ -421,13 +462,12 @@ fn recovered(
     let reconstructed = reconstruct(text, recovery, src);
     let too_many = recovery.parts.len() > 2;
     let finding = separator_finding(text, recovery, line.clone(), &reconstructed, too_many);
-    sink.report(attach_edit(
-        finding,
-        text,
-        recovery,
-        src,
-        !too_many && !ambiguous(recovery),
-    ));
+    let finding = if too_many || ambiguous(recovery) {
+        finding
+    } else {
+        attach_edit(finding, text, recovery, src)
+    };
+    sink.report(finding);
     if too_many {
         return None;
     }
@@ -448,19 +488,35 @@ fn recovered_era(
     src: &Source<'_>,
     sink: &mut Sink<'_>,
 ) -> EraCheck {
+    if recovery.parts.iter().any(Range::is_empty) {
+        // Nothing to reconstruct: report the missing name only.
+        let finding = Finding::new(DiagnosticCode::EraShape, bold.clone(), "the era name is empty")
+            .hint("write `**Era name · 2020 – 2023**`");
+        sink.report(finding);
+        return EraCheck::Malformed;
+    }
     let single_name = recovery.parts.len() == 1;
     let reconstructed = reconstruct(text, recovery, src);
     let message = format!(
         "era parts must be separated by ` · `, not {}",
         found_tokens(text, recovery)
     );
-    let mut finding = Finding::new(DiagnosticCode::EraShape, bold.clone(), message);
-    finding = if single_name {
-        finding.hint(format!("did you mean `**{reconstructed}**`?"))
-    } else {
+    let finding = Finding::new(DiagnosticCode::EraShape, bold.clone(), message);
+    let finding = if !single_name {
         finding.hint("an era is `**Era name · 2020 – 2023**`; the name can't contain separators")
+    } else if era_edit_is_safe(text, recovery) {
+        attach_edit(
+            finding.hint(format!("did you mean `**{reconstructed}**`?")),
+            text,
+            recovery,
+            src,
+        )
+    } else {
+        finding.hint(format!(
+            "if this is an era, write `**{reconstructed}**`; a hyphen can also be ordinary bold text, so no automatic fix is offered"
+        ))
     };
-    sink.report(attach_edit(finding, text, recovery, src, single_name));
+    sink.report(finding);
     if !single_name {
         return EraCheck::Malformed;
     }
@@ -473,6 +529,14 @@ fn recovered_era(
         EraCheck::Era(head) => EraCheck::Era(head),
         _ => EraCheck::Malformed,
     }
+}
+
+/// A hyphen before a single date (`**Award - 2019**`) may be ordinary bold text, so only a range
+/// (`**AI - 2016 – 2017**`) or a non-hyphen separator is clearly an era worth rewriting.
+fn era_edit_is_safe(text: &TextNode, recovery: &Recovery) -> bool {
+    let hyphen = recovery.seps.first().is_some_and(|s| s.kind == Kind::Hyphenish);
+    let is_range = period::parse_text(&text.text[recovery.period.clone()]).is_ok_and(|p| p.separator.is_some());
+    !hyphen || is_range
 }
 
 /// True when the only wrong separator before the title is a hyphen, which might belong to the company.
@@ -524,11 +588,8 @@ fn reconstruct(text: &TextNode, recovery: &Recovery, src: &Source<'_>) -> String
         .join(SEPARATOR)
 }
 
-/// Attaches the single Edit that rewrites every wrong separator, when it is safe to offer.
-fn attach_edit(finding: Finding, text: &TextNode, recovery: &Recovery, src: &Source<'_>, safe: bool) -> Finding {
-    if !safe {
-        return finding;
-    }
+/// Attaches the single Edit that rewrites every wrong separator; the caller decides it is safe to offer.
+fn attach_edit(finding: Finding, text: &TextNode, recovery: &Recovery, src: &Source<'_>) -> Finding {
     let wrong: Vec<usize> = recovery
         .seps
         .iter()
@@ -555,9 +616,10 @@ fn attach_edit(finding: Finding, text: &TextNode, recovery: &Recovery, src: &Sou
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::diagnostics::{Diagnostic, Edit};
+    use crate::diagnostics::Diagnostic;
+    use crate::markdown::testutil::{apply_fixes, codes};
     use crate::markdown::tree::{self, BlockNode};
-    use claims::assert_some;
+    use claims::{assert_none, assert_some};
     use pretty_assertions::assert_eq;
     use std::path::Path;
 
@@ -587,25 +649,6 @@ mod tests {
         (check, sink.finish())
     }
 
-    fn codes(diagnostics: &[Diagnostic]) -> Vec<DiagnosticCode> {
-        diagnostics.iter().map(|d| d.code).collect()
-    }
-
-    fn apply(text: &str, edits: &[&Edit]) -> String {
-        let mut sorted: Vec<_> = edits.to_vec();
-        sorted.sort_by_key(|e| std::cmp::Reverse(e.range.start));
-        let mut out = text.to_string();
-        for edit in sorted {
-            out.replace_range(edit.range.clone(), &edit.replacement);
-        }
-        out
-    }
-
-    fn fixed(text: &str, diagnostics: &[Diagnostic]) -> String {
-        let edits: Vec<&Edit> = diagnostics.iter().filter_map(|d| d.fix.as_ref()).collect();
-        apply(text, &edits)
-    }
-
     #[test]
     fn parses_three_part_role_line() {
         let (head, diagnostics) = role("### HERE Technologies · Senior Principal Architect · Aug 2017 – Present");
@@ -622,14 +665,14 @@ mod tests {
         let (head, diagnostics) = role("### Consulting and Early-Stage Companies · 2008 – 2013");
         let head = assert_some!(head);
         assert_eq!(head.company.as_ref(), "Consulting and Early-Stage Companies");
-        assert!(head.title.is_none());
+        assert_none!(head.title);
         assert_eq!(diagnostics, vec![]);
     }
 
     #[test]
     fn level_three_heading_without_role_shape_is_error() {
         let (head, diagnostics) = role("### Projects");
-        assert!(head.is_none());
+        assert_none!(head);
         assert_eq!(codes(&diagnostics), vec![DiagnosticCode::RoleLineShape]);
         assert_eq!(assert_some!(diagnostics[0].span.as_ref()).range, 4..12);
         assert!(diagnostics[0].hints[0].contains("## "), "{:?}", diagnostics[0].hints);
@@ -638,7 +681,7 @@ mod tests {
     #[test]
     fn role_line_with_dates_in_the_wrong_place_is_error() {
         let (head, diagnostics) = role("### 2020 – 2021 · Acme");
-        assert!(head.is_none());
+        assert_none!(head);
         assert_eq!(codes(&diagnostics), vec![DiagnosticCode::RoleLineShape]);
         assert!(
             diagnostics[0].hints[0].contains("dates last"),
@@ -650,7 +693,7 @@ mod tests {
     #[test]
     fn role_line_with_too_many_parts_is_error() {
         let (head, diagnostics) = role("### A · B · C · 2020 – 2021");
-        assert!(head.is_none());
+        assert_none!(head);
         assert_eq!(codes(&diagnostics), vec![DiagnosticCode::RoleLineShape]);
         assert_eq!(diagnostics[0].message, "the role line has too many ` · ` parts");
     }
@@ -663,7 +706,7 @@ mod tests {
             "### `Acme` · 2020",
         ] {
             let (head, diagnostics) = role(line);
-            assert!(head.is_none(), "{line}");
+            assert_none!(head, "{line}");
             assert_eq!(codes(&diagnostics), vec![DiagnosticCode::RoleLineShape], "{line}");
             assert_eq!(diagnostics[0].message, "role lines must be plain text");
         }
@@ -678,7 +721,7 @@ mod tests {
         assert_eq!(d.message, "role parts must be separated by ` · `, not `|`");
         assert_eq!(d.hints, vec!["did you mean `### Acme · Engineer · 2015 – 2017`?"]);
         assert_eq!(assert_some!(d.span.as_ref()).range, 4..line.len());
-        assert_eq!(fixed(line, &diagnostics), "### Acme · Engineer · 2015 – 2017");
+        assert_eq!(apply_fixes(line, &diagnostics), "### Acme · Engineer · 2015 – 2017");
         let head = assert_some!(head, "the best-effort model keeps the reconstructed role");
         assert_eq!(head.company.as_ref(), "Acme");
     }
@@ -690,7 +733,11 @@ mod tests {
             let line = format!("### Acme{dot}Engineer{dot}2015 – 2017");
             let (_, diagnostics) = role(&line);
             assert_eq!(codes(&diagnostics), vec![DiagnosticCode::RoleSeparator], "{dot}");
-            assert_eq!(fixed(&line, &diagnostics), "### Acme · Engineer · 2015 – 2017", "{dot}");
+            assert_eq!(
+                apply_fixes(&line, &diagnostics),
+                "### Acme · Engineer · 2015 – 2017",
+                "{dot}"
+            );
         }
         let (_, diagnostics) = role("### Acme · Engineer · 2015 – 2017");
         assert_eq!(diagnostics, vec![], "the canonical separator is accepted");
@@ -700,7 +747,7 @@ mod tests {
     fn stray_separator_inside_a_part_is_reported_without_edit() {
         // `Acme | Co` could be one company or two parts, so no Edit is offered.
         let (head, diagnostics) = role("### Acme | Co · Engineer · 2015 – 2017");
-        assert!(head.is_none());
+        assert_none!(head);
         assert_eq!(codes(&diagnostics), vec![DiagnosticCode::RoleSeparator]);
         assert_eq!(diagnostics[0].fix, None);
     }
@@ -710,7 +757,7 @@ mod tests {
         let line = "### Acme | Engineer · 2015 – 2017";
         let (head, diagnostics) = role(line);
         assert_some!(head);
-        assert_eq!(fixed(line, &diagnostics), "### Acme · Engineer · 2015 – 2017");
+        assert_eq!(apply_fixes(line, &diagnostics), "### Acme · Engineer · 2015 – 2017");
     }
 
     #[test]
@@ -718,7 +765,7 @@ mod tests {
         let line = "### Acme · Engineer - 2015 – 2017";
         let (head, diagnostics) = role(line);
         assert_eq!(codes(&diagnostics), vec![DiagnosticCode::RoleSeparator]);
-        assert_eq!(fixed(line, &diagnostics), "### Acme · Engineer · 2015 – 2017");
+        assert_eq!(apply_fixes(line, &diagnostics), "### Acme · Engineer · 2015 – 2017");
         assert_some!(head);
     }
 
@@ -730,7 +777,7 @@ mod tests {
         let line = "### Gusto-Webtab - 2015 – 2017";
         let (head, diagnostics) = role(line);
         assert_eq!(assert_some!(head).company.as_ref(), "Gusto-Webtab");
-        assert_eq!(fixed(line, &diagnostics), "### Gusto-Webtab · 2015 – 2017");
+        assert_eq!(apply_fixes(line, &diagnostics), "### Gusto-Webtab · 2015 – 2017");
     }
 
     #[test]
@@ -743,7 +790,7 @@ mod tests {
         let (head, diagnostics) = role("### Rolls - Royce - Engineer - 2015 – 2017");
         assert_eq!(codes(&diagnostics), vec![DiagnosticCode::RoleSeparator]);
         assert_eq!(diagnostics[0].fix, None);
-        assert!(head.is_none());
+        assert_none!(head);
     }
 
     #[test]
@@ -757,13 +804,13 @@ mod tests {
         let first = assert_some!(diagnostics[0].fix.as_ref());
         let second = assert_some!(diagnostics[1].fix.as_ref());
         assert!(first.range.end <= second.range.start, "{first:?} overlaps {second:?}");
-        assert_eq!(fixed(line, &diagnostics), "### Acme · Engineer · 2015 – 2017");
+        assert_eq!(apply_fixes(line, &diagnostics), "### Acme · Engineer · 2015 – 2017");
     }
 
     #[test]
     fn empty_company_maps_nutype_error_to_located_diagnostic() {
         let (head, diagnostics) = role("### · Title · 2020 – 2022");
-        assert!(head.is_none());
+        assert_none!(head);
         assert_eq!(codes(&diagnostics), vec![DiagnosticCode::EmptyRolePart]);
         assert_eq!(diagnostics[0].message, "the company is empty");
         assert_eq!(assert_some!(diagnostics[0].span.as_ref()).range, 4..7);
@@ -772,7 +819,7 @@ mod tests {
     #[test]
     fn empty_title_is_empty_role_part() {
         let (head, diagnostics) = role("### Acme ·  · 2020 – 2022");
-        assert!(head.is_none());
+        assert_none!(head);
         assert_eq!(codes(&diagnostics), vec![DiagnosticCode::EmptyRolePart]);
         assert_eq!(diagnostics[0].message, "the title is empty");
     }
@@ -781,7 +828,7 @@ mod tests {
     fn overlong_company_is_text_too_long() {
         let line = format!("### {} · 2020 – 2022", "A".repeat(121));
         let (head, diagnostics) = role(&line);
-        assert!(head.is_none());
+        assert_none!(head);
         assert_eq!(codes(&diagnostics), vec![DiagnosticCode::TextTooLong]);
         assert_eq!(assert_some!(diagnostics[0].span.as_ref()).range, 4..125);
     }
@@ -790,21 +837,21 @@ mod tests {
     fn overlong_role_line_is_text_too_long_and_not_recovered() {
         let line = format!("### {}", "a - ".repeat(2000));
         let (head, diagnostics) = role(&line);
-        assert!(head.is_none());
+        assert_none!(head);
         assert_eq!(codes(&diagnostics), vec![DiagnosticCode::TextTooLong]);
     }
 
     #[test]
     fn unparseable_period_in_a_well_shaped_line_is_period_unparseable() {
         let (head, diagnostics) = role("### Acme · Engineer · Aug 2017 – Prsent");
-        assert!(head.is_none());
+        assert_none!(head);
         assert_eq!(codes(&diagnostics), vec![DiagnosticCode::PeriodUnparseable]);
     }
 
     #[test]
     fn end_before_start_in_a_role_line_is_reported() {
         let (head, diagnostics) = role("### Acme · 2020 – 2018");
-        assert!(head.is_none());
+        assert_none!(head);
         assert_eq!(codes(&diagnostics), vec![DiagnosticCode::PeriodEndBeforeStart]);
     }
 
@@ -817,7 +864,7 @@ mod tests {
             "### F · Engineer · 08/2017 – 2018",
         ] {
             let (head, diagnostics) = role(line);
-            assert!(head.is_none(), "{line}");
+            assert_none!(head, "{line}");
             assert_eq!(codes(&diagnostics), vec![DiagnosticCode::PeriodUnparseable], "{line}");
             assert_eq!(diagnostics[0].fix, None, "{line}");
         }
@@ -827,7 +874,7 @@ mod tests {
     fn a_company_with_a_year_in_its_name_is_never_rewritten() {
         // Safe direction: an error with a hint, never an Edit that could split the name.
         let (head, diagnostics) = role("### Windows 2000 | Engineer | 2015 – 2017");
-        assert!(head.is_none());
+        assert_none!(head);
         assert_eq!(codes(&diagnostics), vec![DiagnosticCode::RoleLineShape]);
         assert_eq!(diagnostics[0].fix, None);
     }
@@ -866,7 +913,6 @@ mod tests {
             "**Just bold**",
             "**Q3 2020 results**",
             "*italic · 2020*",
-            "**[link](https://x.y) · 2020**",
         ] {
             let (check, diagnostics) = era(text);
             assert!(matches!(check, EraCheck::NotEra), "{text}: {check:?}");
@@ -905,7 +951,7 @@ mod tests {
         let (check, diagnostics) = era(text);
         assert!(matches!(check, EraCheck::Era(_)), "{check:?}");
         assert_eq!(codes(&diagnostics), vec![DiagnosticCode::EraShape]);
-        assert_eq!(fixed(text, &diagnostics), "**AI platforms · 2026 – Present**");
+        assert_eq!(apply_fixes(text, &diagnostics), "**AI platforms · 2026 – Present**");
     }
 
     #[test]
@@ -928,12 +974,239 @@ mod tests {
         let text = "**Phase · 2018 - 2020**";
         let (check, diagnostics) = era(text);
         assert!(matches!(check, EraCheck::Era(_)));
-        assert_eq!(fixed(text, &diagnostics), "**Phase · 2018 – 2020**");
+        assert_eq!(apply_fixes(text, &diagnostics), "**Phase · 2018 – 2020**");
     }
 
     #[test]
     fn candidates_are_capped() {
         let line = "a | ".repeat(100);
         assert_eq!(candidates(&line).len(), MAX_CANDIDATES);
+    }
+
+    #[test]
+    fn escaped_middle_dot_is_not_a_separator() {
+        // `\·` is not a CommonMark escape: the backslash stays in the text.
+        let (head, diagnostics) = role("### Acme \\· Eng · 2019 – 2021");
+        assert_some!(head);
+        assert_eq!(codes(&diagnostics), vec![DiagnosticCode::RoleSeparator]);
+        assert_eq!(diagnostics[0].fix, None);
+    }
+
+    #[test]
+    fn a_period_cannot_start_with_a_month_word_or_present() {
+        for line in [
+            "### Acme · Eng · Present – 2019",
+            "### Acme · Aug – 2019",
+            "### Acme · Spring – 2019",
+        ] {
+            let (head, diagnostics) = role(line);
+            assert_none!(head, "{line}");
+            assert_eq!(codes(&diagnostics), vec![DiagnosticCode::PeriodUnparseable], "{line}");
+        }
+    }
+
+    #[test]
+    fn fullwidth_dot_inside_a_company_is_a_stray_separator() {
+        let (_, diagnostics) = role("### Acme ･ Labs · Eng · 2019 – 2021");
+        assert_eq!(codes(&diagnostics), vec![DiagnosticCode::RoleSeparator]);
+    }
+
+    #[test]
+    fn era_with_markup_is_error() {
+        for text in [
+            "**Platform *x* · 2016**",
+            "**`Platform` · 2016 – 2017**",
+            "**[Platform](https://x.y) · 2016 – 2017**",
+        ] {
+            let (check, diagnostics) = era(text);
+            assert!(matches!(check, EraCheck::Malformed), "{text}: {check:?}");
+            assert_eq!(codes(&diagnostics), vec![DiagnosticCode::EraShape], "{text}");
+            assert_eq!(diagnostics[0].message, "era lines must be plain text", "{text}");
+            assert_eq!(diagnostics[0].fix, None);
+        }
+    }
+
+    #[test]
+    fn soft_wrapped_era_is_an_era() {
+        let (check, diagnostics) = era("**Platform ·\n2016 – 2017**");
+        let EraCheck::Era(head) = check else {
+            panic!("expected an era, got {check:?}")
+        };
+        assert_eq!(head.name.as_ref(), "Platform");
+        assert_eq!(head.period.text, "2016 – 2017");
+        assert_eq!(diagnostics, vec![]);
+    }
+
+    #[test]
+    fn look_alike_era_with_a_year_in_the_name_is_reported_without_an_edit() {
+        let (check, diagnostics) = era("**Class of 2010 | 2016 – 2017**");
+        assert!(matches!(check, EraCheck::Malformed), "{check:?}");
+        assert_eq!(codes(&diagnostics), vec![DiagnosticCode::EraShape]);
+        assert_eq!(diagnostics[0].fix, None);
+    }
+
+    #[test]
+    fn bold_prose_with_a_middle_dot_is_not_an_era() {
+        let (check, diagnostics) = era("**Python · Rust** are my favourite languages.");
+        assert!(matches!(check, EraCheck::NotEra), "{check:?}");
+        assert_eq!(diagnostics, vec![]);
+    }
+
+    #[test]
+    fn a_single_date_after_a_hyphen_is_reported_without_an_edit() {
+        // `**Award - 2019**` could be a plain bold paragraph; only a range is clearly an era.
+        let (check, diagnostics) = era("**Award - 2019**");
+        assert!(matches!(check, EraCheck::Era(_) | EraCheck::Malformed), "{check:?}");
+        assert_eq!(codes(&diagnostics), vec![DiagnosticCode::EraShape]);
+        assert_eq!(diagnostics[0].fix, None);
+    }
+
+    #[test]
+    fn era_with_an_empty_name_is_reported_once_without_an_edit() {
+        let (check, diagnostics) = era("**| 2020 – 2021**");
+        assert!(matches!(check, EraCheck::Malformed), "{check:?}");
+        assert_eq!(codes(&diagnostics), vec![DiagnosticCode::EraShape]);
+        assert_eq!(diagnostics[0].fix, None);
+    }
+
+    #[test]
+    fn overlong_title_is_text_too_long() {
+        let line = format!("### Acme · {} · 2020 – 2022", "T".repeat(121));
+        let (head, diagnostics) = role(&line);
+        assert_none!(head);
+        assert_eq!(codes(&diagnostics), vec![DiagnosticCode::TextTooLong]);
+        assert_eq!(diagnostics[0].message, "the title is longer than 120 characters");
+    }
+
+    #[test]
+    fn overlong_era_name_is_text_too_long() {
+        let (check, diagnostics) = era(&format!("**{} · 2015 – 2016**", "A".repeat(81)));
+        assert!(matches!(check, EraCheck::Malformed), "{check:?}");
+        assert_eq!(codes(&diagnostics), vec![DiagnosticCode::TextTooLong]);
+        assert_eq!(diagnostics[0].message, "the era name is longer than 80 characters");
+    }
+
+    #[test]
+    fn canonical_era_with_an_empty_name_is_an_era_shape_error() {
+        // `&#32;` decodes to a space, so the bold text is "  · 2020 – 2021" and the name part is empty.
+        let (check, diagnostics) = era("**&#32; · 2020 – 2021**");
+        assert!(matches!(check, EraCheck::Malformed), "{check:?}");
+        assert_eq!(codes(&diagnostics), vec![DiagnosticCode::EraShape]);
+        assert_eq!(diagnostics[0].message, "the era name is empty");
+    }
+
+    #[test]
+    fn era_with_dates_in_the_wrong_part_has_the_wrong_shape() {
+        let (check, diagnostics) = era("**2020 · Acme**");
+        assert!(matches!(check, EraCheck::Malformed), "{check:?}");
+        assert_eq!(diagnostics[0].message, "the era line has the wrong shape");
+    }
+
+    #[test]
+    fn era_followed_by_a_comment_is_still_an_era() {
+        let (check, diagnostics) = era("**AI · 2016 – 2017** <!-- note -->");
+        assert!(matches!(check, EraCheck::Era(_)), "{check:?}");
+        assert_eq!(diagnostics, vec![]);
+    }
+
+    #[test]
+    fn role_line_with_inline_html_is_error() {
+        let (head, diagnostics) = role("### Acme <b>x</b> · Eng · 2020 – 2021");
+        assert_none!(head);
+        assert_eq!(codes(&diagnostics), vec![DiagnosticCode::RoleLineShape]);
+        assert_eq!(diagnostics[0].message, "role lines must be plain text");
+    }
+
+    #[test]
+    fn a_spaced_hyphen_inside_a_canonical_company_is_not_a_separator() {
+        // `canonical_is_clean` protects this: recovery alone would split the company at the hyphen.
+        let (head, diagnostics) = role("### Acme - Labs · Engineer · 2015 – 2017");
+        let head = assert_some!(head);
+        assert_eq!(head.company.as_ref(), "Acme - Labs");
+        assert_eq!(assert_some!(head.title.as_ref()).as_ref(), "Engineer");
+        assert_eq!(diagnostics, vec![]);
+    }
+
+    #[test]
+    fn the_role_line_length_limit_is_exact() {
+        let tail = " · 2015 – 2017";
+        let at_limit = format!("### {}{tail}", "A".repeat(MAX_ROLE_LINE_BYTES - tail.len()));
+        assert_eq!(at_limit.len() - 4, MAX_ROLE_LINE_BYTES);
+        let (_, diagnostics) = role(&at_limit);
+        assert_eq!(
+            diagnostics[0].message, "the company is longer than 120 characters",
+            "examined, not rejected for length"
+        );
+        let (_, diagnostics) = role(&format!("{at_limit}x"));
+        assert_eq!(
+            diagnostics[0].message,
+            format!("the role line is longer than {MAX_ROLE_LINE_BYTES} bytes")
+        );
+    }
+
+    #[test]
+    fn dates_in_the_middle_of_a_three_part_line_get_the_order_hint() {
+        let (head, diagnostics) = role("### Acme · 2020 – 2021 · Engineer");
+        assert_none!(head);
+        assert_eq!(codes(&diagnostics), vec![DiagnosticCode::RoleLineShape]);
+        assert!(
+            diagnostics[0].hints[0].contains("put the dates last"),
+            "{:?}",
+            diagnostics[0].hints
+        );
+        assert_eq!(diagnostics[0].message, "the role line is missing its ` · ` separators");
+    }
+
+    #[test]
+    fn four_parts_are_too_many_even_without_dates_last() {
+        let (_, diagnostics) = role("### A · B · 2020 · C");
+        assert_eq!(diagnostics[0].message, "the role line has too many ` · ` parts");
+    }
+
+    #[test]
+    fn empty_title_error_points_at_the_separator() {
+        let (_, diagnostics) = role("### Acme ·  · 2020 – 2022");
+        let range = assert_some!(diagnostics[0].span.as_ref()).range.clone();
+        assert_eq!(&"### Acme ·  · 2020 – 2022"[range], " · ");
+    }
+
+    #[test]
+    fn markup_in_bold_that_is_not_era_shaped_is_ordinary_text() {
+        for text in ["**Platform *x* · notes**", "**Platform *x* 2016**", "**`a` · `b`**"] {
+            let (check, diagnostics) = era(text);
+            assert!(matches!(check, EraCheck::NotEra), "{text}: {check:?}");
+            assert_eq!(diagnostics, vec![], "{text}");
+        }
+    }
+
+    #[test]
+    fn a_look_alike_without_dates_after_it_is_not_an_era_attempt() {
+        for text in ["**Python | Rust**", "**A • B**", "**Class of 2010 - 2016 – 2017**"] {
+            let (check, diagnostics) = era(text);
+            assert!(matches!(check, EraCheck::NotEra), "{text}: {check:?}");
+            assert_eq!(diagnostics, vec![], "{text}");
+        }
+    }
+
+    #[test]
+    fn candidates_need_whitespace_on_both_sides_of_a_hyphen_and_never_overlap() {
+        let found = candidates("a-b - c -d e- f");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(&"a-b - c -d e- f"[found[0].range.clone()], " - ");
+        assert_eq!(candidates("a | | b").len(), 1, "adjacent separators are one candidate");
+        let kinds: Vec<_> = candidates("a · b · c").iter().map(|c| c.kind).collect();
+        assert_eq!(kinds, vec![Kind::Canonical, Kind::Canonical]);
+        assert_eq!(
+            candidates("a·b")[0].kind,
+            Kind::Other,
+            "a middle dot without spaces is a look-alike"
+        );
+    }
+
+    #[test]
+    fn separators_that_touch_are_two_candidates_but_overlapping_ones_are_one() {
+        // `·|` has no whitespace between the two, so neither expands over the other.
+        assert_eq!(candidates("a·|b").len(), 2);
+        assert_eq!(candidates("a | | b").len(), 1, "their whitespace overlaps");
     }
 }

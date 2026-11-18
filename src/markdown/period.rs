@@ -7,7 +7,7 @@ use std::str::FromStr;
 use time::Month;
 
 use super::tree::TextNode;
-use super::{Finding, Sink, Source};
+use super::{Finding, Sink, Source, trim_range};
 use crate::diagnostics::DiagnosticCode;
 use crate::model::{PartialDate, Period, PeriodEnd, Season, Year};
 
@@ -18,7 +18,7 @@ const CANONICAL_SEPARATOR: &str = " – ";
 const PRESENT: &str = "Present";
 
 /// Month names and abbreviations, matched ASCII-case-insensitively after one trailing `.` is dropped.
-const MONTHS: [(&str, Month); 25] = [
+const MONTHS: [(&str, Month); 24] = [
     ("january", Month::January),
     ("february", Month::February),
     ("march", Month::March),
@@ -43,7 +43,6 @@ const MONTHS: [(&str, Month); 25] = [
     ("oct", Month::October),
     ("nov", Month::November),
     ("dec", Month::December),
-    ("may", Month::May),
 ];
 
 /// A parsed period with the text ranges of any non-canonical tokens.
@@ -131,9 +130,10 @@ fn split_dates(text: &str) -> Result<Split, PeriodProblem> {
             .unwrap_or(text.len() - run_start);
     if let Some(second) = text[run_end..trimmed.end].find(is_dash) {
         let at = run_end + second;
+        let dash = &text[at..at + text[at..].chars().next().map_or(1, char::len_utf8)];
         return Err(token_problem(
-            at..at + 1,
-            "-",
+            at..at + dash.len(),
+            dash,
             "a period has one separator; write `Aug 2017 – 2020`",
         ));
     }
@@ -257,6 +257,11 @@ fn month(token: &str) -> Option<Month> {
         .map(|(_, month)| *month)
 }
 
+/// True for a lone month, season, or Present word, which is a fragment of a date, never a name.
+pub(crate) fn is_date_word(word: &str) -> bool {
+    month(word).is_some() || Season::from_str(word).is_ok() || present_spelling(word).is_some()
+}
+
 /// `Some(true)` for the canonical `Present`, `Some(false)` for an alias, `None` for anything else.
 fn present_spelling(token: &str) -> Option<bool> {
     if token == PRESENT {
@@ -296,13 +301,6 @@ fn tokens(text: &str, range: Range<usize>) -> Vec<Token<'_>> {
     found
 }
 
-fn trim_range(text: &str, range: Range<usize>) -> Range<usize> {
-    let slice = &text[range.clone()];
-    let start = range.start + (slice.len() - slice.trim_start().len());
-    let end = range.end - (slice.len() - slice.trim_end().len());
-    start..end.max(start)
-}
-
 /// Parses the period part of a role or era line and reports located findings.
 ///
 /// `part` is a range into `node.text`. Warnings (a non-canonical separator or Present spelling) carry
@@ -318,7 +316,7 @@ pub(crate) fn parse_located(
     let whole = to_source(0..part.len());
     match parse_text(&node.text[part.clone()]) {
         Ok(syntax) => {
-            report_separator(&syntax, &to_source, src, sink);
+            report_separator(&syntax, &node.text[part.clone()], &to_source, src, sink);
             report_present_alias(&syntax, &to_source, sink);
             Some(syntax.period)
         }
@@ -331,15 +329,20 @@ pub(crate) fn parse_located(
 
 fn report_separator(
     syntax: &PeriodSyntax,
+    text: &str,
     to_source: &impl Fn(Range<usize>) -> Range<usize>,
     src: &Source<'_>,
     sink: &mut Sink<'_>,
 ) {
-    let Some(range) = syntax.separator.clone().map(to_source) else {
+    let Some(text_range) = syntax.separator.clone() else {
         return;
     };
+    let range = to_source(text_range.clone());
     let written = src.slice(&range);
-    if written == CANONICAL_SEPARATOR {
+    // An entity such as `&ndash;` is written differently but already renders as the canonical
+    // separator; only a dash typed as hyphens (`-`, `--`) or another character needs the Edit.
+    let renders_canonically = text[text_range] == *CANONICAL_SEPARATOR && !written.contains('-');
+    if written == CANONICAL_SEPARATOR || renders_canonically {
         return;
     }
     let message = format!(
@@ -411,14 +414,11 @@ fn problem_finding(
 mod tests {
     use super::*;
     use crate::diagnostics::{Diagnostic, Severity};
-    use claims::{assert_err, assert_ok, assert_some};
+    use crate::markdown::testutil::year;
+    use claims::{assert_err, assert_none, assert_ok, assert_some};
     use pretty_assertions::assert_eq;
     use proptest::prelude::*;
     use std::path::Path;
-
-    fn year(y: u16) -> Year {
-        assert_ok!(Year::try_new(y))
-    }
 
     fn month_date(y: u16, m: Month) -> PartialDate {
         PartialDate::Month {
@@ -580,7 +580,7 @@ mod tests {
     #[test]
     fn end_year_before_start_is_error() {
         let (period, diagnostics) = located("2020 – 2018");
-        assert!(period.is_none());
+        assert_none!(period);
         assert_eq!(diagnostics[0].code, DiagnosticCode::PeriodEndBeforeStart);
         assert_eq!(assert_some!(diagnostics[0].span.as_ref()).range, 0..13);
         assert!(!diagnostics[0].hints.is_empty());
@@ -596,13 +596,13 @@ mod tests {
     #[test]
     fn year_out_of_range_is_period_unparseable() {
         let (period, diagnostics) = located("1949 – 2017");
-        assert!(period.is_none());
+        assert_none!(period);
         let d = &diagnostics[0];
         assert_eq!(d.code, DiagnosticCode::PeriodUnparseable);
         assert_eq!(d.message, "year 1949 is outside 1950–2100");
         assert_eq!(assert_some!(d.span.as_ref()).range, 0..4);
         let (period, _) = located("2017 – 2101");
-        assert!(period.is_none());
+        assert_none!(period);
     }
 
     #[test]
@@ -618,7 +618,7 @@ mod tests {
     fn word_separators_are_unparseable_with_hint() {
         for text in ["2015 to 2017", "Aug 2017 until 2018", "2015 through 2017"] {
             let (period, diagnostics) = located(text);
-            assert!(period.is_none(), "{text}");
+            assert_none!(period, "{text}");
             assert_eq!(diagnostics[0].code, DiagnosticCode::PeriodUnparseable, "{text}");
             assert!(
                 diagnostics[0].hints[0].contains("en dash"),
@@ -632,7 +632,7 @@ mod tests {
     fn numeric_month_is_unparseable() {
         for text in ["08/2017 – 2018", "2017-08"] {
             let (period, diagnostics) = located(text);
-            assert!(period.is_none(), "{text}");
+            assert_none!(period, "{text}");
             assert_eq!(diagnostics[0].code, DiagnosticCode::PeriodUnparseable, "{text}");
         }
         let (_, diagnostics) = located("08/2017 – 2018");
@@ -659,7 +659,7 @@ mod tests {
     fn open_ended_ranges_are_unparseable() {
         for text in ["2015 –", "– 2017", "2015 – 2016 – 2017"] {
             let (period, diagnostics) = located(text);
-            assert!(period.is_none(), "{text}");
+            assert_none!(period, "{text}");
             assert_eq!(diagnostics[0].code, DiagnosticCode::PeriodUnparseable, "{text}");
         }
     }
@@ -667,7 +667,7 @@ mod tests {
     #[test]
     fn present_cannot_start_a_period() {
         let (period, _) = located("Present – 2017");
-        assert!(period.is_none());
+        assert_none!(period);
     }
 
     fn month_word() -> impl Strategy<Value = String> {
@@ -718,5 +718,90 @@ mod tests {
                 prop_assert_eq!(&second.period.text[range], CANONICAL_SEPARATOR);
             }
         }
+    }
+
+    #[test]
+    fn second_dash_is_reported_at_the_real_character() {
+        for (text, dash) in [
+            ("2015 – 2017 – 2019", "–"),
+            ("2015 – 2017 — 2019", "—"),
+            ("2015 - 2017 - 2019", "-"),
+        ] {
+            let (period, diagnostics) = located(text);
+            assert_none!(period, "{text}");
+            let range = assert_some!(diagnostics[0].span.as_ref()).range.clone();
+            assert!(
+                text.is_char_boundary(range.start) && text.is_char_boundary(range.end),
+                "{text}: {range:?}"
+            );
+            assert_eq!(&text[range], dash, "{text}");
+            assert!(diagnostics[0].message.contains(dash), "{}", diagnostics[0].message);
+        }
+    }
+
+    #[test]
+    fn an_entity_en_dash_is_already_canonical() {
+        // `&ndash;` already renders as an en dash, so it is not a finding; `--` still is.
+        let source = "2019 &ndash; 2021";
+        let mut node = TextNode::default();
+        node.push("2019 ", 0..5, true);
+        node.push("–", 5..12, false);
+        node.push(" 2021", 12..17, true);
+        let mut sink = Sink::new(Path::new("r.md"));
+        let src = Source { text: source };
+        assert_some!(parse_located(&node, 0..node.text.len(), &src, &mut sink));
+        assert_eq!(sink.finish(), vec![]);
+    }
+
+    #[test]
+    fn period_text_at_the_length_limit_is_accepted() {
+        let core = "2015 – 2017";
+        let at_limit = format!("{core}{}", " ".repeat(MAX_PERIOD_BYTES - core.len()));
+        assert_eq!(at_limit.len(), MAX_PERIOD_BYTES, "the limit is in bytes");
+        assert_ok!(parse_text(&at_limit));
+        assert_eq!(assert_err!(parse_text(&format!("{at_limit} "))), PeriodProblem::TooLong);
+    }
+
+    #[test]
+    fn leading_whitespace_does_not_shift_the_separator_edit() {
+        let text = "   2015 - 2017  ";
+        let (period, diagnostics) = located(text);
+        assert_some!(period);
+        let fix = assert_some!(diagnostics[0].fix.as_ref());
+        let mut fixed = text.to_string();
+        fixed.replace_range(fix.range.clone(), &fix.replacement);
+        assert_eq!(fixed, "   2015 – 2017  ");
+    }
+
+    #[test]
+    fn a_missing_start_or_end_gets_the_both_dates_hint() {
+        for text in ["2015 –", "– 2017"] {
+            let (_, diagnostics) = located(text);
+            assert!(
+                diagnostics[0].hints[0].contains("give both dates"),
+                "{text}: {:?}",
+                diagnostics[0].hints
+            );
+        }
+    }
+
+    #[test]
+    fn year_shaped_tokens_get_the_right_hint() {
+        let (_, diagnostics) = located("12345 – 2017");
+        assert_eq!(diagnostics[0].hints, vec!["a year has four digits, like `2017`"]);
+        let (_, diagnostics) = located("20x7 – 2017");
+        assert_eq!(diagnostics[0].hints, vec!["a year has four digits, like `2017`"]);
+        let (_, diagnostics) = located("08 2017 – 2018");
+        assert!(
+            diagnostics[0].hints[0].contains("numeric months"),
+            "{:?}",
+            diagnostics[0].hints
+        );
+        let (_, diagnostics) = located("Augst 2017 – 2018");
+        assert!(
+            diagnostics[0].hints[0].contains("expected a month"),
+            "{:?}",
+            diagnostics[0].hints
+        );
     }
 }

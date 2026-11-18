@@ -179,11 +179,53 @@ expression: "views(&text, parsed.diagnostics())"
     "fix": null
   },
   {
+    "code": "role-separator",
+    "severity": "error",
+    "range": [
+      628,
+      640
+    ],
+    "source": "Acme \\· Eng",
+    "message": "a separator-like character is inside the company or title",
+    "hints": [
+      "separate the parts with ` · `: U+00B7 with a space on each side"
+    ],
+    "fix": null
+  },
+  {
+    "code": "role-order",
+    "severity": "warning",
+    "range": [
+      628,
+      657
+    ],
+    "source": "Acme \\· Eng · 2019 – 2021",
+    "message": "`Acme \\· Eng` ended after the role above it",
+    "hints": [
+      "list roles newest first: move it above `Acme`"
+    ],
+    "fix": null
+  },
+  {
+    "code": "period-unparseable",
+    "severity": "error",
+    "range": [
+      678,
+      685
+    ],
+    "source": "Present",
+    "message": "can't read `Present` as part of a date",
+    "hints": [
+      "expected a month (`Aug`), a season (`Fall`), or a year (`2017`)"
+    ],
+    "fix": null
+  },
+  {
     "code": "empty-heading",
     "severity": "error",
     "range": [
-      624,
-      627
+      696,
+      699
     ],
     "source": "###",
     "message": "the role line is empty",

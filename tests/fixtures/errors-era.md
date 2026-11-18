@@ -19,6 +19,14 @@ London · ada@example.com
 
 **Gusto - Webtab - 2012 – 2013**
 
+**Platform *x* · 2016**
+
+**Class of 2010 | 2016 – 2017**
+
+**Award - 2019**
+
+**| 2020 – 2021**
+
 ## Other
 
 **Outside · 2015 – 2016**

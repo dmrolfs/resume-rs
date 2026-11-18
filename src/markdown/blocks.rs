@@ -7,8 +7,7 @@ use super::inline;
 use super::lint::{self, RoleKey};
 use super::role::{self, EraCheck, EraHead, RoleHead};
 use super::tree::{
-    BlockNode, Construct, Document, HeadingNode, HtmlNode, InlineNode, ItemNode, ListNode, ParagraphNode,
-    UnsupportedNode,
+    BlockNode, Construct, Document, HeadingNode, HtmlNode, ItemNode, ListNode, ParagraphNode, UnsupportedNode,
 };
 use super::{Finding, Sink, Source};
 use crate::diagnostics::DiagnosticCode;
@@ -21,10 +20,11 @@ const PAGE_BREAK: &str = r#"<div class="page-break"></div>"#;
 /// Interprets the document; `None` only when no valid name heading exists.
 pub(crate) fn interpret(doc: &Document, src: &Source<'_>, sink: &mut Sink<'_>) -> Option<Resume> {
     let blocks = &doc.blocks;
-    let Some(at) = blocks
-        .iter()
-        .position(|b| matches!(b, BlockNode::Heading(h) if h.level == 1))
-    else {
+    let name_heading = blocks.iter().enumerate().find_map(|(index, block)| match block {
+        BlockNode::Heading(heading) if heading.level == 1 => Some((index, heading)),
+        _ => None,
+    });
+    let Some((at, heading)) = name_heading else {
         report_missing_name(blocks, sink);
         walk_sections(blocks, src, sink);
         return None;
@@ -32,9 +32,6 @@ pub(crate) fn interpret(doc: &Document, src: &Source<'_>, sink: &mut Sink<'_>) -
     for block in blocks[..at].iter().filter(|b| !is_comment(b)) {
         report_before_section(block.range(), "the name heading", sink);
     }
-    let BlockNode::Heading(heading) = &blocks[at] else {
-        return None;
-    };
     let name = name(heading, sink);
     let rest = &blocks[at + 1..];
     let (contact, consumed) = contact(heading, rest, src, sink);
@@ -99,22 +96,7 @@ fn heading_text(heading: &HeadingNode, sink: &mut Sink<'_>) -> String {
             sink,
         );
     }
-    flatten_text(&heading.content).trim().to_string()
-}
-
-fn flatten_text(nodes: &[InlineNode]) -> String {
-    nodes
-        .iter()
-        .map(|node| match node {
-            InlineNode::Text(text) => text.text.clone(),
-            InlineNode::Code { text, .. } => text.clone(),
-            InlineNode::Strong { children, .. }
-            | InlineNode::Emph { children, .. }
-            | InlineNode::Link { children, .. } => flatten_text(children),
-            InlineNode::Break { .. } => " ".to_string(),
-            InlineNode::Html { .. } | InlineNode::Image { .. } | InlineNode::Unsupported { .. } => String::new(),
-        })
-        .collect()
+    inline::flatten_text(&heading.content)
 }
 
 fn report_empty_heading(heading: &HeadingNode, message: &str, hint: &str, sink: &mut Sink<'_>) {
@@ -131,12 +113,30 @@ fn unsupported(range: Range<usize>, message: &str, hint: &str, sink: &mut Sink<'
     sink.report(Finding::new(DiagnosticCode::UnsupportedMarkdown, range, message).hint(hint));
 }
 
+/// Warns when a paragraph starts with `#` markers that no space follows: it is text, not a heading,
+/// so the hashes would print and the content would land in the previous section or role.
+fn check_heading_marker(paragraph: &ParagraphNode, src: &Source<'_>, sink: &mut Sink<'_>) {
+    let text = src.slice(&paragraph.range);
+    let hashes = text.bytes().take_while(|b| *b == b'#').count();
+    let next_is_text = text[hashes..].chars().next().is_some_and(|c| !c.is_whitespace());
+    if (1..=6).contains(&hashes) && next_is_text {
+        let range = paragraph.range.start..paragraph.range.start + hashes;
+        let marker = &text[..hashes];
+        let message = format!("`{marker}` has no space after it, so this line is text, not a heading");
+        let finding = Finding::new(DiagnosticCode::HeadingMarkerSpacing, range, message).hint(format!(
+            "write `{marker} ` with a space, or remove the `#` if this is meant to be text"
+        ));
+        sink.report(finding);
+    }
+}
+
 /// The contact paragraph directly after the name, and how many blocks it consumed.
 fn contact(name: &HeadingNode, rest: &[BlockNode], src: &Source<'_>, sink: &mut Sink<'_>) -> (Vec<Inline>, usize) {
     let first = rest.iter().position(|b| !is_comment(b));
     if let Some(index) = first
         && let BlockNode::Paragraph(paragraph) = &rest[index]
     {
+        check_heading_marker(paragraph, src, sink);
         lint::contact_items(&paragraph.content, paragraph.range.clone(), sink);
         return (inline::convert(&paragraph.content, src, sink), index + 1);
     }
@@ -182,10 +182,18 @@ fn classify_html(text: &str) -> HtmlClass {
     }
     let mut rest = trimmed;
     while let Some(after_open) = rest.strip_prefix("<!--") {
-        let Some(close) = after_open.find("-->") else {
-            return HtmlClass::UnclosedComment;
+        // CommonMark 0.31: `<!-->` and `<!--->` are complete, empty comments.
+        let after = if let Some(after) = after_open.strip_prefix('>') {
+            after
+        } else if let Some(after) = after_open.strip_prefix("->") {
+            after
+        } else {
+            let Some(close) = after_open.find("-->") else {
+                return HtmlClass::UnclosedComment;
+            };
+            &after_open[close + 3..]
         };
-        rest = after_open[close + 3..].trim_start();
+        rest = after.trim_start();
     }
     if rest.is_empty() {
         HtmlClass::Comment
@@ -204,7 +212,7 @@ fn html_block(node: &HtmlNode, src: &Source<'_>, sink: &mut Sink<'_>) -> HtmlCla
     let (range, message, hint) = match class {
         HtmlClass::Comment | HtmlClass::PageBreak => return class,
         HtmlClass::UnclosedComment => {
-            let line = src.text[..node.range.start].matches('\n').count() + 1;
+            let line = src.line_of(node.range.start);
             let message = format!("the comment is never closed; everything after line {line} is hidden");
             (
                 node.range.start..(node.range.start + 4).min(node.range.end),
@@ -238,16 +246,32 @@ fn html_block(node: &HtmlNode, src: &Source<'_>, sink: &mut Sink<'_>) -> HtmlCla
 
 /// Walks the blocks after the name, building sections; used with or without a valid name.
 fn walk_sections(blocks: &[BlockNode], src: &Source<'_>, sink: &mut Sink<'_>) -> Vec<Section> {
+    let next = next_visible(blocks);
     let mut walker = Walker {
         current: None,
         sections: Vec::new(),
     };
-    for (index, block) in blocks.iter().enumerate() {
-        let next = blocks[index + 1..].iter().find(|b| !is_comment(b));
-        walker.block(block, next, src, sink);
+    for (block, next) in blocks.iter().zip(next) {
+        walker.block(block, next.map(|index| &blocks[index]), src, sink);
     }
     walker.close_section(sink);
     walker.sections
+}
+
+/// For each block, the index of the next block that is not a comment, computed in one backward pass.
+///
+/// Looking ahead per block would rescan a whole run of comments for every one of them: quadratic in
+/// the length of the run, which is minutes at the input size cap.
+fn next_visible(blocks: &[BlockNode]) -> Vec<Option<usize>> {
+    let mut next = vec![None; blocks.len()];
+    let mut following = None;
+    for (index, block) in blocks.iter().enumerate().rev() {
+        next[index] = following;
+        if !is_comment(block) {
+            following = Some(index);
+        }
+    }
+    next
 }
 
 struct Walker {
@@ -261,9 +285,13 @@ impl Walker {
             BlockNode::Heading(heading) => self.heading(heading, src, sink),
             BlockNode::Html(html) => self.html(html, next, src, sink),
             BlockNode::Unsupported(node) => report_unsupported(node, sink),
-            BlockNode::Paragraph(_) | BlockNode::List(_) => match self.current.as_mut() {
-                Some(section) => section.content(block, src, sink),
-                None => report_before_section(block.range(), "the first section", sink),
+            BlockNode::Paragraph(paragraph) => match self.current.as_mut() {
+                Some(section) => section.paragraph(paragraph, src, sink),
+                None => report_before_section(paragraph.range.clone(), "the first section", sink),
+            },
+            BlockNode::List(list) => match self.current.as_mut() {
+                Some(section) => section.list(list, src, sink),
+                None => report_before_section(list.range.clone(), "the first section", sink),
             },
         }
     }
@@ -413,15 +441,8 @@ impl SectionBuilder {
         self.blocks.push(Block::PageBreak);
     }
 
-    fn content(&mut self, block: &BlockNode, src: &Source<'_>, sink: &mut Sink<'_>) {
-        match block {
-            BlockNode::Paragraph(paragraph) => self.paragraph(paragraph, src, sink),
-            BlockNode::List(list) => self.list(list, src, sink),
-            _ => {}
-        }
-    }
-
     fn paragraph(&mut self, paragraph: &ParagraphNode, src: &Source<'_>, sink: &mut Sink<'_>) {
+        check_heading_marker(paragraph, src, sink);
         match (role::era_line(paragraph, src, sink), self.role.as_mut()) {
             (EraCheck::Era(head), Some(role)) => role.start_era(head),
             (EraCheck::Era(_), None) => {
@@ -447,15 +468,6 @@ impl SectionBuilder {
     }
 
     fn list(&mut self, list: &ListNode, src: &Source<'_>, sink: &mut Sink<'_>) {
-        if list.ordered {
-            let message = "numbered lists are not supported";
-            unsupported(
-                list.range.clone(),
-                message,
-                "use `- ` bullets; the numbers would be lost",
-                sink,
-            );
-        }
         let mut items = Vec::new();
         bullets(list, src, sink, &mut items);
         if items.is_empty() {
@@ -537,6 +549,15 @@ impl RoleBuilder {
 
 /// Converts a list into bullets, flattening nested lists depth-first after their parent.
 fn bullets(list: &ListNode, src: &Source<'_>, sink: &mut Sink<'_>, out: &mut Vec<Bullet>) {
+    if list.ordered {
+        let message = "numbered lists are not supported";
+        unsupported(
+            list.range.clone(),
+            message,
+            "use `- ` bullets; the numbers would be lost",
+            sink,
+        );
+    }
     for item in &list.items {
         bullet(item, src, sink, out);
     }
@@ -603,7 +624,7 @@ fn bullet_from(paragraphs: &[&ParagraphNode], src: &Source<'_>, sink: &mut Sink<
 mod tests {
     use crate::diagnostics::{Diagnostic, DiagnosticCode, Severity};
     use crate::markdown::{Parsed, parse};
-    use claims::assert_some;
+    use claims::{assert_none, assert_ok, assert_some};
     use pretty_assertions::assert_eq;
     use serde_json::{Value, json};
 
@@ -613,7 +634,7 @@ mod tests {
 
     fn model(markdown: &str) -> Value {
         let parsed = parsed(markdown);
-        serde_json::to_value(parsed.best_effort()).unwrap_or(Value::Null)
+        assert_ok!(serde_json::to_value(parsed.best_effort()))
     }
 
     fn codes(markdown: &str) -> Vec<DiagnosticCode> {
@@ -629,6 +650,7 @@ mod tests {
     }
 
     const DOC: &str = "# Ada Lovelace\n\nLondon · a@b.co\n\n## Experience\n\n";
+    const ROLE_LINE: &str = "### Acme · Engineer · 2015 – 2017\n";
 
     fn role_doc(body: &str) -> String {
         format!("{DOC}### Acme · Engineer · 2015 – 2017\n\n{body}")
@@ -664,7 +686,7 @@ mod tests {
         let markdown = "## Summary\n\ntext\n";
         let parsed = parsed(markdown);
         assert_eq!(codes(markdown), vec![DiagnosticCode::MissingName]);
-        assert!(parsed.best_effort().is_none());
+        assert_none!(parsed.best_effort());
         let d = &parsed.diagnostics()[0];
         assert_eq!(d.severity, Severity::Error);
         assert_eq!(assert_some!(d.span.as_ref()).range, 0..0);
@@ -690,7 +712,7 @@ mod tests {
     fn empty_name_heading_is_error() {
         let parsed = parsed("#\n\ntext\n");
         assert_eq!(parsed.diagnostics()[0].code, DiagnosticCode::EmptyHeading);
-        assert!(parsed.best_effort().is_none());
+        assert_none!(parsed.best_effort());
     }
 
     #[test]
@@ -958,7 +980,7 @@ mod tests {
             format!("{DOC}<!-- one -->\n\n### Acme · 2015 – 2017\n\n<!-- two -->\n\nBlurb <!-- inline --> text.\n");
         assert_eq!(codes(&markdown), vec![]);
         let role = &model(&markdown)["sections"][0]["blocks"][0];
-        assert_eq!(role["blurb"], json!([text("Blurb  text.")]));
+        assert_eq!(role["blurb"], json!([text("Blurb text.")]));
     }
 
     #[test]
@@ -1048,5 +1070,111 @@ mod tests {
         let crlf = lf.replace('\n', "\r\n");
         assert_eq!(model(&lf), model(&crlf));
         assert_eq!(codes(&lf), codes(&crlf));
+    }
+
+    #[test]
+    fn empty_and_dash_comments_are_complete_comments() {
+        for comment in ["<!-->", "<!--->", "<!---->", "<!-- a --> <!--> <!--->"] {
+            let markdown = format!("{DOC}{comment}\n\ntext after\n");
+            assert_eq!(codes(&markdown), vec![], "{comment}");
+            let blocks = model(&markdown)["sections"][0]["blocks"].clone();
+            assert_eq!(
+                blocks,
+                json!([{"kind": "paragraph", "content": [text("text after")]}]),
+                "{comment}"
+            );
+        }
+    }
+
+    #[test]
+    fn heading_marker_without_a_space_warns() {
+        let cases = [
+            format!("{DOC}###Acme · Eng · 2019 – 2021\n\n- a\n"),
+            format!("{DOC}##Skills\n\n- a\n"),
+            "# Ada\n\n#hashtag\n\n## S\n\ntext\n".to_string(),
+            format!("{DOC}{ROLE_LINE}\n\n#1 priority was delivery\n"),
+        ];
+        for markdown in cases {
+            let found = diagnostics(&markdown);
+            let warnings: Vec<_> = found
+                .iter()
+                .filter(|d| d.code == DiagnosticCode::HeadingMarkerSpacing)
+                .collect();
+            assert_eq!(warnings.len(), 1, "{markdown:?}: {found:?}");
+            let warning = warnings[0];
+            assert_eq!(warning.severity, Severity::Warning);
+            assert_eq!(
+                warning.fix, None,
+                "turning text into a heading is not meaning-preserving"
+            );
+            let range = assert_some!(warning.span.as_ref()).range.clone();
+            assert!(markdown[range].chars().all(|c| c == '#'), "{markdown:?}");
+        }
+    }
+
+    #[test]
+    fn text_that_merely_contains_hashes_is_not_flagged() {
+        for body in ["C# and F# developer", "a #hashtag in the middle", "Level #1 support"] {
+            let markdown = format!("{DOC}{body}\n");
+            assert_eq!(codes(&markdown), vec![], "{body}");
+        }
+    }
+
+    #[test]
+    fn names_and_role_parts_collapse_whitespace_left_by_dropped_comments() {
+        let markdown = "# Ada <!-- c --> Lovelace\n\nHere\n\n## S\n\n### Acme <!-- c --> Co · 2015 – 2017\n";
+        let value = model(markdown);
+        assert_eq!(value["name"], json!("Ada Lovelace"));
+        assert_eq!(value["sections"][0]["blocks"][0]["company"], json!("Acme Co"));
+    }
+
+    #[test]
+    fn contact_line_has_no_stray_edge_spaces() {
+        let markdown = "# Ada\n\n![me](me.png) Seattle <!-- c -->\n\n## S\n\ntext\n";
+        assert_eq!(model(markdown)["contact"], json!([text("Seattle")]));
+        assert_eq!(codes(markdown), vec![DiagnosticCode::Image]);
+    }
+
+    #[test]
+    fn bold_prose_with_a_middle_dot_is_only_a_bold_warning() {
+        let markdown = role_doc("**Python · Rust** are my favourite languages.\n");
+        assert_eq!(codes(&markdown), vec![DiagnosticCode::MidSentenceBold]);
+    }
+
+    #[test]
+    fn a_bullet_that_is_only_a_comment_is_dropped_like_the_comment() {
+        let markdown = role_doc("- <!-- note -->\n- real\n");
+        assert_eq!(codes(&markdown), vec![]);
+        let items = &model(&markdown)["sections"][0]["blocks"][0]["body"][0]["items"];
+        assert_eq!(items, &json!([{"label": null, "content": [text("real")]}]));
+    }
+
+    #[test]
+    fn numbered_nested_list_is_reported_like_a_top_level_one() {
+        let markdown = role_doc("- parent\n  1. first\n  2. second\n");
+        assert_eq!(
+            codes(&markdown),
+            vec![DiagnosticCode::NestedList, DiagnosticCode::UnsupportedMarkdown]
+        );
+        let items = &model(&markdown)["sections"][0]["blocks"][0]["body"][0]["items"];
+        assert_eq!(items.as_array().map(Vec::len), Some(3), "the items are kept");
+    }
+
+    #[test]
+    fn html_inside_a_bullet_is_reported_unless_it_is_a_comment() {
+        let page_break = role_doc("- item\n\n  <div class=\"page-break\"></div>\n");
+        assert_eq!(codes(&page_break), vec![DiagnosticCode::UnsupportedMarkdown]);
+        let raw = role_doc("- item\n\n  <div>x</div>\n");
+        assert_eq!(codes(&raw), vec![DiagnosticCode::UnsupportedHtml]);
+        let comment = role_doc("- item\n\n  <!-- note -->\n");
+        assert_eq!(codes(&comment), vec![]);
+    }
+
+    #[test]
+    fn the_unclosed_comment_span_is_the_opening_marker() {
+        let markdown = format!("{DOC}text\n\n<!-- never closed\n");
+        let found = diagnostics(&markdown);
+        let range = assert_some!(found[0].span.as_ref()).range.clone();
+        assert_eq!(&markdown[range], "<!--");
     }
 }

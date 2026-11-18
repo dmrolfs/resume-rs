@@ -29,4 +29,8 @@ London · ada@example.com
 
 ### Acme · 2020 – 2018
 
+### Acme \· Eng · 2019 – 2021
+
+### Acme · Eng · Present – 2019
+
 ###

@@ -67,11 +67,39 @@ expression: "views(&text, parsed.diagnostics())"
     }
   },
   {
+    "code": "mid-sentence-bold",
+    "severity": "warning",
+    "range": [
+      487,
+      496
+    ],
+    "source": "**Notes**",
+    "message": "bold inside a sentence",
+    "hints": [
+      "bold only titles, companies, dates, and headings; for a lead-in write `**Label:** text`, with the colon inside"
+    ],
+    "fix": null
+  },
+  {
+    "code": "mid-sentence-bold",
+    "severity": "warning",
+    "range": [
+      528,
+      536
+    ],
+    "source": "**Rust**",
+    "message": "bold inside a sentence",
+    "hints": [
+      "bold only titles, companies, dates, and headings; for a lead-in write `**Label:** text`, with the colon inside"
+    ],
+    "fix": null
+  },
+  {
     "code": "image",
     "severity": "warning",
     "range": [
-      486,
-      504
+      558,
+      576
     ],
     "source": "![A photo](me.png)",
     "message": "images are not rendered on a resume",
@@ -81,11 +109,25 @@ expression: "views(&text, parsed.diagnostics())"
     "fix": null
   },
   {
+    "code": "heading-marker-spacing",
+    "severity": "warning",
+    "range": [
+      578,
+      581
+    ],
+    "source": "###",
+    "message": "`###` has no space after it, so this line is text, not a heading",
+    "hints": [
+      "write `### ` with a space, or remove the `#` if this is meant to be text"
+    ],
+    "fix": null
+  },
+  {
     "code": "role-order",
     "severity": "warning",
     "range": [
-      510,
-      545
+      615,
+      650
     ],
     "source": "New Co · Engineer · 2018 – 2020",
     "message": "`New Co` ended after the role above it",

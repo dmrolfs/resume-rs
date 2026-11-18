@@ -12,6 +12,8 @@ mod inline;
 mod lint;
 mod period;
 mod role;
+#[cfg(test)]
+mod testutil;
 mod tree;
 
 use std::borrow::Cow;
@@ -99,7 +101,9 @@ pub fn parse(path: impl AsRef<Path>, text: &str) -> Parsed {
     let doc = tree::lower(&normalized, base, &mut sink);
     let src = Source { text };
     let resume = blocks::interpret(&doc, &src, &mut sink);
-    Parsed::new(resume, sink.finish())
+    let mut diagnostics = sink.finish();
+    enforce_span_contract(&mut diagnostics, text);
+    Parsed::new(resume, diagnostics)
 }
 
 /// Replaces each lone `\r` with `\n`, byte for byte, so every offset still indexes the original.
@@ -119,12 +123,76 @@ fn normalize_lone_cr(text: &str) -> Cow<'_, str> {
     String::from_utf8(fixed).map_or(Cow::Borrowed(text), Cow::Owned)
 }
 
+/// Snaps `range` into the bounds of `text` and onto character boundaries: the start moves back and
+/// the end moves forward, so the result covers at least what the range named.
+fn snap(text: &str, range: Range<usize>) -> Range<usize> {
+    let mut start = range.start.min(text.len());
+    while !text.is_char_boundary(start) {
+        start -= 1;
+    }
+    let mut end = range.end.min(text.len());
+    while !text.is_char_boundary(end) {
+        end += 1;
+    }
+    start..end.max(start)
+}
+
+/// Snaps every span and Edit of `diagnostics` into bounds and onto character boundaries, returning how
+/// many needed repair.
+fn repair_spans(diagnostics: &mut [Diagnostic], text: &str) -> usize {
+    let mut repaired = 0;
+    for diagnostic in diagnostics {
+        let ranges = diagnostic
+            .span
+            .iter_mut()
+            .map(|span| &mut span.range)
+            .chain(diagnostic.fix.iter_mut().map(|edit| &mut edit.range));
+        for range in ranges {
+            let snapped = snap(text, range.clone());
+            repaired += usize::from(snapped != *range);
+            *range = snapped;
+        }
+    }
+    repaired
+}
+
+/// Enforces the documented span contract at the one public exit: every span and Edit is in bounds and
+/// on character boundaries. A violation is a bug in the module that built the finding, so debug builds
+/// (and therefore the test suite) panic; release builds repair it, so a consumer slicing the source
+/// with a span can never panic.
+fn enforce_span_contract(diagnostics: &mut [Diagnostic], text: &str) {
+    let repaired = repair_spans(diagnostics, text);
+    debug_assert_eq!(
+        repaired, 0,
+        "{repaired} spans or edits were not on character boundaries"
+    );
+}
+
+/// Trims whitespace from both ends of `range` within `text`; the result is never reversed.
+pub(crate) fn trim_range(text: &str, range: Range<usize>) -> Range<usize> {
+    let slice = &text[range.clone()];
+    let start = range.start + (slice.len() - slice.trim_start().len());
+    let end = range.end - (slice.len() - slice.trim_end().len());
+    start..end.max(start)
+}
+
 /// The original text; every range indexes it.
 pub(crate) struct Source<'a> {
     pub text: &'a str,
 }
 
 impl<'a> Source<'a> {
+    /// The 1-based line number of `offset`, counting `\n`, `\r\n`, and a lone `\r` as line endings.
+    pub fn line_of(&self, offset: usize) -> usize {
+        let bytes = &self.text.as_bytes()[..offset.min(self.text.len())];
+        let endings = bytes
+            .iter()
+            .enumerate()
+            .filter(|&(i, &b)| b == b'\n' || (b == b'\r' && bytes.get(i + 1) != Some(&b'\n')))
+            .count();
+        endings + 1
+    }
+
     /// Slices the original text; an out-of-range or non-boundary range yields an empty string.
     pub fn slice(&self, range: &Range<usize>) -> &'a str {
         self.text.get(range.clone()).unwrap_or("")
@@ -241,14 +309,43 @@ impl<'a> Sink<'a> {
 }
 
 /// Severity of each Format code: errors block `build`; warnings do not.
+///
+/// The match is exhaustive with no wildcard, so a new code cannot silently default to a warning.
 pub(crate) const fn severity_of(code: DiagnosticCode) -> Severity {
     use DiagnosticCode::*;
     match code {
         MissingName | DuplicateName | ContentBeforeSection | RoleLineShape | RoleSeparator | EmptyRolePart
         | EraShape | EraOutsideRole | PeriodUnparseable | PeriodEndBeforeStart | UnsupportedHtml | InvalidLink
         | UnsupportedLink | UnsupportedMarkdown | TextTooLong | EmptyHeading | InputLimit => Severity::Error,
-        // Warnings, and every non-Format code (never reported by the parser).
-        _ => Severity::Warning,
+        PeriodHyphen
+        | PeriodPresentSpelling
+        | NestedList
+        | RoleOrder
+        | MidSentenceBold
+        | Image
+        | TooManyContactItems
+        | MissingContact
+        | HardBreak
+        | HeadingMarkerSpacing => Severity::Warning,
+        // Never reported by the parser; the tasks that report them choose their severity.
+        LongBullet
+        | UnquantifiedBullet
+        | WeakOpener
+        | FirstPerson
+        | SloppyPhrase
+        | LongSummary
+        | EducationNotLast
+        | OldRoleDetail
+        | PageLimitExceeded
+        | HeadingNearPageBottom
+        | SparseLastPage
+        | FontFallbackMetric
+        | FontFallbackLayout
+        | FontMissing
+        | UnknownStyle
+        | StyleMissingMain
+        | OutputNotWritable
+        | TypstError => Severity::Warning,
     }
 }
 
@@ -257,6 +354,7 @@ mod tests {
     use super::*;
     use claims::{assert_none, assert_some};
     use pretty_assertions::assert_eq;
+    use std::ops::Range;
 
     fn parsed(text: &str) -> Parsed {
         parse("resume.md", text)
@@ -351,13 +449,18 @@ mod tests {
             sink.report(Finding::new(DiagnosticCode::Image, i..i, "image"));
         }
         sink.report(Finding::new(DiagnosticCode::Image, 0..0, "warning beyond the cap"));
+        sink.report(Finding::new(
+            DiagnosticCode::Image,
+            0..0,
+            "another warning beyond the cap",
+        ));
         sink.report(Finding::new(DiagnosticCode::InvalidLink, 0..0, "error beyond the cap"));
         let diagnostics = sink.finish();
         assert_eq!(diagnostics.len(), MAX_DIAGNOSTICS + 1);
         let summary = assert_some!(diagnostics.last());
         assert_eq!(summary.code, DiagnosticCode::InputLimit);
         assert_eq!(summary.severity, Severity::Error);
-        assert_eq!(summary.message, "2 more findings (1 errors) not shown");
+        assert_eq!(summary.message, "3 more findings (1 errors) not shown");
     }
 
     #[test]
@@ -385,5 +488,145 @@ mod tests {
         assert_eq!(severity_of(DiagnosticCode::PeriodHyphen), Severity::Warning);
         assert_eq!(severity_of(DiagnosticCode::TooManyContactItems), Severity::Warning);
         assert_eq!(severity_of(DiagnosticCode::InputLimit), Severity::Error);
+    }
+
+    #[test]
+    fn unclosed_comment_line_number_counts_every_line_ending_style() {
+        for eol in ["\n", "\r\n", "\r"] {
+            let text = format!("# Ada{eol}{eol}Here{eol}{eol}## S{eol}{eol}text{eol}{eol}<!-- never closed");
+            let parsed = parsed(&text);
+            let message = parsed
+                .diagnostics()
+                .iter()
+                .find(|d| d.code == DiagnosticCode::UnsupportedHtml)
+                .map(|d| d.message.clone())
+                .unwrap_or_default();
+            assert!(
+                message.contains("everything after line 9 is hidden"),
+                "{eol:?}: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn snap_moves_a_range_onto_character_boundaries() {
+        let text = "a–b"; // the en dash occupies bytes 1..4
+        assert_eq!(snap(text, 2..3), 1..4);
+        assert_eq!(snap(text, 1..4), 1..4);
+        assert_eq!(snap(text, 0..99), 0..5);
+        let reversed = Range { start: 4, end: 2 };
+        assert_eq!(snap(text, reversed), 4..4, "a reversed range collapses to its start");
+        assert_eq!(snap("", 3..9), 0..0);
+    }
+
+    #[test]
+    fn format_code_severities_are_exactly_the_documented_sets() {
+        use DiagnosticCode::*;
+        use strum::IntoEnumIterator;
+        let errors = [
+            MissingName,
+            DuplicateName,
+            ContentBeforeSection,
+            RoleLineShape,
+            RoleSeparator,
+            EmptyRolePart,
+            EraShape,
+            EraOutsideRole,
+            PeriodUnparseable,
+            PeriodEndBeforeStart,
+            UnsupportedHtml,
+            InvalidLink,
+            UnsupportedLink,
+            UnsupportedMarkdown,
+            TextTooLong,
+            EmptyHeading,
+            InputLimit,
+        ];
+        let warnings = [
+            PeriodHyphen,
+            PeriodPresentSpelling,
+            NestedList,
+            RoleOrder,
+            MidSentenceBold,
+            Image,
+            TooManyContactItems,
+            MissingContact,
+            HardBreak,
+            HeadingMarkerSpacing,
+        ];
+        for code in DiagnosticCode::iter().filter(|c| c.category() == crate::diagnostics::Category::Format) {
+            let expected = match (errors.contains(&code), warnings.contains(&code)) {
+                (true, false) => Severity::Error,
+                (false, true) => Severity::Warning,
+                other => panic!("{code} must be listed as exactly one of error or warning, got {other:?}"),
+            };
+            assert_eq!(severity_of(code), expected, "{code}");
+        }
+    }
+
+    #[test]
+    fn into_parts_hands_back_the_model_and_the_findings() {
+        let (resume, diagnostics) = parsed("# Ada\n\nHere\n\n## S\n\n### Acme · 2015 - 2017\n").into_parts();
+        let resume = assert_some!(resume);
+        assert_eq!(resume.name.as_ref(), "Ada");
+        assert_eq!(
+            diagnostics.iter().map(|d| d.code).collect::<Vec<_>>(),
+            vec![DiagnosticCode::PeriodHyphen]
+        );
+    }
+
+    #[test]
+    fn a_clean_resume_is_valid_and_has_no_errors() {
+        let parsed = parsed("# Ada\n\nHere\n\n## S\n\ntext\n");
+        assert!(!parsed.has_errors());
+        let valid = assert_some!(parsed.valid());
+        assert_eq!(Some(valid), parsed.best_effort());
+        let warned = self::parsed("# Ada\n\nHere\n\n## S\n\n### Acme · 2015 - 2017\n");
+        assert!(!warned.has_errors(), "a warning is not an error");
+        assert_some!(warned.valid());
+    }
+
+    fn diagnostic_at(range: Range<usize>, fix: Option<Range<usize>>) -> Diagnostic {
+        Diagnostic {
+            severity: Severity::Warning,
+            code: DiagnosticCode::Image,
+            message: String::new(),
+            span: Some(Span {
+                file: "r.md".into(),
+                kind: SourceKind::Markdown,
+                range,
+            }),
+            hints: Vec::new(),
+            fix: fix.map(|range| Edit {
+                range,
+                replacement: String::new(),
+            }),
+        }
+    }
+
+    #[test]
+    fn repair_spans_snaps_spans_and_edits_that_break_a_character() {
+        let text = "a–b"; // the en dash occupies bytes 1..4
+        let mut diagnostics = vec![diagnostic_at(2..3, Some(0..2)), diagnostic_at(0..1, None)];
+        assert_eq!(
+            repair_spans(&mut diagnostics, text),
+            2,
+            "one span and one edit were off a boundary"
+        );
+        assert_eq!(assert_some!(diagnostics[0].span.as_ref()).range, 1..4);
+        assert_eq!(assert_some!(diagnostics[0].fix.as_ref()).range, 0..4);
+        assert_eq!(
+            assert_some!(diagnostics[1].span.as_ref()).range,
+            0..1,
+            "a valid span is untouched"
+        );
+        assert_eq!(repair_spans(&mut diagnostics, text), 0);
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "were not on character boundaries")]
+    fn enforcing_the_span_contract_fails_loudly_in_debug_builds() {
+        enforce_span_contract(&mut [diagnostic_at(2..3, None)], "a–b");
     }
 }

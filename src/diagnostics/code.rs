@@ -51,6 +51,7 @@ pub enum DiagnosticCode {
     TextTooLong,
     EmptyHeading,
     InputLimit,
+    HeadingMarkerSpacing,
     // Content (doctor)
     LongBullet,
     UnquantifiedBullet,
@@ -105,7 +106,8 @@ impl DiagnosticCode {
             | HardBreak
             | TextTooLong
             | EmptyHeading
-            | InputLimit => Category::Format,
+            | InputLimit
+            | HeadingMarkerSpacing => Category::Format,
             LongBullet | UnquantifiedBullet | WeakOpener | FirstPerson | SloppyPhrase | LongSummary
             | EducationNotLast | OldRoleDetail => Category::Content,
             PageLimitExceeded
@@ -199,6 +201,7 @@ mod tests {
             (DiagnosticCode::TextTooLong, "text-too-long"),
             (DiagnosticCode::EmptyHeading, "empty-heading"),
             (DiagnosticCode::InputLimit, "input-limit"),
+            (DiagnosticCode::HeadingMarkerSpacing, "heading-marker-spacing"),
         ];
         for (code, id) in added {
             assert_eq!(code.category(), Category::Format);

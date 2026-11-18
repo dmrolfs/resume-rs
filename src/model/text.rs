@@ -3,9 +3,17 @@
 
 use nutype::nutype;
 
+/// Trims the ends and turns every run of whitespace into one space.
+///
+/// A dropped comment or image leaves a double space inside a name or heading; no resume field
+/// wants that, so the newtypes normalize it away.
+fn collapse_whitespace(text: String) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// The person's name, from the single `# ` heading.
 #[nutype(
-    sanitize(trim),
+    sanitize(with = collapse_whitespace),
     validate(not_empty, len_char_max = 80),
     derive(Debug, Clone, PartialEq, Eq, Hash, Display, AsRef, Serialize, TryFrom)
 )]
@@ -13,7 +21,7 @@ pub struct Name(String);
 
 /// The company, the first part of a role line.
 #[nutype(
-    sanitize(trim),
+    sanitize(with = collapse_whitespace),
     validate(not_empty, len_char_max = 120),
     derive(Debug, Clone, PartialEq, Eq, Hash, Display, AsRef, Serialize, TryFrom)
 )]
@@ -21,7 +29,7 @@ pub struct Company(String);
 
 /// The job title, the middle part of a three-part role line.
 #[nutype(
-    sanitize(trim),
+    sanitize(with = collapse_whitespace),
     validate(not_empty, len_char_max = 120),
     derive(Debug, Clone, PartialEq, Eq, Hash, Display, AsRef, Serialize, TryFrom)
 )]
@@ -29,7 +37,7 @@ pub struct Title(String);
 
 /// A section heading, from a `## ` line.
 #[nutype(
-    sanitize(trim),
+    sanitize(with = collapse_whitespace),
     validate(not_empty, len_char_max = 60),
     derive(Debug, Clone, PartialEq, Eq, Hash, Display, AsRef, Serialize, TryFrom)
 )]
@@ -37,7 +45,7 @@ pub struct SectionTitle(String);
 
 /// The name of an era inside a role, from a `**Era · Period**` paragraph.
 #[nutype(
-    sanitize(trim),
+    sanitize(with = collapse_whitespace),
     validate(not_empty, len_char_max = 80),
     derive(Debug, Clone, PartialEq, Eq, Hash, Display, AsRef, Serialize, TryFrom)
 )]
@@ -130,5 +138,42 @@ mod tests {
         assert_err!(StyleName::try_new("has space"));
         assert_err!(StyleName::try_new("a".repeat(33)));
         assert_err!(StyleName::try_new(""));
+    }
+
+    #[test]
+    fn newtypes_collapse_inner_whitespace() {
+        assert_eq!(
+            assert_ok!(Name::try_new(" Ada   Lovelace\t")).into_inner(),
+            "Ada Lovelace"
+        );
+        assert_eq!(assert_ok!(Company::try_new("Acme \u{a0} Co")).into_inner(), "Acme Co");
+        assert_eq!(
+            assert_ok!(Title::try_new("VP  of\nEngineering")).into_inner(),
+            "VP of Engineering"
+        );
+        assert_eq!(
+            assert_ok!(SectionTitle::try_new("Work   History")).into_inner(),
+            "Work History"
+        );
+        assert_eq!(
+            assert_ok!(EraName::try_new("AI   platforms")).into_inner(),
+            "AI platforms"
+        );
+        assert_err!(Name::try_new(" \t \n "));
+    }
+
+    #[test]
+    fn every_length_limit_is_exact() {
+        // The parser's messages quote these numbers; this pins them to the newtypes.
+        assert_ok!(Name::try_new("a".repeat(80)));
+        assert_err!(Name::try_new("a".repeat(81)));
+        assert_ok!(Company::try_new("a".repeat(120)));
+        assert_err!(Company::try_new("a".repeat(121)));
+        assert_ok!(Title::try_new("a".repeat(120)));
+        assert_err!(Title::try_new("a".repeat(121)));
+        assert_ok!(SectionTitle::try_new("a".repeat(60)));
+        assert_err!(SectionTitle::try_new("a".repeat(61)));
+        assert_ok!(EraName::try_new("a".repeat(80)));
+        assert_err!(EraName::try_new("a".repeat(81)));
     }
 }

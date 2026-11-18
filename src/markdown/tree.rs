@@ -405,11 +405,11 @@ impl<'t, 's, 'p> Lowerer<'t, 's, 'p> {
 
     /// Shifts a range into original coordinates and drops a trailing line ending.
     fn block_range(&self, range: Range<usize>) -> Range<usize> {
-        let mut end = range.end;
-        while end > range.start && matches!(self.text.as_bytes().get(end - 1), Some(b'\n' | b'\r')) {
-            end -= 1;
-        }
-        range.start + self.base..end + self.base
+        let visible = self
+            .text
+            .get(range.clone())
+            .map_or(range.len(), |text| text.trim_end_matches(['\n', '\r']).len());
+        range.start + self.base..range.start + visible + self.base
     }
 
     fn start(&mut self, tag: Tag<'_>, range: Range<usize>) {
@@ -649,9 +649,8 @@ impl<'t, 's, 'p> Lowerer<'t, 's, 'p> {
     }
 
     fn finish(mut self) -> Document {
-        while self.stack.len() > 1 {
-            self.stack.pop();
-        }
+        // Pulldown-cmark's events are balanced, so only the root remains; anything else is dropped.
+        self.stack.truncate(1);
         match self.stack.pop() {
             Some(Frame::Root(blocks)) => Document { blocks },
             _ => Document { blocks: Vec::new() },
@@ -908,5 +907,103 @@ mod tests {
         assert_eq!(empty.range(), 0..0);
         assert_eq!(empty.source_range(0..0), 0..0);
         assert_none!(empty.segment_at(0));
+    }
+
+    #[test]
+    fn verbatim_segments_merge_only_when_contiguous_in_the_source() {
+        let mut node = TextNode::default();
+        node.push("ab", 0..2, true);
+        node.push("cd", 2..4, true);
+        node.push("ef", 10..12, true); // a gap in the source: markup was between them
+        assert_eq!(node.text, "abcdef");
+        assert_eq!(node.source_range(0..4), 0..4);
+        assert_eq!(node.source_range(4..6), 10..12, "text after a gap maps past the gap");
+        assert_eq!(node.range(), 0..12);
+    }
+
+    #[test]
+    fn concat_keeps_each_part_mapped_to_its_own_source() {
+        let (mut first, mut second) = (TextNode::default(), TextNode::default());
+        first.push("one ", 0..4, true);
+        second.push("two", 20..23, true);
+        let joined = TextNode::concat([&first, &second]);
+        assert_eq!(joined.text, "one two");
+        assert_eq!(joined.source_range(0..3), 0..3);
+        assert_eq!(
+            joined.source_range(4..7),
+            20..23,
+            "the second part keeps its own offsets"
+        );
+    }
+
+    #[test]
+    fn an_entity_maps_to_the_whole_entity() {
+        let nodes = only_paragraph("A &amp; B");
+        let text = text_of(&nodes[0]);
+        assert_eq!(text.text, "A & B");
+        // The decoded `&` is one byte of text but five bytes of source (`&amp;`).
+        assert_eq!(text.source_range(2..3), 2..7);
+        assert_eq!(text.source_range(0..2), 0..2, "text before the entity maps exactly");
+    }
+
+    #[test]
+    fn broken_link_ranges_are_shifted_by_the_base() {
+        let mut sink = Sink::new(Path::new("r.md"));
+        let _ = lower("[t][nope]\n", 3, &mut sink);
+        let diagnostics = sink.finish();
+        assert_eq!(assert_some!(diagnostics[0].span.as_ref()).range, 3..12);
+    }
+
+    #[test]
+    fn many_sibling_lists_do_not_count_toward_the_nesting_cap() {
+        // Closing a list must give its depth back: 20 lists in a row are 20 siblings, not 20 levels.
+        let text: String = (0..20).map(|i| format!("paragraph {i}\n\n- item {i}\n\n")).collect();
+        let (doc, diagnostics) = lowered(&text);
+        assert_eq!(diagnostics, vec![]);
+        assert_eq!(
+            doc.blocks.iter().filter(|b| matches!(b, BlockNode::List(_))).count(),
+            20
+        );
+    }
+
+    #[test]
+    fn many_sibling_emphasis_spans_do_not_count_toward_the_nesting_cap() {
+        let text = (0..20)
+            .map(|i| format!("*a{i}* **b{i}** [c{i}](https://x.y)"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let (_, diagnostics) = lowered(&text);
+        assert_eq!(diagnostics, vec![]);
+    }
+
+    #[test]
+    fn a_hash_without_a_space_is_not_an_atx_heading() {
+        let (doc, _) = lowered("#hashtag\n========\n\n#7 priority\n-----\n\n# real\n");
+        let flags: Vec<_> = doc
+            .blocks
+            .iter()
+            .filter_map(|b| {
+                if let BlockNode::Heading(h) = b {
+                    Some((h.level, h.setext))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(flags, vec![(1, true), (2, true), (1, false)]);
+    }
+
+    #[test]
+    fn a_range_inside_a_synthesized_segment_maps_to_the_whole_segment() {
+        // Some entities decode to several characters; none of them has its own source bytes.
+        let mut node = TextNode::default();
+        node.push("ab", 10..15, false);
+        assert_eq!(node.source_range(0..1), 10..15);
+        assert_eq!(
+            node.source_range(1..2),
+            10..15,
+            "the second character still maps to the whole entity"
+        );
+        assert_eq!(node.source_range(0..2), 10..15);
     }
 }
