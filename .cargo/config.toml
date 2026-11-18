@@ -1,0 +1,9 @@
+# ABOUTME: Cargo settings for resume-rs; links the C runtime statically on the Windows MSVC target.
+# ABOUTME: Without this, resume.exe imports VCRUNTIME140.dll and may not start on a clean Windows machine.
+
+# Rust's MSVC targets link the Visual C++ runtime dynamically by default, so the exe needs
+# VCRUNTIME140.dll, which Windows does not ship. Static linking makes the release exe self-contained.
+# CI enforces this with scripts/check-pe-imports.sh on the release build. (`cargo test` and
+# `cargo clippy` on Windows use the same flags, so tests run against what ships.)
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
