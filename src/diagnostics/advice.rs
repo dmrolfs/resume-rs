@@ -221,7 +221,8 @@ impl DiagnosticCode {
             | UnknownStyle
             | StyleMissingMain
             | OutputNotWritable
-            | TypstError => None,
+            | TypstError
+            | TypstWarning => None,
         }
     }
 }

@@ -74,9 +74,9 @@ Cross-OS PDF byte comparison and the Windows-only behavior tests are owned by th
 | Cross-OS PDF hash job on ubuntu-latest, failing closed (rung 1: test-written PDF with embedded fonts; rung 2: bundled fonts; rung 3: `resume build --fonts bundled`) | rsm-141.15 (P3) |
 | `crlf_spans_point_into_original`, LF and CRLF inputs parse to equal models | rsm-141.4 |
 | `--color never` and `NO_COLOR` emit no `\x1b`; summary markers are ASCII | rsm-141.5, rsm-141.10 |
-| `virtual_paths_from_windows_style_components` (all OSes; `\`-separated `PathBuf` under `cfg(windows)`) | rsm-141.6 |
-| `output_locked_reports_hint` (`cfg(windows)`: open the target with `share_mode(0)`, expect `OutputLocked`) | rsm-141.6 if it writes files, else rsm-141.10 |
-| Build twice with `RAYON_NUM_THREADS=1` and `=8`, same bytes; deep-nesting fixture on a spawned thread with an explicit stack size | rsm-141.6 |
+| `virtualize_builds_from_path_components_not_strings` (all OSes) and `virtualize_and_realize_handle_drive_letter_roots` (`cfg(windows)`) | rsm-141.6 |
+| `output_locked_reports_hint` (`cfg(windows)`: open the target with `share_mode(0)`, expect `OutputLocked`; map both `ERROR_ACCESS_DENIED` and `ERROR_SHARING_VIOLATION`) | rsm-141.10 (owns the atomic write; rsm-141.6 has no write path) |
+| Build with `RAYON_NUM_THREADS` 1, 2, and 8, same bytes; deep-nesting fixtures in child processes | rsm-141.6 (done: `determinism_test.rs`, `nesting_test.rs`) |
 | CRLF input produces the same PDF as LF input | rsm-141.10 |
 | `fix_preserves_crlf_line_endings` | rsm-141.11 |
 | `watch_continues_after_output_locked` (`cfg(windows)`) | rsm-141.12 |
@@ -121,12 +121,35 @@ Unit tests sit beside the code in `src/diagnostics/lines.rs` and `src/diagnostic
 - [x] `line_index_matches_the_naive_reference` (proptest) and `line_of_counts_a_crlf_as_one_ending_wherever_the_offset_falls` (the Markdown `line_of` bug found by the design review)
 
 ### rsm-141.6: Typst World and PDF
-- [ ] `compiles_minimal_style_to_pdf`: the output starts with `%PDF` and has 1 page.
-- [ ] `same_input_twice_is_byte_identical`
-- [ ] `style_syntax_error_maps_to_style_file_line`
-- [ ] `file_outside_root_is_denied`
-- [ ] `resume_json_is_readable_from_style`
-- [ ] `today_is_unavailable`: a style calling `datetime.today()` produces a diagnostic, not an output that depends on the date.
+Style, world, and PDF settings (unit, in `src`):
+- [x] `style.rs`: `directory_style_requires_style_typ`, `unknown_style_reports_searched_directory`, `missing_styles_root_is_a_style_root_error`, `main_file_is_style_typ_under_the_style_name`, `directory_style_reads_shared_files_through_the_root`, `embedded_style_reads_by_relative_path`, `embedded_style_reports_unknown_and_missing_main`, `missing_file_is_not_found_in_both_sources`, `reading_a_directory_is_is_directory_in_both_sources`, `symlink_escape_is_access_denied` (unix), `display_paths_hide_the_canonical_root_and_mark_built_ins`
+- [x] `world.rs`: `style_files_resolve_through_virtual_path_components`, `today_is_none`, `resume_json_is_served_from_memory_and_shadows_disk`, `package_roots_are_refused_with_a_clear_message`, `served_sources_record_only_style_files_in_display_order`, `backslash_style_path_is_rejected_by_virtual_path`, `virtualize_builds_from_path_components_not_strings`, `virtualize_and_realize_handle_drive_letter_roots` (`cfg(windows)`)
+- [x] `pdf.rs`: `pdf_options_are_deterministic`. `fonts.rs`: the bundled set loads, is sorted and unique. `diag.rs`: error, warning, detached span, in-memory resume span, hints and trace, order. `typeset/mod.rs`: a panic becomes `TypesetPanicked`, the work runs on the named thread.
+
+`tests/render_test.rs` (fixtures in `tests/fixtures/styles/`):
+- [x] `compiles_minimal_style_to_pdf`: `%PDF-` ... `%%EOF`, 1 page, an embedded subset font, and the title equals the resume name (proves `/resume.json` was read).
+- [x] `paper_input_selects_page_size`: MediaBox 612x792 and about 595x842.
+- [x] `style_syntax_error_maps_to_style_file_line`, `compile_errors_carry_the_style_text_for_excerpts`
+- [x] `today_is_unavailable`, `relative_path_escaping_the_root_is_denied`, `absolute_path_is_root_relative_and_never_reads_the_host`, `package_import_is_refused_without_network`, `symlink_pointing_out_of_the_styles_directory_is_denied_end_to_end` (unix)
+- [x] `root_relative_import_through_the_style_parent`, `content_style_renders_every_node_kind_without_warnings`
+- [x] `unknown_font_family_in_a_stack_warns`: pins the Typst warning that rsm-141.7 resolves.
+- [x] `same_input_twice_is_byte_identical`: non-vacuous (size check).
+
+`tests/determinism_test.rs` (cross-process cases re-run the test binary through an `#[ignore]` child entry point):
+- [x] `repeated_in_process_renders_are_identical` (20), `cold_and_warm_comemo_cache_agree`, `different_content_gives_different_bytes` (negative control), `a_different_ident_changes_the_bytes_and_the_same_ident_does_not`, `pdf_has_no_dates`
+- [x] `rayon_thread_count_does_not_change_bytes` (1, 2, 8), `file_id_numbering_does_not_change_bytes` (500 ids interned first), `a_fresh_process_matches_this_warm_one`
+
+`tests/nesting_test.rs` (child processes, because a stack overflow aborts the harness):
+- [x] `nesting_just_under_the_layout_cap_compiles`, `nesting_just_under_the_cap_survives_quarter_size_worker_stacks`, `nesting_beyond_the_layout_cap_is_a_diagnostic_not_a_crash`, `nesting_beyond_the_parse_cap_is_a_diagnostic_not_a_crash`
+
+`tests/dependencies_test.rs`: `typst_crates_are_pinned_exactly`, `no_network_stack_in_dependency_tree`.
+
+Not covered here: cross-architecture byte equality (rsm-141.15), the text of the PDF in reading order (rsm-141.7; lopdf text extraction on Typst's CID fonts is unverified), font layering and role resolution (rsm-141.18).
+
+### rsm-141.18: Layered font set and role resolution
+- [ ] `role_resolution_prefers_installed_original`, `role_resolution_falls_back_and_flags_metric_compatibility`, `role_resolution_reports_missing_when_neither_font_exists`
+- [ ] `layer_order_is_bundled_then_font_path_then_env_then_application_then_system`, `ordering_within_a_directory_is_independent_of_enumeration_order`, `duplicate_path_and_index_is_loaded_once`
+- [ ] `fonts_bundled_mode_ignores_system_fonts`, `font_path_adds_fonts`, `ttc_collections_load`, `font_path_beats_installed_font_of_same_family`, `resolved_font_appears_in_pdf`
 
 ### rsm-141.7: Components and pragmatic
 - [ ] `full_fixture_renders_in_pragmatic_without_warnings`

@@ -73,6 +73,7 @@ pub enum DiagnosticCode {
     StyleMissingMain,
     OutputNotWritable,
     TypstError,
+    TypstWarning,
 }
 
 impl DiagnosticCode {
@@ -116,7 +117,7 @@ impl DiagnosticCode {
             | FontFallbackMetric
             | FontFallbackLayout
             | FontMissing => Category::Layout,
-            UnknownStyle | StyleMissingMain | OutputNotWritable | TypstError => Category::Setup,
+            UnknownStyle | StyleMissingMain | OutputNotWritable | TypstError | TypstWarning => Category::Setup,
         }
     }
 }
@@ -189,6 +190,13 @@ mod tests {
         assert_eq!(DiagnosticCode::FontMissing.category(), Category::Layout);
         assert_eq!(DiagnosticCode::UnknownStyle.category(), Category::Setup);
         assert_eq!(DiagnosticCode::TypstError.category(), Category::Setup);
+    }
+
+    #[test]
+    fn typst_warning_is_a_setup_code_with_a_stable_id() {
+        assert_eq!(DiagnosticCode::TypstWarning.category(), Category::Setup);
+        assert_eq!(DiagnosticCode::TypstWarning.to_string(), "typst-warning");
+        assert_eq!(DiagnosticCode::TypstError.to_string(), "typst-error");
     }
 
     #[test]

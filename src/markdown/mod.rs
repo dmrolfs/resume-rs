@@ -328,7 +328,8 @@ pub(crate) const fn severity_of(code: DiagnosticCode) -> Severity {
         | UnknownStyle
         | StyleMissingMain
         | OutputNotWritable
-        | TypstError => Severity::Warning,
+        | TypstError
+        | TypstWarning => Severity::Warning,
     }
 }
 

@@ -1,0 +1,12 @@
+# ABOUTME: cargo-audit policy: the only ignored advisories, each with the reason it cannot affect resume-rs.
+# ABOUTME: Re-check every entry whenever the pinned Typst version changes (rsm-141.6).
+
+[advisories]
+ignore = [
+    # quick-xml 0.38.4 reaches us only through typst-library -> hayagriva -> citationberg, which parse
+    # CSL bibliography styles. A style would have to call `bibliography()` with an untrusted CSL file;
+    # no built-in style does, and styles are code the user chooses to run. Typst is pinned to =0.15.1,
+    # so we cannot upgrade quick-xml ourselves. Fixed in quick-xml >= 0.41.0.
+    "RUSTSEC-2026-0194", # quadratic run time when checking a start tag for duplicate attributes
+    "RUSTSEC-2026-0195", # unbounded namespace-declaration allocation in NsReader
+]
