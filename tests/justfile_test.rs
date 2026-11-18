@@ -82,8 +82,10 @@ fn the_real_justfile_follows_the_platform_rule() {
 }
 
 #[test]
+#[cfg(not(windows))]
 fn the_checker_detects_a_gated_dependency_and_an_ungated_script() {
-    // Proves the rule is not vacuous: a justfile built to break it must be reported.
+    // Proves the rule is not vacuous: a justfile built to break it must be reported. This fixture only loads
+    // where its `[unix]` recipe exists; on Windows `just` itself refuses it (see the next test).
     let violations = platform_violations(&crate_path("tests/fixtures/justfiles/platform-violation.just"));
     assert_eq!(
         violations,
@@ -91,6 +93,35 @@ fn the_checker_detects_a_gated_dependency_and_an_ungated_script() {
             "`broken-dependency` depends on platform-gated `gated-helper`".to_string(),
             "`broken-shebang` is a script recipe with no platform attribute".to_string(),
         ]
+    );
+}
+
+#[test]
+fn a_gated_dependency_really_fails_to_load_on_windows() {
+    // Emulates how Windows sees the fixture by swapping `[unix]` (absent on Windows) for `[windows]` (present),
+    // which is exactly the situation that broke CI twice. Runs on every OS, so it also guards the Windows leg.
+    let fixture = std::fs::read_to_string(crate_path("tests/fixtures/justfiles/platform-violation.just"))
+        .expect("fixture is readable");
+    let windows_view = fixture.replace("[unix]", "[windows]");
+    let dir = std::env::temp_dir().join(format!("resume-justfile-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let path = dir.join("windows-view.just");
+    std::fs::write(&path, windows_view).expect("write temp justfile");
+    let output = Command::new("just")
+        .arg("--justfile")
+        .arg(&path)
+        .args(["--dump", "--dump-format", "json"])
+        .output();
+    let _ = std::fs::remove_dir_all(&dir);
+    let output = output.expect("`just` must be installed to test the justfile");
+    assert!(
+        !output.status.success(),
+        "a gated dependency must stop `just` from loading the file"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unknown dependency"),
+        "unexpected error from just:\n{stderr}"
     );
 }
 
