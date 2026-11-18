@@ -163,3 +163,35 @@ fn the_ci_leg_is_the_gate_plus_a_locked_release_build() {
         .collect();
     assert_eq!(deps, ["check", "release"], "`just ci` must reproduce one CI leg");
 }
+
+#[test]
+fn the_gate_is_formatting_lints_unused_dependencies_and_tests() {
+    let dumped = dump(&crate_path("justfile"));
+    let deps: Vec<&str> = dumped["recipes"]["check"]["dependencies"]
+        .as_array()
+        .expect("`check` recipe exists")
+        .iter()
+        .filter_map(|d| d["recipe"].as_str())
+        .collect();
+    assert_eq!(
+        deps,
+        ["fmt", "clippy", "unused-deps", "test"],
+        "`just check` is the gate beads tasks run and CI runs"
+    );
+}
+
+#[test]
+fn the_unused_dependency_check_is_a_plain_cargo_machete_run() {
+    let dumped = dump(&crate_path("justfile"));
+    let recipe = &dumped["recipes"]["unused-deps"];
+    assert!(recipe.is_object(), "`unused-deps` recipe exists");
+    assert!(
+        !is_platform_gated(recipe),
+        "the gate runs on Windows too, so the recipe must carry no platform attribute"
+    );
+    let body = recipe["body"].to_string();
+    assert!(body.contains("cargo machete"), "{body}");
+    // Without `--with-metadata`, machete only reads [dependencies]; with it, [dev-dependencies] are checked
+    // too, and the cargo lint in Cargo.toml never checks those.
+    assert!(body.contains("--with-metadata"), "{body}");
+}

@@ -51,7 +51,7 @@
 **Scope:**
 - Modify: `Cargo.toml`, `src/main.rs`, `.gitignore`
 - Create: `src/lib.rs`, `rustfmt.toml`, `justfile`, `README.md`, `LICENSE`, `tests/cli_test.rs`
-- Dependencies: only `clap` (derive), plus dev dependencies `assert_cmd` and `predicates`. Cargo 1.100 warns on declared-but-unused dependencies, so each dependency is added by the task that first uses it:
+- Dependencies: only `clap` (derive), plus dev dependencies `assert_cmd` and `predicates`. Cargo 1.100 warns on declared-but-unused dependencies, and since rsm-141.17 `just check` fails on one (the `unused_dependencies` lint plus `cargo machete`; see Dependency hygiene in the architecture doc), so each dependency is added by the task that first uses it:
   - rsm-141.3: nutype (serde, regex), regex, serde, serde_json, time (serde), strum (derive), url (serde); dev: insta (json), claims, pretty_assertions
   - rsm-141.4: pulldown-cmark; dev: proptest
   - rsm-141.5: codespan-reporting

@@ -13,7 +13,7 @@ Status: under development. See `ref/Resume-RS-Architecture.md` for the design.
 
 ```bash
 just           # list every recipe, grouped
-just check     # the quality gate: cargo fmt --check, cargo clippy -D warnings, cargo test
+just check     # the quality gate: cargo fmt --check, cargo clippy -D warnings, cargo machete, cargo test
 ```
 
 Common recipes (run `just` for the full list):
@@ -25,12 +25,13 @@ Common recipes (run `just` for the full list):
 | `just run build resume.md` | Run the CLI with arguments |
 | `just test-one NAME` | Run tests whose name contains `NAME` |
 | `just watch` | Re-run the gate on every change (needs `cargo-watch`) |
+| `just unused-deps` | Fail on a dependency nothing uses (part of `just check`; needs `cargo-machete`) |
 | `just doc-check` | Build the API docs and fail on any rustdoc warning |
 | `just coverage` | Line coverage summary (needs `cargo-llvm-cov`) |
 | `just audit` | Check dependencies for known vulnerabilities (needs `cargo-audit`) |
 | `just verify` | Everything to run before pushing, including both cross-builds (macOS only) |
 
-Recipes that need an optional tool print the `cargo install` command if it is missing. The recipes without a
+`just check` needs `cargo-machete` (`cargo install cargo-machete --locked`; CI installs it); dependencies are added when first used, and the gate enforces it (see Dependency hygiene in `ref/Resume-RS-Architecture.md`). Recipes that need an optional tool print the `cargo install` command if it is missing. The recipes without a
 platform attribute also run on Windows, where `just` uses PowerShell, so they must stay plain commands:
 `tests/justfile_test.rs` enforces this, because a recipe that breaks loading on Windows would break all of them.
 

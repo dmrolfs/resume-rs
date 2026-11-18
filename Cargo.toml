@@ -17,12 +17,25 @@ rust_2021_compatibility = { level = "warn", priority = -1 }
 rust_2021_incompatible_closure_captures = "warn"
 rust_2021_prelude_collisions = "warn"
 
+# Cargo manifest lints need cargo 1.100 or newer; an older cargo warns "unused manifest key" and ignores
+# this table. `clippy -D warnings` does not escalate them, so the level is set here, and it makes a
+# declared [dependencies] entry that no target uses a hard error. See ref/Resume-RS-Architecture.md for
+# what the lint cannot see.
+[lints.cargo]
+unused_dependencies = "deny"
+
 [lints.clippy]
 cargo = { level = "warn", priority = -1 }
 suspicious = { level = "warn", priority = -1 }
 multiple_crate_versions = "allow"
 
-# Dependencies are added by the task that first uses them (cargo warns on unused ones).
+# cargo-machete (`just unused-deps`) reads source text, so it cannot see a crate that is only named by code a
+# macro generates: nutype's `validate(regex = ...)` expands to `::regex::Regex`, so `regex` stays a direct
+# dependency without a `regex::` path anywhere in src/.
+[package.metadata.cargo-machete]
+ignored = ["regex"]
+
+# Dependencies are added by the task that first uses them; the `unused_dependencies` lint above enforces it.
 # Typst crates are pinned exactly (`=0.15.1`) when added in rsm-141.6; see ref/Resume-RS-Implementation-Plan.md.
 [dependencies]
 clap = { version = "4.6", features = ["derive"] }
