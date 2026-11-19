@@ -47,6 +47,8 @@ pub enum Command {
     Styles(StylesArgs),
     /// Copy a built-in style to a directory, to edit it.
     ExportStyle(ExportStyleArgs),
+    /// Print the license notices of the fonts built into this program.
+    Licenses,
 }
 
 /// Arguments of `resume styles`.
@@ -140,7 +142,7 @@ impl Cli {
                 build.render.validate()?;
                 build.validate_outputs()
             }
-            Command::Styles(_) | Command::ExportStyle(_) => Ok(()),
+            Command::Styles(_) | Command::ExportStyle(_) | Command::Licenses => Ok(()),
         }
     }
 }

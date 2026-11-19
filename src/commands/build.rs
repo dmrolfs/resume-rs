@@ -22,6 +22,21 @@ use crate::style::{self, StyleSource};
 use crate::typeset::fonts::FontSet;
 use crate::typeset::{RenderOptions, Typesetter};
 
+/// The result being presented, including an operational failure after findings were computed.
+struct BuildResult<'a> {
+    built: Built<'a>,
+    error: Option<&'a Error>,
+}
+
+impl<'a> BuildResult<'a> {
+    fn failed(input: &'a Path, error: &'a Error) -> Self {
+        Self {
+            built: Built::NoPdf { input },
+            error: Some(error),
+        }
+    }
+}
+
 /// Everything the files of one `build` share: the style, the fonts, and the way to write.
 struct Job<'a> {
     args: &'a BuildArgs,
@@ -48,6 +63,19 @@ pub(super) fn run(cli: &Cli, args: &BuildArgs, env: &Env, io: &mut Io<'_>) -> Ou
         .map(|file| job.build_one(file, &mut out))
         .max()
         .unwrap_or(Outcome::Success)
+}
+
+fn summary_with_error(findings: &[&Diagnostic], error: Option<&Error>) -> Summary {
+    match error {
+        Some(Error::Compile { diagnostics, .. } | Error::ExportPdf { diagnostics, .. }) => {
+            Summary::of(findings.iter().copied().chain(diagnostics))
+        }
+        _ => {
+            let mut summary = Summary::of(findings.iter().copied());
+            summary.errors += usize::from(error.is_some());
+            summary
+        }
+    }
 }
 
 impl<'a> Job<'a> {
@@ -80,12 +108,17 @@ impl<'a> Job<'a> {
     }
 
     fn build_one(&self, file: &Path, out: &mut Reporter<'_, '_>) -> Outcome {
-        match self.attempt(file, Instant::now(), out) {
+        let started = Instant::now();
+        match self.attempt(file, started, out) {
             Ok(outcome) => outcome,
-            Err(error) => {
-                out.error(&error);
-                Outcome::Failure
-            }
+            Err(error) => self.present(
+                BuildResult::failed(self.shown(file), &error),
+                started,
+                &[],
+                &[],
+                &out.sources(),
+                out,
+            ),
         }
     }
 
@@ -98,27 +131,63 @@ impl<'a> Job<'a> {
             return Ok(self.without_pdf(file, &parsed, &sources, started, out));
         };
 
-        let compiled = self
+        let compiled = match self
             .typesetter
-            .compile(resume, &self.style, RenderOptions::new(self.args.render.paper))?;
-        let layout = LayoutReport::of(&compiled, &self.fonts, self.args.render.max_pages)?;
-        let pdf = compiled.export_pdf(&BuildArgs::pdf_stem(file))?;
-        let target = self.args.out.join(BuildArgs::pdf_name(file));
-        let written = self.writer.commit(Planned {
-            target: &target,
-            bytes: &pdf,
-            overwrite: Overwrite::Replace,
-        })?;
-
+            .compile(resume, &self.style, RenderOptions::new(self.args.render.paper))
+        {
+            Ok(compiled) => compiled,
+            Err(error) => {
+                let findings: Vec<&Diagnostic> = parsed.diagnostics().iter().collect();
+                return Ok(self.present(
+                    BuildResult::failed(self.shown(file), &error),
+                    started,
+                    &findings,
+                    &[],
+                    &sources,
+                    out,
+                ));
+            }
+        };
         for style_file in compiled.sources() {
             sources.insert(&style_file.path, &style_file.text);
         }
-        let findings: Vec<&Diagnostic> = parsed
-            .diagnostics()
-            .iter()
-            .chain(compiled.warnings())
-            .chain(&layout.diagnostics)
-            .collect();
+        let mut findings: Vec<&Diagnostic> = parsed.diagnostics().iter().chain(compiled.warnings()).collect();
+        let layout = match LayoutReport::of(&compiled, &self.fonts, self.args.render.max_pages) {
+            Ok(layout) => layout,
+            Err(error) => {
+                return Ok(self.present(
+                    BuildResult::failed(self.shown(file), &error),
+                    started,
+                    &findings,
+                    &[],
+                    &sources,
+                    out,
+                ));
+            }
+        };
+        findings.extend(&layout.diagnostics);
+        let target = self.args.out.join(BuildArgs::pdf_name(file));
+        // Delivery can fail after diagnostics exist. Present both rather than discarding the findings.
+        let written = compiled.export_pdf(&BuildArgs::pdf_stem(file)).and_then(|pdf| {
+            self.writer.commit(Planned {
+                target: &target,
+                bytes: &pdf,
+                overwrite: Overwrite::Replace,
+            })
+        });
+        let written = match written {
+            Ok(written) => written,
+            Err(error) => {
+                return Ok(self.present(
+                    BuildResult::failed(self.shown(file), &error),
+                    started,
+                    &findings,
+                    &layout.fonts,
+                    &sources,
+                    out,
+                ));
+            }
+        };
         let path = self.shown(&target);
         let style = self.style.name().as_ref() as &str;
         let pages = compiled.page_count();
@@ -135,7 +204,14 @@ impl<'a> Job<'a> {
                 creates_dir: creates_dir.as_deref().map(|dir| self.shown(dir)),
             },
         };
-        Ok(self.present(built, started, &findings, &layout.fonts, &sources, out))
+        Ok(self.present(
+            BuildResult { built, error: None },
+            started,
+            &findings,
+            &layout.fonts,
+            &sources,
+            out,
+        ))
     }
 
     /// The input has errors, so there is no model to typeset: say so, and show the findings.
@@ -151,14 +227,21 @@ impl<'a> Job<'a> {
         let built = Built::NoPdf {
             input: self.shown(file),
         };
-        self.present(built, started, &findings, &[], sources, out)
+        self.present(
+            BuildResult { built, error: None },
+            started,
+            &findings,
+            &[],
+            sources,
+            out,
+        )
     }
 
     /// Prints the summary line, the fonts line, and the findings, and decides the outcome from all findings,
     /// including any left out of the human output.
     fn present(
         &self,
-        built: Built<'_>,
+        result: BuildResult<'_>,
         started: Instant,
         findings: &[&Diagnostic],
         fonts: &[crate::typeset::fonts::FontResolution],
@@ -172,14 +255,18 @@ impl<'a> Job<'a> {
             .copied()
             .filter(|d| self.format == OutputFormat::Json || d.code != DiagnosticCode::FontFallbackMetric)
             .collect();
+        let summary = summary_with_error(&shown, result.error);
         out.summary(&BuildLine {
-            built,
-            summary: Summary::of(shown.iter().copied()),
+            built: result.built,
+            summary,
             elapsed: started.elapsed(),
         });
         out.fonts(fonts);
         out.diagnostics(sources, &shown);
-        if Summary::of(findings.iter().copied()).has_errors() {
+        if let Some(error) = result.error {
+            out.error(error);
+        }
+        if result.error.is_some() || Summary::of(findings.iter().copied()).has_errors() {
             Outcome::Failure
         } else {
             Outcome::Success
@@ -189,5 +276,87 @@ impl<'a> Job<'a> {
     /// A path as the user typed it, or relative to the current directory when it is under it.
     fn shown<'p>(&self, path: &'p Path) -> &'p Path {
         path.strip_prefix(self.cwd).unwrap_or(path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostics::{Edit, Severity};
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn operational_failure_adds_one_error_without_changing_other_counts() {
+        let warning = Diagnostic {
+            severity: Severity::Warning,
+            code: DiagnosticCode::SparseLastPage,
+            message: "sparse".to_string(),
+            span: None,
+            hints: Vec::new(),
+            fix: None,
+        };
+        let error = Error::ReadInput {
+            path: "missing.md".into(),
+            source: std::io::ErrorKind::NotFound.into(),
+        };
+        assert_eq!(
+            summary_with_error(&[&warning], Some(&error)),
+            Summary {
+                errors: 1,
+                warnings: 1,
+                notes: 0,
+                fixable: 0
+            }
+        );
+        assert_eq!(
+            summary_with_error(&[&warning], None),
+            Summary {
+                errors: 0,
+                warnings: 1,
+                notes: 0,
+                fixable: 0
+            }
+        );
+    }
+
+    #[test]
+    fn compiler_and_export_findings_contribute_every_summary_count() {
+        let diagnostic = |severity| Diagnostic {
+            severity,
+            code: DiagnosticCode::TypstError,
+            message: "finding".to_string(),
+            span: None,
+            hints: Vec::new(),
+            fix: Some(Edit {
+                range: 0..0,
+                replacement: String::new(),
+            }),
+        };
+        let prior = diagnostic(Severity::Warning);
+        let diagnostics = vec![
+            diagnostic(Severity::Error),
+            diagnostic(Severity::Warning),
+            diagnostic(Severity::Note),
+        ];
+        for error in [
+            Error::Compile {
+                diagnostics: diagnostics.clone(),
+                sources: Vec::new(),
+            },
+            Error::ExportPdf {
+                diagnostics,
+                sources: Vec::new(),
+            },
+        ] {
+            assert_eq!(
+                summary_with_error(&[&prior], Some(&error)),
+                Summary {
+                    errors: 1,
+                    warnings: 2,
+                    notes: 1,
+                    fixable: 4
+                }
+            );
+        }
     }
 }

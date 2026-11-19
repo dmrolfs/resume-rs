@@ -3,7 +3,7 @@
 
 # Bundled fonts
 
-These fonts are compiled into the binary (`src/typeset/fonts.rs`, `FALLBACK_FACES`) so a resume looks
+These fonts are compiled into the binary (`src/typeset/fonts.rs`, `FALLBACK_FAMILIES`) so a resume looks
 the same on every machine. Each stands in for a proprietary font that the style templates prefer and
 that is **never** bundled: Carlito for Calibri, Gelasio for Georgia, Arimo for Arial. A style uses the
 original when it is installed (or given with `--font-path`), and the stand-in otherwise. The stand-ins
@@ -16,9 +16,14 @@ Typst itself also ships fonts through the `typst-assets` crate, linked in throug
 binary too. Per that crate's `NOTICE`: Libertinus Serif is OFL-1.1 (Reserved Font Names "Linux Libertine",
 "Biolinum", "STIX Fonts"); New Computer Modern is under the GUST Font License v1.0, except `NewCM10-Regular`,
 which is GPL-3.0-or-later with the Font Exception and the Distribution Exception; DejaVu Sans Mono is under
-the Bitstream Vera license (DejaVu's own changes are public domain). Their full texts are in that crate's
-`NOTICE` and are not yet part of `bundled_font_notices()`: whether the two GPL exceptions cover shipping the
-font inside a program is for the owner to confirm (rsm-141.13).
+the Bitstream Vera license (DejaVu's own changes are public domain). That crate is Apache-2.0, whose section 4(d)
+requires a redistribution to carry a readable copy of its `NOTICE`, so the file is vendored verbatim as
+[`typst-assets/NOTICE`](typst-assets/NOTICE) and `resume licenses` prints it after the texts above (a test fails
+when it differs from the copy in the locked crate, which is how a Typst upgrade shows up). The NOTICE also covers
+the other data the crate ships (Foxit fonts, ICC profiles, and W3C data). A search of the built binary finds no
+Foxit font (none of `FoxitSans`, `FoxitFixed`, or `FoxitSerif`; rsm-141.10), only the fonts listed here; the notice
+is printed whole anyway, so a later change that links them does not leave a license out. Whether the two GPL exceptions cover
+shipping `NewCM10-Regular` inside a program is for the owner to confirm (rsm-141.13).
 
 This is a summary of the obligations of each license, not legal advice.
 

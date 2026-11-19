@@ -199,16 +199,23 @@ const FALLBACK_FAMILIES: &[FallbackFamily] = &[
     },
 ];
 
-/// The license notices for the bundled fallback fonts: the overview in `fonts/LICENSES.md` followed by
-/// each family's license text.
+/// The vendored `NOTICE` of the `typst-assets` crate (Apache-2.0), which Typst's own embedded fonts come
+/// with. Section 4(d) of that license requires a binary that includes them to carry it.
+const TYPST_ASSETS_NOTICE: &str = include_str!("../../fonts/typst-assets/NOTICE");
+
+/// The license notices for every font in the binary: the overview in `fonts/LICENSES.md`, each bundled
+/// fallback family's license text, and the `NOTICE` of the crate that supplies Typst's own fonts.
 ///
-/// A binary that embeds the fonts must carry these notices, so the CLI prints them (rsm-141.10).
+/// A binary that embeds the fonts must carry these notices, so `resume licenses` prints them.
 #[must_use]
 pub fn bundled_font_notices() -> String {
     let mut notices = include_str!("../../fonts/LICENSES.md").to_string();
     for family in FALLBACK_FAMILIES {
         notices.push_str(&format!("\n\n---\n\n{} license\n\n{}", family.name, family.license));
     }
+    notices.push_str(&format!(
+        "\n\n---\n\nNOTICE of the typst-assets crate (Typst's embedded fonts and data)\n\n{TYPST_ASSETS_NOTICE}"
+    ));
     notices
 }
 
@@ -738,9 +745,15 @@ mod tests {
         for family in FALLBACK_FAMILIES {
             assert!(notices.contains(family.name), "{} is missing", family.name);
         }
+        // One OFL text per bundled family, and the ones the typst-assets NOTICE carries for itself.
+        let ofl = "SIL OPEN FONT LICENSE Version 1.1";
         assert_eq!(
-            notices.matches("SIL OPEN FONT LICENSE Version 1.1").count(),
-            FALLBACK_FAMILIES.len()
+            notices.matches(ofl).count(),
+            FALLBACK_FAMILIES.len() + TYPST_ASSETS_NOTICE.matches(ofl).count()
+        );
+        assert!(
+            notices.contains(TYPST_ASSETS_NOTICE),
+            "the typst-assets NOTICE is missing"
         );
     }
 

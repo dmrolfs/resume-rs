@@ -246,3 +246,59 @@ fn an_unknown_style_exits_1_and_names_the_styles_there_are() {
         .stderr(contains("unknown style `nope`"))
         .stderr(contains("available styles: pragmatic"));
 }
+
+// An unconnected datagram socket is a valid stdout descriptor but cannot deliver bytes.
+#[cfg(unix)]
+#[test]
+fn an_undeliverable_stdout_exits_1_for_small_and_large_products() {
+    use claims::assert_ok;
+    use pretty_assertions::assert_eq;
+    use std::os::fd::OwnedFd;
+    use std::os::unix::net::UnixDatagram;
+
+    for command in ["styles", "licenses"] {
+        let socket = assert_ok!(UnixDatagram::unbound());
+        let descriptor: OwnedFd = socket.into();
+        let output = assert_ok!(
+            std::process::Command::new(env!("CARGO_BIN_EXE_resume"))
+                .arg(command)
+                .stdout(descriptor)
+                .output()
+        );
+        assert_eq!(output.status.code(), Some(1), "{command}");
+        let message = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(message.matches("cannot write to stdout").count(), 1, "{message}");
+    }
+}
+
+// /dev/full accepts the open but fails writes with ENOSPC, including writes delayed until flush.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_full_stdout_destination_exits_1_for_small_and_large_products() {
+    use claims::assert_ok;
+    use pretty_assertions::assert_eq;
+
+    for command in ["styles", "licenses"] {
+        let output = assert_ok!(
+            std::process::Command::new(env!("CARGO_BIN_EXE_resume"))
+                .arg(command)
+                .stdout(assert_ok!(fs::File::options().write(true).open("/dev/full")))
+                .output()
+        );
+        assert_eq!(output.status.code(), Some(1), "{command}");
+        let message = String::from_utf8_lossy(&output.stderr);
+        assert!(message.contains("cannot write to stdout"), "{message}");
+    }
+}
+
+#[test]
+fn licenses_prints_the_font_notices_on_stdout() {
+    resume()
+        .arg("licenses")
+        .assert()
+        .code(0)
+        .stdout(contains("SIL OPEN FONT LICENSE"))
+        .stdout(contains("Carlito"))
+        .stdout(contains("Libertinus"))
+        .stderr("");
+}

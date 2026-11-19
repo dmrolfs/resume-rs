@@ -179,6 +179,12 @@ fn an_input_that_cannot_be_read_exits_1_and_says_why() {
     assert_eq!(run.outcome, Outcome::Failure);
     assert!(run.stderr.contains("cannot read"), "{}", run.stderr);
     assert!(run.stderr.contains("nothing.md"), "{}", run.stderr);
+    assert!(
+        run.stderr.starts_with("error nothing.md  1 error, 0 warnings  "),
+        "{}",
+        run.stderr
+    );
+    assert!(run.stderr.contains("no PDF written"), "{}", run.stderr);
 }
 
 #[test]
@@ -197,6 +203,112 @@ fn an_output_directory_that_is_a_file_exits_1_and_says_why() {
     );
     assert!(run.stderr.contains("out"), "{}", run.stderr);
     assert!(!run.stderr.contains("panicked"), "{}", run.stderr);
+}
+
+#[test]
+fn refused_output_preserves_layout_findings_and_summary_in_both_formats_and_modes() {
+    for dry_run in [false, true] {
+        for format in ["human", "json"] {
+            let work = Workspace::new();
+            let input = work.file("Resume.md", &fixture("full.md"));
+            let target = work.out().join("Resume.pdf");
+            assert_ok!(fs::create_dir_all(&target));
+            let mut extra = vec!["--max-pages", "1", "--format", format];
+            if dry_run {
+                extra.push("--dry-run");
+            }
+            let run = work.build(&[&input], &extra);
+            assert_eq!(run.outcome, Outcome::Failure, "{}", run.stderr);
+            let summary = assert_some!(run.stderr.lines().next());
+            assert!(summary.starts_with("error Resume.md  "), "{summary}");
+            assert!(summary.contains("2 errors, 1 warning"), "{summary}");
+            assert!(summary.contains("no PDF written"), "{summary}");
+            assert!(run.stderr.contains("is a directory"), "{}", run.stderr);
+            let findings = if format == "json" { &run.stdout } else { &run.stderr };
+            assert!(findings.contains("page-limit-exceeded"), "{findings}");
+            assert!(findings.contains("sparse-last-page"), "{findings}");
+            assert!(target.is_dir());
+            assert_eq!(assert_ok!(fs::read_dir(&target)).count(), 0);
+        }
+    }
+}
+
+#[test]
+fn compile_failure_has_a_summary_counting_its_diagnostics() {
+    let work = Workspace::new();
+    let input = work.file("Resume.md", &fixture("full.md"));
+    let styles = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/styles");
+    let run = work.build(
+        &[&input],
+        &[
+            "--style",
+            "warn-then-error",
+            "--styles-dir",
+            &styles.display().to_string(),
+        ],
+    );
+    assert_eq!(run.outcome, Outcome::Failure);
+    let summary = assert_some!(run.stderr.lines().next());
+    assert!(
+        summary.starts_with("error Resume.md  1 error, 1 warning  "),
+        "{summary}"
+    );
+    assert!(summary.contains("no PDF written"), "{summary}");
+    assert!(
+        run.stderr.contains("deliberate failure after a warning"),
+        "{}",
+        run.stderr
+    );
+    assert!(!work.out().exists());
+}
+
+#[test]
+fn a_read_only_pdf_preserves_findings_and_its_original_bytes() {
+    let work = Workspace::new();
+    let input = work.file("Resume.md", &fixture("full.md"));
+    let target = work.file("out/Resume.pdf", "original PDF");
+    let original_permissions = assert_ok!(fs::metadata(&target)).permissions();
+    struct RestorePermissions(PathBuf, fs::Permissions);
+    impl Drop for RestorePermissions {
+        fn drop(&mut self) {
+            let _ = fs::set_permissions(&self.0, self.1.clone());
+        }
+    }
+    let _restore = RestorePermissions(target.clone(), original_permissions.clone());
+    let mut permissions = original_permissions;
+    permissions.set_readonly(true);
+    assert_ok!(fs::set_permissions(&target, permissions));
+    for dry_run in [false, true] {
+        let mut extra = vec!["--max-pages", "1"];
+        if dry_run {
+            extra.push("--dry-run");
+        }
+        let run = work.build(&[&input], &extra);
+        assert_eq!(run.outcome, Outcome::Failure);
+        assert!(run.stderr.starts_with("error Resume.md  "), "{}", run.stderr);
+        for expected in ["no PDF written", "read-only", "page-limit-exceeded", "sparse-last-page"] {
+            assert!(run.stderr.contains(expected), "missing {expected}: {}", run.stderr);
+        }
+        assert_eq!(assert_ok!(fs::read(&target)), b"original PDF");
+    }
+}
+
+#[test]
+fn an_output_failure_does_not_skip_a_later_input_or_report_success_without_error_findings() {
+    let work = Workspace::new();
+    let first = work.file("First.md", &fixture("full.md"));
+    let second = work.file("Second.md", &fixture("full.md"));
+    assert_ok!(fs::create_dir_all(work.out().join("First.pdf")));
+    let run = work.build(&[&first, &second], &[]);
+    assert_eq!(run.outcome, Outcome::Failure);
+    assert!(run.stderr.starts_with("error First.md  "), "{}", run.stderr);
+    assert!(run.stderr.contains("no PDF written"), "{}", run.stderr);
+    assert!(
+        run.stderr.contains(&format!("ok {}  ", shown(&["out", "Second.pdf"]))),
+        "{}",
+        run.stderr
+    );
+    assert!(work.out().join("Second.pdf").is_file());
 }
 
 // ============================================================================
@@ -274,7 +386,8 @@ fn a_stdout_that_fails_for_another_reason_is_reported() {
     let input = work.file("Resume.md", &fixture("full.md"));
     let mut stderr = Buffer::no_color();
     let args = work.build_args(&[&input], &["--format", "json"]);
-    work.invoke(&args, &mut FailingStdout(io::ErrorKind::PermissionDenied), &mut stderr);
+    let outcome = work.invoke(&args, &mut FailingStdout(io::ErrorKind::PermissionDenied), &mut stderr);
+    assert_eq!(outcome, Outcome::Failure);
     let text = String::from_utf8_lossy(stderr.as_slice()).into_owned();
     assert!(text.contains("could not write diagnostics"), "{text}");
 }

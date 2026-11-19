@@ -4,6 +4,7 @@
 mod build;
 mod emit;
 mod export_style;
+mod licenses;
 pub mod report;
 mod styles;
 
@@ -62,11 +63,62 @@ impl From<Outcome> for ExitCode {
     }
 }
 
-/// Runs the command in `cli`.
+/// Runs the command in `cli` and flushes stdout before deciding its outcome.
 pub fn run(cli: &Cli, env: &Env, io: &mut Io<'_>) -> Outcome {
-    match &cli.command {
-        Command::Build(args) => build::run(cli, args, env, io),
-        Command::Styles(args) => styles::run(cli, args, env, io),
-        Command::ExportStyle(args) => export_style::run(cli, args, env, io),
+    use std::io::Write;
+
+    let mut stdout = Delivery {
+        writer: io.stdout,
+        failed: false,
+    };
+    let mut streams = Io {
+        stdout: &mut stdout,
+        stderr: io.stderr,
+    };
+    let outcome = match &cli.command {
+        Command::Build(args) => build::run(cli, args, env, &mut streams),
+        Command::Styles(args) => styles::run(cli, args, env, &mut streams),
+        Command::ExportStyle(args) => export_style::run(cli, args, env, &mut streams),
+        Command::Licenses => licenses::run(cli, env, &mut streams),
+    };
+    // Report delayed errors here; immediate write errors were already reported by Reporter.
+    let already_reported = stdout.failed;
+    if let Err(error) = stdout.flush()
+        && error.kind() != io::ErrorKind::BrokenPipe
+        && !already_reported
+    {
+        let _ = writeln!(io.stderr, "error: cannot write to stdout: {error}");
+    }
+    if stdout.failed { Outcome::Failure } else { outcome }
+}
+
+/// Records delivery failure across all reporters and files, even if a later write succeeds.
+/// Reporters report immediate write errors; `run` reports only newly discovered flush failures.
+struct Delivery<'a> {
+    writer: &'a mut dyn io::Write,
+    failed: bool,
+}
+
+impl io::Write for Delivery<'_> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let result = self.writer.write(bytes).and_then(|written| {
+            if written == 0 && !bytes.is_empty() {
+                Err(io::ErrorKind::WriteZero.into())
+            } else {
+                Ok(written)
+            }
+        });
+        if let Err(error) = &result {
+            self.failed |= !matches!(error.kind(), io::ErrorKind::BrokenPipe | io::ErrorKind::Interrupted);
+        }
+        result
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        let result = self.writer.flush();
+        if let Err(error) = &result {
+            self.failed |= error.kind() != io::ErrorKind::BrokenPipe;
+        }
+        result
     }
 }

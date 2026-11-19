@@ -52,10 +52,14 @@ pub struct BuildLine<'a> {
 }
 
 impl BuildLine<'_> {
-    /// `ok`, or `error` when any finding is an error.
+    /// `error` when the PDF could not be produced or any finding is an error.
     #[must_use]
     pub fn marker(&self) -> &'static str {
-        if self.summary.has_errors() { "error" } else { "ok" }
+        if matches!(self.built, Built::NoPdf { .. }) || self.summary.has_errors() {
+            "error"
+        } else {
+            "ok"
+        }
     }
 
     /// The time as a person reads it: whole milliseconds, at least one (`84ms`, `1s 234ms`).

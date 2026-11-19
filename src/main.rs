@@ -33,8 +33,7 @@ fn main() -> ExitCode {
             stderr: &mut stderr,
         },
     );
-    // A flush that fails on a closed pipe is the reader's choice, not an error of ours.
-    let _ = stdout.flush();
+    // commands::run flushes stdout and includes delivery failures in the outcome.
     let _ = stderr.flush();
     outcome.into()
 }
