@@ -191,6 +191,8 @@ In-crate (`src/typeset/pragmatic_tests.rs`, reads frames) and through the public
 - [ ] `mono_text_order_title_then_company`
 - [ ] `section_headings_are_set_in_capitals`, `the_contact_details_are_one_line_under_the_name`, `footer_shows_name_and_page_of_total`, `roles_and_eras_leave_probes_in_document_order`, `font_roles_prefer_calibri_and_fall_back_to_carlito`, `bundled_mode_embeds_only_bundled_families`, and `the_built_in_mono_style_and_the_same_files_on_disk_render_the_same_bytes` (`tests/mono_test.rs`)
 - [ ] `mono_keeps_the_same_pagination_guarantees` (sweep, `src/typeset/pragmatic_tests.rs`) and the ignored `bundled_and_original_body_fonts_break_lines_identically_in_mono` (needs `RESUME_ORIGINAL_FONTS_DIR`)
+- [ ] In `src/typeset/pragmatic_tests.rs`: `the_mono_role_line_bolds_the_title_and_nothing_else` (also a role without a title), `the_mono_contact_items_are_sorted_into_one_line_under_the_left_aligned_name`, `a_mono_contact_line_that_is_too_wide_wraps_between_items_never_inside_one`, `a_mono_resume_without_a_contact_line_renders_the_name_then_the_first_section`, `mono_capitalizes_whatever_the_section_is_called`, `the_mono_heading_checks_fail_once_their_stickiness_is_removed`; and `an_edited_copy_of_the_mono_theme_renders_differently` (`tests/mono_test.rs`)
+- Not covered: the mono ignored identity test does not compare x positions or a wrapped contact line
 
 ### rsm-141.9: experienced
 - [ ] `full_fixture_renders_in_experienced_without_warnings`

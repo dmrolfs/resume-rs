@@ -35,6 +35,7 @@ struct Run {
     y: f64,
     x: f64,
     text: String,
+    bold: bool,
 }
 
 fn collect_runs(frame: &Frame, origin: Point, out: &mut Vec<Run>) {
@@ -50,6 +51,7 @@ fn collect_runs(frame: &Frame, origin: Point, out: &mut Vec<Run>) {
                 y: at.y.to_pt(),
                 x: at.x.to_pt(),
                 text: run.text.to_string(),
+                bold: run.font.info().variant.weight.to_number() >= 600,
             }),
             _ => {}
         }
@@ -101,7 +103,7 @@ fn body_lines(compiled: &Compiled) -> Lines {
 }
 
 /// A resume with `spacers` one-line paragraphs ahead of eight roles, so the page break lands elsewhere for each
-/// count. The roles vary in shape: with and without a blurb, with a paragraph, eras, labeled bullets, and one
+/// count. The roles vary in shape: with and without a blurb, with a paragraph, eras, labeled bullets, one without a title, and one
 /// with nothing under its heading. Also returns how many numbered bullets precede the one in Education, `B999`.
 fn markdown(spacers: usize, seed: u64) -> (String, usize) {
     let mut state = seed;
@@ -150,7 +152,11 @@ fn markdown(spacers: usize, seed: u64) -> (String, usize) {
             md += &format!("### ZQ{r} · Title{r} · {years}\n\n");
             continue;
         }
-        md += &format!("### ZR{r} · Title{r} · {years}\n\n");
+        if r == 7 {
+            md += &format!("### ZU{r} · {years}\n\n"); // a role without a title
+        } else {
+            md += &format!("### ZR{r} · Title{r} · {years}\n\n");
+        }
         if r % 3 != 1 {
             md += &format!("ZB{r} blurb line.\n\n");
         }
@@ -186,11 +192,11 @@ fn compile(style: &StyleSource, md: &str) -> Compiled {
     assert_ok!(typesetter.compile(&assert_some!(resume), style, RenderOptions::new(Paper::Letter)))
 }
 
-/// Compiles `md` whatever warnings it parses with.
-fn compile_lenient(md: &str) -> Compiled {
+/// Compiles `md` in `style` whatever warnings it parses with.
+fn compile_lenient(style: &StyleSource, md: &str) -> Compiled {
     let (resume, _) = crate::markdown::parse("lenient.md", md).into_parts();
     let typesetter = Typesetter::new(fonts());
-    assert_ok!(typesetter.compile(&assert_some!(resume), &builtin(), RenderOptions::new(Paper::Letter)))
+    assert_ok!(typesetter.compile(&assert_some!(resume), style, RenderOptions::new(Paper::Letter)))
 }
 
 /// The broken guarantees over a sweep of page-break positions.
@@ -211,7 +217,7 @@ fn violations(style: &StyleSource, spacers: std::ops::Range<usize>) -> BTreeSet<
 fn page_ends(lines: &Lines) -> BTreeSet<Violation> {
     let mut found = BTreeSet::new();
     for (_, last) in lines.iter().filter_map(|page| page.last()) {
-        if last.contains("ZR") && last.contains("Title") {
+        if (last.contains("ZR") && last.contains("Title")) || last.contains("ZU") {
             found.insert(Violation::RoleHeadingEndsPage);
         }
         if last.contains("ZE") {
@@ -300,24 +306,32 @@ fn mono_keeps_the_same_pagination_guarantees() {
     );
 }
 
-/// Copies the built-in styles to a temp directory with `from` replaced by `to` in exactly one place.
-fn weakened(from: &str, to: &str) -> (tempfile::TempDir, StyleSource) {
+/// Copies the shared components and the built-in style `name` to a temp directory with `from` replaced by `to`
+/// in exactly one place.
+fn weakened_in(name: &str, from: &str, to: &str) -> (tempfile::TempDir, StyleSource) {
     let dir = assert_ok!(tempfile::tempdir());
     let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("styles");
     let mut replaced = 0;
-    for relative in ["lib/components.typ", "pragmatic/style.typ", "pragmatic/theme.typ"] {
-        let target = dir.path().join(relative);
+    let files = [
+        "lib/components.typ".to_string(),
+        format!("{name}/style.typ"),
+        format!("{name}/theme.typ"),
+    ];
+    for relative in files {
+        let target = dir.path().join(&relative);
         assert_ok!(std::fs::create_dir_all(assert_some!(target.parent())));
-        let text = assert_ok!(std::fs::read_to_string(source.join(relative)));
+        let text = assert_ok!(std::fs::read_to_string(source.join(&relative)));
         replaced += text.matches(from).count();
         assert_ok!(std::fs::write(&target, text.replace(from, to)));
     }
     assert_eq!(replaced, 1, "`{from}` must name exactly one place in the styles");
-    let style = assert_ok!(StyleSource::directory(
-        dir.path(),
-        assert_ok!(StyleName::try_new("pragmatic"))
-    ));
+    let style = assert_ok!(StyleSource::directory(dir.path(), assert_ok!(StyleName::try_new(name))));
     (dir, style)
+}
+
+/// The pragmatic style with `from` replaced by `to`.
+fn weakened(from: &str, to: &str) -> (tempfile::TempDir, StyleSource) {
+    weakened_in("pragmatic", from, to)
 }
 
 /// Each guarantee on its own, the one line that holds it, and what the sweep must report once it is gone.
@@ -568,7 +582,7 @@ fn a_short_name_with_short_sides_shares_the_line_with_them() {
 
 #[test]
 fn a_resume_without_a_contact_line_renders_the_name_alone() {
-    let compiled = compile_lenient("# Ada Lovelace\n\n## Summary\n\n- one\n");
+    let compiled = compile_lenient(&builtin(), "# Ada Lovelace\n\n## Summary\n\n- one\n");
     assert_eq!(page_lines(&compiled, 0)[0].1, "Ada Lovelace");
     assert_eq!(compiled.page_count(), 1);
 }
@@ -627,5 +641,106 @@ fn every_file_under_styles_is_embedded_in_the_binary() {
     for relative in &on_disk {
         let vpath = assert_ok!(typst::syntax::VirtualPath::new(format!("/{relative}")));
         assert!(style.reads(&vpath), "{relative} is not embedded");
+    }
+}
+
+// ---- mono ------------------------------------------------------------------------------------------
+
+fn mono() -> StyleSource {
+    builtin_style(BuiltinStyle::Mono)
+}
+
+/// Where mono's left margin is: 0.6in.
+const MONO_LEFT_MARGIN_PT: f64 = 43.2;
+
+#[test]
+fn the_mono_heading_checks_fail_once_their_stickiness_is_removed() {
+    // The sweep reads headings by their text; this proves it still sees mono's (capitalized sections, title-first
+    // role lines, a role without a title) by removing each guarantee from a mono copy.
+    for (what, from, to, expected) in &WEAKENINGS[..3] {
+        let (_dir, style) = weakened_in("mono", from, to);
+        let found = violations(&style, SWEEP);
+        assert!(
+            found.contains(expected),
+            "without {what} the mono sweep saw only {found:?}"
+        );
+    }
+}
+
+#[test]
+fn the_mono_role_line_bolds_the_title_and_nothing_else() {
+    let md = "# Ada Lovelace\n\nCity · a@b.co\n\n## Experience\n\n### Acme Corp · Principal Engineer · 2020 – Present\n\nA blurb.\n\n- one\n\n### Babbage & Co · 2012 – 2017\n\n- two\n";
+    let compiled = compile(&mono(), md);
+    let runs = page_runs(&compiled, 0);
+    let middle = compiled.document.pages()[0].frame.width().to_pt() / 2.0;
+    let (title, company, period) = (
+        run_containing(&runs, "Principal Engineer"),
+        run_containing(&runs, "Acme Corp"),
+        run_containing(&runs, "2020 – Present"),
+    );
+    assert!(
+        title.bold && !company.bold && !period.bold,
+        "{title:?} {company:?} {period:?}"
+    );
+    assert!(period.x > middle, "the period is at the right");
+    assert!((title.y - period.y).abs() < 0.3 && (title.y - company.y).abs() < 0.3);
+    // Without a title the company is all there is, so it carries the weight; the period stays regular.
+    let (alone, alone_period) = (run_containing(&runs, "Babbage"), run_containing(&runs, "2012 – 2017"));
+    assert!(alone.bold && !alone_period.bold, "{alone:?} {alone_period:?}");
+    assert!(alone_period.x > middle && (alone.y - alone_period.y).abs() < 0.3);
+}
+
+#[test]
+fn the_mono_contact_items_are_sorted_into_one_line_under_the_left_aligned_name() {
+    let md = "# Ada Lovelace\n\n[GitHub](https://github.com/ada) · a@b.co · (415) 555-0123 · City, ST\n\n## Summary\n\n- one\n";
+    let compiled = compile(&mono(), md);
+    let lines = page_lines(&compiled, 0);
+    let texts: Vec<_> = lines.iter().take(3).map(|(_, t)| t.as_str()).collect();
+    assert_eq!(
+        texts,
+        ["Ada Lovelace", "City, ST · (415) 555-0123 · a@b.co · GitHub", "SUMMARY"]
+    );
+    assert!(lines[1].0 > lines[0].0, "the contact line is under the name");
+    let name = run_containing(&page_runs(&compiled, 0), "Ada");
+    assert!(
+        (name.x - MONO_LEFT_MARGIN_PT).abs() < 1.5,
+        "the name is at the left margin: {name:?}"
+    );
+}
+
+#[test]
+fn a_mono_contact_line_that_is_too_wide_wraps_between_items_never_inside_one() {
+    let md = "# Ada Lovelace\n\nSan Francisco Bay Area, CA · (415) 555-0123 · ada.lovelace@analytical-engines.example.com · [linkedin.com/in/ada-lovelace](https://linkedin.com/in/ada-lovelace)\n\n## Summary\n\n- one\n";
+    let lines = page_lines(&compile(&mono(), md), 0);
+    let before_summary = lines
+        .iter()
+        .position(|(_, t)| t == "SUMMARY")
+        .expect("the first section");
+    assert!(before_summary >= 3, "the premise: the contact line wraps ({lines:?})");
+    for item in [
+        "ada.lovelace@analytical-engines.example.com",
+        "linkedin.com/in/ada-lovelace",
+    ] {
+        assert!(
+            lines.iter().any(|(_, t)| t.contains(item)),
+            "`{item}` was split: {lines:?}"
+        );
+    }
+}
+
+#[test]
+fn a_mono_resume_without_a_contact_line_renders_the_name_then_the_first_section() {
+    let compiled = compile_lenient(&mono(), "# Ada Lovelace\n\n## Summary\n\n- one\n");
+    let lines = page_lines(&compiled, 0);
+    assert_eq!((lines[0].1.as_str(), lines[1].1.as_str()), ("Ada Lovelace", "SUMMARY"));
+    assert_eq!(compiled.page_count(), 1);
+}
+
+#[test]
+fn mono_capitalizes_whatever_the_section_is_called() {
+    let md = "# Ada Lovelace\n\nCity · a@b.co\n\n## R&D\n\n- one\n\n## Café 2024\n\n- two\n\n## Languages and Technologies\n\n- three\n";
+    let text = text_of(&compile(&mono(), md));
+    for title in ["R&D", "CAFÉ 2024", "LANGUAGES AND TECHNOLOGIES"] {
+        assert!(text.lines().any(|l| l == title), "`{title}` not a line of {text}");
     }
 }

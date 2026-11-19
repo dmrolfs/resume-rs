@@ -1,9 +1,11 @@
 # mono
 
 The layout for people whose job titles carry the weight: a left-aligned name with one contact line under it,
-capitalized section headings, and a role line that leads with the title. It is modeled on The Mono Engineer's
+capitalized section headings, and a role line that leads with the title. It follows The Mono Engineer's
 resume template (a slight variation of the Pragmatic Engineer's, also the layout of Standard Resume's
-Alexander), set in Calibri when installed and the bundled, metric-compatible Carlito otherwise.
+Alexander), set in Calibri when installed and the bundled, metric-compatible Carlito otherwise. This first
+version was written from the book's description of the template, not from the template file; the visual
+review compares them.
 
 ```
 Ada Lovelace
@@ -33,6 +35,9 @@ To customize, run `resume export-style mono <dir>` and edit `theme.typ` in the c
 - The name is on the left and the contact items are one line under it (location, phone, email, then links),
   not split around the name.
 - Section titles are set in capitals, in the accent color, with a little extra letter spacing (`tracking.heading`).
+  The capitals are real text in the PDF (`SUMMARY`, not `Summary`), and `ß` becomes `SS`.
+- Sizes: the name is 26 pt (pragmatic 24), section titles 12 pt (14), and the role line and contact line 11 pt
+  (12). Eras keep the shared look: italic name, regular period.
 - The role line is **Title** · Company: the title is bold, and the company and the period are regular weight.
   A role without a title shows its company in bold.
 - Text is near black (`#1a1a1a`), not pure black.
@@ -43,4 +48,6 @@ keys are described in the pragmatic README; `header.gap` and `tracking.heading` 
 
 ## Limits
 
-The same limits as pragmatic: a bullet taller than a page overflows, and `lang` is fixed at `en-US`.
+- The contact line is split at ` · ` only. A line that is too wide wraps between items; an item is never
+  broken, so one wider than the line overflows it.
+- The same limits as pragmatic: a bullet taller than a page overflows, and `lang` is fixed at `en-US`.

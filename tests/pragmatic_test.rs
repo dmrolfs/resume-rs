@@ -1,31 +1,22 @@
 //! ABOUTME: End-to-end tests of the built-in pragmatic style on the full fixture, through the public API.
 //! ABOUTME: Text order comes from lopdf extraction of the PDF; layout facts come from the probes.
 
-use std::sync::{Arc, OnceLock};
+mod common;
+
+use std::sync::Arc;
 
 use claims::{assert_ok, assert_some};
 use lopdf::Document;
 use pretty_assertions::assert_eq;
 use resume::error::Error;
+use resume::model::StyleName;
 use resume::model::options::{BuiltinStyle, Paper};
-use resume::model::{Resume, StyleName};
 use resume::style::StyleSource;
 use resume::typeset::fonts::{FontSet, Metrics};
 use resume::typeset::probe::ProbeKind;
 use resume::typeset::{Compiled, RenderOptions, Typesetter};
 
-fn full_resume() -> Resume {
-    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/full.md");
-    let text = assert_ok!(std::fs::read_to_string(&path));
-    let (resume, diagnostics) = resume::markdown::parse(&path, &text).into_parts();
-    assert!(diagnostics.is_empty(), "{diagnostics:?}");
-    assert_some!(resume)
-}
-
-fn bundled_fonts() -> Arc<FontSet> {
-    static FONTS: OnceLock<Arc<FontSet>> = OnceLock::new();
-    Arc::clone(FONTS.get_or_init(|| Arc::new(FontSet::bundled())))
-}
+use common::{bundled_fonts, full_resume, page_texts, position};
 
 fn compile_with(style: &StyleSource, paper: Paper) -> Compiled {
     assert_ok!(Typesetter::new(bundled_fonts()).compile(&full_resume(), style, RenderOptions::new(paper)))
@@ -45,22 +36,6 @@ fn fixture_style(name: &str) -> StyleSource {
 
 fn compiled_with(style: &StyleSource) -> Compiled {
     compile_with(style, Paper::Letter)
-}
-
-/// The text of each page in content-stream order, with runs of whitespace collapsed to one space.
-fn page_texts(pdf: &[u8]) -> Vec<String> {
-    let doc = assert_ok!(Document::load_mem(pdf));
-    doc.get_pages()
-        .keys()
-        .map(|n| {
-            let text = assert_ok!(doc.extract_text(&[*n]));
-            text.split_whitespace().collect::<Vec<_>>().join(" ")
-        })
-        .collect()
-}
-
-fn position(haystack: &str, needle: &str) -> usize {
-    assert_some!(haystack.find(needle), "`{needle}` not in {haystack:?}")
 }
 
 #[test]

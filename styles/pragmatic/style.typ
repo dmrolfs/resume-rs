@@ -44,9 +44,4 @@
 
 #header(theme, resume)
 
-#for section in resume.sections {
-  section-heading(theme, section.title)
-  for blk in section.blocks {
-    render-block(theme, blk)
-  }
-}
+#render-sections(theme, resume)

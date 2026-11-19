@@ -12,38 +12,30 @@
 // has only the company to show, so that is bold.
 #let role-title-first(theme, role) = {
   let lead = if role.title != none { strong(role.title) + [ · #role.company] } else { strong(role.company) }
-  text(size: theme.size.role, grid(columns: (1fr, auto), column-gutter: 1em, lead, align(right, role.period.text)))
+  role-grid(theme, lead, role.period.text)
 }
 
-// Section titles in capitals, in the accent color.
+// Section titles in capitals, with a little extra letter spacing; the look is the shared one.
 #let section-capitals(theme, title) = text(
-  font: font-stack(theme.fonts.display),
-  size: theme.size.heading,
-  weight: "bold",
-  fill: theme.color.accent,
   tracking: theme.tracking.heading,
-  upper(title),
+  section-heading-content(theme, upper(title)),
 )
 
 #let headings = (..default-headings, role: role-title-first, section: section-capitals)
 
 // Header: the name on the left, then one line with every contact item. The name comes first, so the
-// text of the PDF starts with it.
+// text of the PDF starts with it. Each item is unbreakable, so a line that is too wide wraps between items
+// and never inside an address or a link.
 #let header(theme, resume) = {
   let parts = contact-parts(resume.contact)
   let items = parts.where + parts.phones + parts.emails + parts.links
   text(font: font-stack(theme.fonts.display), size: theme.size.name, resume.name)
   if items.len() > 0 {
     v(theme.header.gap)
-    text(size: theme.size.contact, join-items(items))
+    text(size: theme.size.contact, items.map(item => box(render-inlines(item))).join([ · ]))
   }
 }
 
 #header(theme, resume)
 
-#for section in resume.sections {
-  section-heading(theme, section.title, headings: headings)
-  for blk in section.blocks {
-    render-block(theme, blk, headings: headings)
-  }
-}
+#render-sections(theme, resume, headings: headings)
