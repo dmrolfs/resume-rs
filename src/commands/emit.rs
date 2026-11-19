@@ -45,6 +45,21 @@ impl<'a, 'io> Reporter<'a, 'io> {
         let _ = writeln!(stderr, " {line}");
     }
 
+    /// What a command prints as its product (the list of `resume styles`): to stdout, stopping quietly when the
+    /// reader has closed the pipe.
+    pub(super) fn product(&mut self, text: &str) {
+        if let Err(error) = self.io.stdout.write_all(text.as_bytes())
+            && error.kind() != io::ErrorKind::BrokenPipe
+        {
+            let _ = writeln!(self.io.stderr, "error: cannot write to stdout: {error}");
+        }
+    }
+
+    /// One line of progress or result, on stderr like the summary lines.
+    pub(super) fn line(&mut self, text: &str) {
+        let _ = writeln!(self.io.stderr, "{text}");
+    }
+
     /// The fonts line, indented under the summary; nothing for a style that declares no font roles.
     pub(super) fn fonts(&mut self, fonts: &[FontResolution]) {
         let text = FontsLine(fonts).to_string();

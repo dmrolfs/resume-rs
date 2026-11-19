@@ -34,8 +34,17 @@ pub enum Stage {
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
-    #[snafu(display("unknown style `{name}`: no directory `{name}` in {}", searched.display()))]
-    UnknownStyle { name: StyleName, searched: PathBuf },
+    #[snafu(display(
+        "unknown style `{name}`: no directory `{name}` in {}{}",
+        searched.display(),
+        available_text(available)
+    ))]
+    UnknownStyle {
+        name: StyleName,
+        searched: PathBuf,
+        /// The styles that do exist, so the message can say what to type instead; empty when not known.
+        available: Vec<StyleName>,
+    },
 
     #[snafu(display("style directory {} has no style.typ", dir.display()))]
     StyleMissingMain { dir: PathBuf },
@@ -111,6 +120,15 @@ impl Error {
             _ => None,
         }
     }
+}
+
+/// `; available styles: mono, pragmatic`, or nothing when no style is known.
+fn available_text(available: &[StyleName]) -> String {
+    if available.is_empty() {
+        return String::new();
+    }
+    let names: Vec<&str> = available.iter().map(AsRef::as_ref).collect();
+    format!("; available styles: {}", names.join(", "))
 }
 
 fn errors_in(diagnostics: &[Diagnostic]) -> usize {

@@ -194,3 +194,55 @@ fn color_never_and_no_color_leave_no_escape_bytes_and_always_adds_them() {
         "auto does not color a pipe"
     );
 }
+
+// ============================================================================
+// `resume styles` and `resume export-style` through the real binary
+// ============================================================================
+
+#[test]
+fn styles_lists_the_built_in_styles_on_stdout() {
+    resume()
+        .arg("styles")
+        .assert()
+        .code(0)
+        .stdout(contains("pragmatic"))
+        .stdout(contains("built-in"))
+        .stderr("");
+}
+
+#[test]
+fn export_style_writes_the_files_and_then_refuses_to_overwrite_them() {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    resume()
+        .current_dir(dir.path())
+        .args(["export-style", "pragmatic", "mine"])
+        .assert()
+        .code(0)
+        .stderr(contains("exported pragmatic to mine"));
+    assert!(dir.path().join("mine").join("pragmatic").join("style.typ").is_file());
+    assert!(dir.path().join("mine").join("lib").join("components.typ").is_file());
+
+    resume()
+        .current_dir(dir.path())
+        .args(["export-style", "pragmatic", "mine"])
+        .assert()
+        .code(1)
+        .stderr(contains("already exists"))
+        .stderr(contains("--force"));
+    resume()
+        .current_dir(dir.path())
+        .args(["export-style", "pragmatic", "mine", "--force"])
+        .assert()
+        .code(0);
+}
+
+#[test]
+fn an_unknown_style_exits_1_and_names_the_styles_there_are() {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    in_workspace(dir.path(), "full.md", "Resume.md")
+        .args(["build", "Resume.md", "--style", "nope", "--fonts", "bundled"])
+        .assert()
+        .code(1)
+        .stderr(contains("unknown style `nope`"))
+        .stderr(contains("available styles: pragmatic"));
+}

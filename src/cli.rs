@@ -43,6 +43,35 @@ pub struct Cli {
 pub enum Command {
     /// Typeset one or more Markdown resumes into PDFs.
     Build(BuildArgs),
+    /// List the styles that can be chosen.
+    Styles(StylesArgs),
+    /// Copy a built-in style to a directory, to edit it.
+    ExportStyle(ExportStyleArgs),
+}
+
+/// Arguments of `resume styles`.
+#[derive(Debug, Args)]
+pub struct StylesArgs {
+    /// A directory of styles to list besides the built-in ones.
+    #[arg(long, value_name = "DIR")]
+    pub styles_dir: Option<PathBuf>,
+}
+
+/// Arguments of `resume export-style`.
+#[derive(Debug, Args)]
+pub struct ExportStyleArgs {
+    /// The built-in style to copy.
+    #[arg(value_name = "NAME")]
+    pub name: StyleName,
+
+    /// Where to copy it: the style goes to `<DIR>/<NAME>/` and what the styles share to `<DIR>/lib/`, so the
+    /// copy can be used with `--styles-dir <DIR>`.
+    #[arg(value_name = "DIR")]
+    pub dir: PathBuf,
+
+    /// Replace files that already exist; without it, nothing is written when any file exists.
+    #[arg(long)]
+    pub force: bool,
 }
 
 /// Arguments of `resume build`.
@@ -111,6 +140,7 @@ impl Cli {
                 build.render.validate()?;
                 build.validate_outputs()
             }
+            Command::Styles(_) | Command::ExportStyle(_) => Ok(()),
         }
     }
 }
@@ -184,6 +214,7 @@ mod tests {
     fn build_of(cli: &Cli) -> &BuildArgs {
         match &cli.command {
             Command::Build(build) => build,
+            other => panic!("expected `build`, got {other:?}"),
         }
     }
 
@@ -312,5 +343,43 @@ mod tests {
     #[test]
     fn inputs_with_different_names_are_accepted() {
         assert_ok!(parse(&["build", "a/One.md", "b/Two.md"]));
+    }
+
+    // ========================================================================
+    // styles and export-style
+    // ========================================================================
+
+    #[test]
+    fn styles_takes_an_optional_styles_dir() {
+        let Command::Styles(plain) = cli(&["styles"]).command else {
+            panic!("expected `styles`")
+        };
+        assert_eq!(plain.styles_dir, None);
+        let Command::Styles(with_dir) = cli(&["styles", "--styles-dir", "mine"]).command else {
+            panic!("expected `styles`")
+        };
+        assert_eq!(with_dir.styles_dir, Some(PathBuf::from("mine")));
+    }
+
+    #[test]
+    fn export_style_takes_a_name_a_directory_and_force() {
+        let Command::ExportStyle(plain) = cli(&["export-style", "Pragmatic", "mine"]).command else {
+            panic!("expected `export-style`")
+        };
+        assert_eq!(plain.name.as_ref() as &str, "pragmatic");
+        assert_eq!(plain.dir, PathBuf::from("mine"));
+        assert!(!plain.force, "overwriting needs --force");
+        let Command::ExportStyle(forced) = cli(&["export-style", "pragmatic", "mine", "--force"]).command else {
+            panic!("expected `export-style`")
+        };
+        assert!(forced.force);
+    }
+
+    #[test]
+    fn export_style_needs_a_name_and_a_directory() {
+        for args in [&["export-style"][..], &["export-style", "pragmatic"][..]] {
+            let err = assert_err!(parse(args));
+            assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument, "{args:?}: {err}");
+        }
     }
 }

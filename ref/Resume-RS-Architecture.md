@@ -744,7 +744,7 @@ resume [--dry-run] [--format human|json] [--color auto|always|never] <COMMAND>
   check  <FILE>... [same options as build]   # alias: read-only `doctor` (no --fix, no --explain)
   watch  <FILE>    [-s <NAME>] [-o <DIR>] [--debounce <DURATION>] [--open]
   styles           [--styles-dir <DIR>]
-  export-style <NAME> <DIR>
+  export-style <NAME> <DIR> [--force]
   export <FILE> <DIR> [-s <NAME>]      # resume.json + style, for tinymist or typst watch
 ```
 
@@ -754,7 +754,7 @@ resume [--dry-run] [--format human|json] [--color auto|always|never] <COMMAND>
 |---|---|
 | `build` | Parses, compiles, runs the layout checks, and exports the PDF (so an export error shows and the exit code matches a real build's), then reports `would write out/X.pdf (3 pages, overwrites existing)`. Writes nothing, and creates no directory. |
 | `doctor --fix` | Prints the unified diff of the fixes and leaves the file unchanged |
-| `export-style`, `export` | Lists the files that would be created or overwritten |
+| `export-style`, `export` | Lists the files that would be created (or, with `--force`, replaced) |
 | `watch` | Rejected at argument parsing (clap `conflicts_with`), since watching without writing has no purpose |
 | `styles`, `check`, `doctor` without `--fix` | No effect; they don't write |
 
@@ -768,6 +768,9 @@ resume [--dry-run] [--format human|json] [--color auto|always|never] <COMMAND>
 - **Exit codes:** 0 on success (warnings allowed), 1 on any error finding, failed build, or operational error (an unreadable input, an output that cannot be written), 2 on a usage error (from clap, plus two checks clap cannot express: `--fonts bundled` with `--font-path`, and two inputs that would write the same PDF).
 - **Defaults:** `--style pragmatic`, `--out out`, `--paper letter`, `--fonts auto`, `--color auto`, `--debounce 150ms`. `--styles-dir` has no default, so nothing is read from the current directory unless asked.
 - **Structure.** `src/cli.rs` holds the clap types and `Cli::try_parse_validated`; `src/commands/` holds the commands as library code over injected streams (`Io`, `Env`, `Outcome`), so almost everything is tested in process; `src/main.rs` only builds the real streams and environment and turns the `Outcome` into an exit code. A test fails if any file under `src/commands/` writes the file system directly: every write goes through `output::Writer`.
+- **`styles`** prints one line per style to stdout: the built-in styles (the embedded directories other than the shared `lib`), then the directories under `--styles-dir`, sorted by name, with where each lives. A directory style with the name of a built-in is marked `(overrides the built-in)`, and one that cannot be used is listed with the reason, not hidden: `(invalid: not a valid style name)` or `(invalid: no style.typ)`. Only the names the style resolver would accept are valid, as written (`Mine` would be looked up as `mine`). An unreadable `--styles-dir` is an error, exit 1.
+- **Choosing a style.** `--style NAME` looks for `<styles-dir>/NAME/` first and then among the built-in styles, so a copy made with `export-style` is used in place of the built-in of its name. An unknown name is exit 1 before anything is built, and the message lists the styles that exist (`available styles: pragmatic`).
+- **`export-style <NAME> <DIR>`** copies a built-in style (`style.typ`, `theme.typ`, `README.md`) to `<DIR>/<NAME>/` and the files every style shares to `<DIR>/lib/`, byte for byte as embedded, so the copy works with `--styles-dir <DIR>` and builds the same PDF as the built-in one. Only built-in styles can be copied, and `lib` is not a style. It **refuses to overwrite**: every target is looked at first, and if any file exists, nothing is written, each existing file is reported with the hint `use --force to replace it`, and the exit code is 1; this protects a customized `theme.typ`. `--force` replaces them. The paths come from the embedded tree, so none can climb out of `<DIR>`. `--dry-run` prints `would create` (or `would replace`) for each file and creates nothing, and the real run prints `created` or `replaced` for each and a final `ok exported pragmatic to mine (4 files)`.
 
 ### Watch (`src/watch.rs`)
 

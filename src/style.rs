@@ -44,6 +44,154 @@ enum StyleFiles {
     },
 }
 
+/// Where a style listed by `resume styles` lives.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StyleLocation {
+    /// Embedded in the binary.
+    BuiltIn,
+    /// A directory under `--styles-dir`.
+    Directory(PathBuf),
+}
+
+/// One line of `resume styles`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StyleEntry {
+    /// The directory name, as it is on disk.
+    pub name: String,
+    /// Where it lives.
+    pub location: StyleLocation,
+    /// What is notable about it: that it overrides a built-in, or why it cannot be used.
+    pub note: Option<String>,
+}
+
+/// Every style that can be chosen: the built-in ones, then the directories under `styles_dir`.
+///
+/// A directory that cannot be used is listed with the reason, not hidden, so the user can see why a style they
+/// just made is not picked up.
+///
+/// # Errors
+/// `Error::StyleRoot` - `styles_dir` cannot be read.
+pub fn catalog(styles_dir: Option<&Path>) -> Result<Vec<StyleEntry>, Error> {
+    let built_in = built_in_names();
+    let mut entries: Vec<StyleEntry> = built_in
+        .iter()
+        .map(|name| StyleEntry {
+            name: name.clone(),
+            location: StyleLocation::BuiltIn,
+            note: None,
+        })
+        .collect();
+    if let Some(root) = styles_dir {
+        entries.extend(directory_entries(root, &built_in)?);
+    }
+    Ok(entries)
+}
+
+/// The files of the built-in style `name` and of the `lib/` it shares, as paths relative to a styles
+/// directory (`pragmatic/style.typ`, `lib/components.typ`) and their bytes.
+///
+/// # Errors
+/// `Error::UnknownStyle` - there is no built-in style called `name`.
+pub fn builtin_files(name: &StyleName) -> Result<Vec<(PathBuf, &'static [u8])>, Error> {
+    let style_dir = built_in_names()
+        .iter()
+        .any(|built_in| built_in == name.as_ref() as &str)
+        .then(|| BUILT_IN_STYLES.get_dir(name.as_ref() as &str))
+        .flatten();
+    let Some(style_dir) = style_dir else {
+        return UnknownStyleSnafu {
+            name: name.clone(),
+            searched: PathBuf::from(BUILT_IN),
+            available: available_styles(None),
+        }
+        .fail();
+    };
+    let mut files = Vec::new();
+    for dir in std::iter::once(style_dir).chain(BUILT_IN_STYLES.get_dir(SHARED_DIR)) {
+        collect_files(dir, &mut files);
+    }
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(files)
+}
+
+fn collect_files(dir: &'static Dir<'static>, files: &mut Vec<(PathBuf, &'static [u8])>) {
+    files.extend(dir.files().map(|file| (file.path().to_path_buf(), file.contents())));
+    for inner in dir.dirs() {
+        collect_files(inner, files);
+    }
+}
+
+/// The directory every built-in style shares; it is not a style itself.
+const SHARED_DIR: &str = "lib";
+
+/// A directory under a styles root is a style unless it is the shared one or hidden.
+fn is_style_dir(name: &str) -> bool {
+    name != SHARED_DIR && !name.starts_with('.')
+}
+
+/// The built-in styles, by name: the embedded directories other than the shared `lib`.
+fn built_in_names() -> Vec<String> {
+    let mut names: Vec<String> = BUILT_IN_STYLES
+        .dirs()
+        .filter_map(|dir| dir.path().file_name())
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| is_style_dir(name))
+        .collect();
+    names.sort();
+    names
+}
+
+/// The styles found under `root`, sorted by name, each with the reason it cannot be used if it cannot.
+fn directory_entries(root: &Path, built_in: &[String]) -> Result<Vec<StyleEntry>, Error> {
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(root).context(StyleRootSnafu { path: root })? {
+        let path = entry.context(StyleRootSnafu { path: root })?.path();
+        let Some(name) = path.file_name().map(|name| name.to_string_lossy().into_owned()) else {
+            continue;
+        };
+        if path.is_dir() && is_style_dir(&name) {
+            found.push(StyleEntry {
+                note: directory_note(&path, &name, built_in),
+                name,
+                location: StyleLocation::Directory(path),
+            });
+        }
+    }
+    found.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(found)
+}
+
+/// Why a directory under a styles root cannot be used, or that it replaces a built-in style; `None` when it
+/// is an ordinary style.
+fn directory_note(path: &Path, name: &str, built_in: &[String]) -> Option<String> {
+    // A name is usable only as it is written: `Mine` would be looked up as `mine`, which a case-sensitive
+    // file system does not have.
+    let valid_name = StyleName::try_new(name).is_ok_and(|valid| valid.as_ref() as &str == name);
+    if !valid_name {
+        Some("invalid: not a valid style name".to_string())
+    } else if !path.join(MAIN_FILE).is_file() {
+        Some("invalid: no style.typ".to_string())
+    } else if built_in.iter().any(|built_in| built_in == name) {
+        Some("overrides the built-in".to_string())
+    } else {
+        None
+    }
+}
+
+/// The names that can be chosen, for an error to offer; a directory that cannot be read adds none.
+fn available_styles(styles_dir: Option<&Path>) -> Vec<StyleName> {
+    let mut names: Vec<StyleName> = catalog(styles_dir)
+        .or_else(|_| catalog(None))
+        .unwrap_or_default()
+        .iter()
+        .filter(|entry| entry.note.as_deref().is_none_or(|note| !note.starts_with("invalid")))
+        .filter_map(|entry| StyleName::try_new(entry.name.as_str()).ok())
+        .collect();
+    names.sort_by(|a, b| (a.as_ref() as &str).cmp(b.as_ref()));
+    names.dedup();
+    names
+}
+
 /// Finds the style `name`: in `styles_dir` if one is given and has it, otherwise among the built-in styles.
 ///
 /// A style in the directory wins over a built-in of the same name, so a copy made with `export-style` can be
@@ -61,7 +209,15 @@ pub fn resolve(name: &StyleName, styles_dir: Option<&Path>) -> Result<StyleSourc
             found => return found,
         }
     }
-    StyleSource::embedded(&BUILT_IN_STYLES, name.clone())
+    StyleSource::embedded(&BUILT_IN_STYLES, name.clone()).map_err(|error| match error {
+        Error::UnknownStyle { name, searched, .. } => UnknownStyleSnafu {
+            name,
+            searched: styles_dir.map_or(searched, Path::to_path_buf),
+            available: available_styles(styles_dir),
+        }
+        .build(),
+        other => other,
+    })
 }
 
 impl StyleSource {
@@ -76,7 +232,12 @@ impl StyleSource {
         let canonical_root = std::fs::canonicalize(root).context(StyleRootSnafu { path: root })?;
         let style_dir = canonical_root.join(name.as_ref() as &str);
         if !style_dir.is_dir() {
-            return UnknownStyleSnafu { name, searched: root }.fail();
+            return UnknownStyleSnafu {
+                name,
+                searched: root,
+                available: Vec::new(),
+            }
+            .fail();
         }
         let resolved_dir = std::fs::canonicalize(&style_dir).context(StyleRootSnafu { path: &style_dir })?;
         if !is_within(&canonical_root, &resolved_dir) {
@@ -109,6 +270,7 @@ impl StyleSource {
         let style_dir = dir.get_dir(name.as_ref() as &str).context(UnknownStyleSnafu {
             name: name.clone(),
             searched: PathBuf::from(BUILT_IN),
+            available: Vec::new(),
         })?;
         let main = format!("{}/{MAIN_FILE}", name.as_ref() as &str);
         if dir.get_file(&main).is_none() {
@@ -251,7 +413,7 @@ mod tests {
     fn unknown_style_reports_searched_directory() {
         let err = assert_err!(StyleSource::directory(fixtures_path(), name("nope")));
         match err {
-            Error::UnknownStyle { name, searched } => {
+            Error::UnknownStyle { name, searched, .. } => {
                 assert_eq!(name.as_ref() as &str, "nope");
                 assert_eq!(searched, fixtures_path());
             }
@@ -443,5 +605,119 @@ mod tests {
         assert!(matches!(unknown, Error::UnknownStyle { .. }), "{unknown}");
         let missing = assert_err!(resolve(&name("pragmatic"), Some(Path::new("/no/such/styles"))));
         assert!(matches!(missing, Error::StyleRoot { .. }), "{missing}");
+    }
+
+    // ========================================================================
+    // The catalog, the built-in files, and the list of styles an error offers
+    // ========================================================================
+
+    /// A styles directory holding every kind of entry the catalog has to tell apart.
+    fn varied_styles_dir() -> tempfile::TempDir {
+        let dir = assert_ok!(tempfile::tempdir());
+        for (style, has_main) in [("mine", true), ("pragmatic", true), ("Bad Name", true), ("half", false)] {
+            let path = dir.path().join(style);
+            assert_ok!(std::fs::create_dir(&path));
+            if has_main {
+                assert_ok!(std::fs::write(path.join("style.typ"), b"x"));
+            }
+        }
+        assert_ok!(std::fs::create_dir(dir.path().join("lib")));
+        assert_ok!(std::fs::create_dir(dir.path().join(".hidden")));
+        assert_ok!(std::fs::write(dir.path().join(".hidden").join("style.typ"), b"x"));
+        assert_ok!(std::fs::write(dir.path().join("notes.txt"), b"x"));
+        dir
+    }
+
+    #[test]
+    fn the_catalog_lists_the_embedded_styles_and_not_the_shared_lib() {
+        let entries = assert_ok!(catalog(None));
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["pragmatic"]);
+        assert_eq!(entries[0].location, StyleLocation::BuiltIn);
+        assert_eq!(entries[0].note, None);
+    }
+
+    #[test]
+    fn the_catalog_adds_directory_styles_and_says_which_override_or_cannot_be_used() {
+        let dir = varied_styles_dir();
+        let entries = assert_ok!(catalog(Some(dir.path())));
+        let summary: Vec<(&str, Option<&str>)> = entries.iter().map(|e| (e.name.as_str(), e.note.as_deref())).collect();
+        assert_eq!(
+            summary,
+            [
+                ("pragmatic", None),
+                ("Bad Name", Some("invalid: not a valid style name")),
+                ("half", Some("invalid: no style.typ")),
+                ("mine", None),
+                ("pragmatic", Some("overrides the built-in")),
+            ]
+        );
+        assert_eq!(entries[3].location, StyleLocation::Directory(dir.path().join("mine")));
+    }
+
+    #[test]
+    fn the_catalog_fails_when_the_styles_directory_cannot_be_read() {
+        let err = assert_err!(catalog(Some(Path::new("/no/such/styles"))));
+        assert!(matches!(err, Error::StyleRoot { .. }), "{err}");
+    }
+
+    #[test]
+    fn the_built_in_files_are_the_style_and_the_lib_it_shares_with_their_bytes() {
+        let files = assert_ok!(builtin_files(&name("pragmatic")));
+        let paths: Vec<String> = files
+            .iter()
+            .map(|(p, _)| p.to_string_lossy().replace('\\', "/"))
+            .collect();
+        for expected in [
+            "pragmatic/style.typ",
+            "pragmatic/theme.typ",
+            "pragmatic/README.md",
+            "lib/components.typ",
+        ] {
+            assert!(
+                paths.iter().any(|p| p == expected),
+                "{expected} is missing from {paths:?}"
+            );
+        }
+        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("styles");
+        for (path, bytes) in &files {
+            assert_eq!(
+                *bytes,
+                assert_ok!(std::fs::read(repo.join(path))).as_slice(),
+                "{}",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_built_in_style_has_no_files() {
+        let err = assert_err!(builtin_files(&name("nothing-like-it")));
+        assert!(matches!(err, Error::UnknownStyle { .. }), "{err}");
+    }
+
+    #[test]
+    fn the_styles_an_error_offers_leave_out_the_ones_that_cannot_be_used() {
+        // `half` has no style.typ and `Bad Name` is not a name, so neither can be chosen; `pragmatic` is
+        // both built in and in the directory and is offered once.
+        let dir = varied_styles_dir();
+        let found = assert_err!(resolve(&name("nothing-like-it"), Some(dir.path())));
+        let Error::UnknownStyle { available, .. } = &found else {
+            panic!("expected UnknownStyle, got {found}")
+        };
+        let names: Vec<&str> = available.iter().map(AsRef::as_ref).collect();
+        assert_eq!(names, ["mine", "pragmatic"]);
+    }
+
+    #[test]
+    fn an_unknown_style_lists_the_styles_that_exist() {
+        let found = assert_err!(resolve(&name("nothing-like-it"), Some(&fixtures_path())));
+        let Error::UnknownStyle { available, .. } = &found else {
+            panic!("expected UnknownStyle, got {found}")
+        };
+        let names: Vec<&str> = available.iter().map(AsRef::as_ref).collect();
+        assert!(names.contains(&"pragmatic") && names.contains(&"minimal"), "{names:?}");
+        assert!(found.to_string().contains("; available styles: "), "{found}");
+        assert!(!names.contains(&"lib"), "{names:?}");
     }
 }

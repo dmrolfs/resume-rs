@@ -3,7 +3,9 @@
 
 mod build;
 mod emit;
+mod export_style;
 pub mod report;
+mod styles;
 
 use std::ffi::OsString;
 use std::io;
@@ -64,5 +66,7 @@ impl From<Outcome> for ExitCode {
 pub fn run(cli: &Cli, env: &Env, io: &mut Io<'_>) -> Outcome {
     match &cli.command {
         Command::Build(args) => build::run(cli, args, env, io),
+        Command::Styles(args) => styles::run(cli, args, env, io),
+        Command::ExportStyle(args) => export_style::run(cli, args, env, io),
     }
 }

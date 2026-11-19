@@ -7,91 +7,12 @@ use std::path::{Path, PathBuf};
 
 use claims::{assert_ok, assert_some};
 use pretty_assertions::assert_eq;
-use resume::cli::Cli;
-use resume::commands::{self, Env, Io, Outcome};
+use resume::commands::Outcome;
 use resume::diagnostics::termcolor::Buffer;
 
-/// A temporary directory standing in for the user's current directory.
-struct Workspace {
-    dir: tempfile::TempDir,
-}
-
-/// What a run printed and how it ended.
-struct Run {
-    outcome: Outcome,
-    stdout: String,
-    stderr: String,
-}
-
-fn fixture(name: &str) -> String {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name);
-    assert_ok!(fs::read_to_string(&path), "{}", path.display())
-}
-
-impl Workspace {
-    fn new() -> Self {
-        Self {
-            dir: assert_ok!(tempfile::tempdir()),
-        }
-    }
-
-    fn path(&self) -> &Path {
-        self.dir.path()
-    }
-
-    /// Writes `text` to `name` under the workspace and returns its absolute path.
-    fn file(&self, name: &str, text: &str) -> PathBuf {
-        let path = self.path().join(name);
-        if let Some(parent) = path.parent() {
-            assert_ok!(fs::create_dir_all(parent));
-        }
-        assert_ok!(fs::write(&path, text));
-        path
-    }
-
-    fn out(&self) -> PathBuf {
-        self.path().join("out")
-    }
-
-    /// Runs `resume <args>` with the workspace as the current directory, over the streams given.
-    fn invoke(&self, args: &[String], stdout: &mut dyn io::Write, stderr: &mut Buffer) -> Outcome {
-        let cli = assert_ok!(Cli::try_parse_validated(
-            std::iter::once("resume".to_string()).chain(args.iter().cloned())
-        ));
-        let env = Env {
-            cwd: self.path().to_path_buf(),
-            resume_font_path: None,
-        };
-        commands::run(&cli, &env, &mut Io { stdout, stderr })
-    }
-
-    /// Runs `resume <args>` and collects what it printed; stderr has no color.
-    fn run(&self, args: &[String]) -> Run {
-        let mut stdout = Vec::new();
-        let mut stderr = Buffer::no_color();
-        let outcome = self.invoke(args, &mut stdout, &mut stderr);
-        Run {
-            outcome,
-            stdout: String::from_utf8_lossy(&stdout).into_owned(),
-            stderr: String::from_utf8_lossy(stderr.as_slice()).into_owned(),
-        }
-    }
-
-    /// The arguments of `resume build <files> --fonts bundled --out <workspace>/out <extra>`: bundled fonts so
-    /// the result does not depend on the machine.
-    fn build_args(&self, files: &[&Path], extra: &[&str]) -> Vec<String> {
-        let mut args = vec!["build".to_string()];
-        args.extend(files.iter().map(|f| f.display().to_string()));
-        args.extend(["--fonts", "bundled", "--out"].map(String::from));
-        args.push(self.out().display().to_string());
-        args.extend(extra.iter().map(|a| (*a).to_string()));
-        args
-    }
-
-    fn build(&self, files: &[&Path], extra: &[&str]) -> Run {
-        self.run(&self.build_args(files, extra))
-    }
-}
+#[path = "common/workspace.rs"]
+mod workspace;
+use workspace::{FailingStdout, Workspace, fixture};
 
 fn shown(parts: &[&str]) -> String {
     parts.iter().collect::<PathBuf>().display().to_string()
@@ -332,18 +253,6 @@ fn json_format_writes_only_diagnostics_to_stdout() {
         "the summary stays on stderr: {}",
         run.stderr
     );
-}
-
-/// A stdout that fails every write with `kind`.
-struct FailingStdout(io::ErrorKind);
-
-impl io::Write for FailingStdout {
-    fn write(&mut self, _: &[u8]) -> io::Result<usize> {
-        Err(self.0.into())
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        Err(self.0.into())
-    }
 }
 
 #[test]
