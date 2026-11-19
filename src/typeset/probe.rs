@@ -13,7 +13,9 @@ use crate::typeset::fonts::{FontRole, Metrics};
 
 /// A role or era heading and where it landed.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Probe {
+    /// Which heading this is.
     pub kind: ProbeKind,
     /// 1-based page.
     pub page: NonZeroUsize,
@@ -25,19 +27,31 @@ pub struct Probe {
 
 /// Which heading a [`Probe`] marks.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ProbeKind {
+    /// A role heading.
+    #[non_exhaustive]
     Role {
         /// Position of the role in the document, from 0.
         index: usize,
+        /// The company, school, or project the role is at.
         company: String,
+        /// The job title; `None` for a role without one.
         title: Option<String>,
+        /// The period as written, such as `2020 – Present`.
+        period: String,
     },
+    /// An era heading inside a role.
+    #[non_exhaustive]
     Era {
         /// The index of the role this era belongs to.
         role: usize,
         /// Position of the era within its role, from 0.
         index: usize,
+        /// The era's name.
         name: String,
+        /// The period as written.
+        period: String,
     },
 }
 
@@ -81,6 +95,17 @@ fn string(d: &Dict, key: &str, label: &'static str) -> Result<String, Error> {
         .map_err(|e| malformed(label, format!("`{key}`: {}", e.message())))
 }
 
+/// A string that may be `none`; any other type is malformed.
+fn optional_string(d: &Dict, key: &str, label: &'static str) -> Result<Option<String>, Error> {
+    match field(d, key, label)? {
+        Value::None => Ok(None),
+        value => value
+            .cast::<Str>()
+            .map(|s| Some(s.to_string()))
+            .map_err(|e| malformed(label, format!("`{key}`: {}", e.message()))),
+    }
+}
+
 fn index(d: &Dict, key: &str, label: &'static str) -> Result<usize, Error> {
     let n = field(d, key, label)?
         .cast::<i64>()
@@ -121,23 +146,32 @@ pub(crate) fn probes(document: &PagedDocument) -> Result<Vec<Probe>, Error> {
     for label in [ROLE, ERA] {
         for content in introspector.query(&select(label)) {
             let d = dict(metadata_value(&content, label)?, label)?;
-            let Some(position) = content.location().and_then(|l| introspector.position(l)) else {
-                continue; // not placed on a page, e.g. inside a hidden element
-            };
+            let position = content
+                .location()
+                .and_then(|l| introspector.position(l))
+                .ok_or_else(|| malformed(label, "the heading is not placed on any page"))?;
             let kind = if label == ROLE {
                 ProbeKind::Role {
                     index: index(&d, "index", label)?,
                     company: string(&d, "company", label)?,
-                    title: string(&d, "title", label).ok(),
+                    title: optional_string(&d, "title", label)?,
+                    period: string(&d, "period", label)?,
                 }
             } else {
                 ProbeKind::Era {
                     role: index(&d, "role", label)?,
                     index: index(&d, "index", label)?,
                     name: string(&d, "name", label)?,
+                    period: string(&d, "period", label)?,
                 }
             };
-            let page_height = document.pages()[position.page.get() - 1].frame.height().to_pt();
+            let page_height = document
+                .pages()
+                .get(position.page.get() - 1)
+                .ok_or_else(|| malformed(label, "the heading is on a page the document does not have"))?
+                .frame
+                .height()
+                .to_pt();
             out.push(Probe {
                 kind,
                 page: position.page,

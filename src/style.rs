@@ -114,9 +114,9 @@ impl StyleSource {
     }
 
     /// True when `vpath` is a file this style can read; for tests that check what was embedded.
-    #[doc(hidden)]
+    #[cfg(test)]
     #[must_use]
-    pub fn reads(&self, vpath: &VirtualPath) -> bool {
+    pub(crate) fn reads(&self, vpath: &VirtualPath) -> bool {
         self.read(vpath).is_ok()
     }
 

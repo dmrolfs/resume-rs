@@ -1,15 +1,16 @@
 //! ABOUTME: End-to-end tests of the built-in pragmatic style on the full fixture, through the public API.
 //! ABOUTME: Text order comes from lopdf extraction of the PDF; layout facts come from the probes.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use claims::{assert_ok, assert_some};
 use lopdf::Document;
 use pretty_assertions::assert_eq;
-use resume::model::Resume;
+use resume::error::Error;
 use resume::model::options::{BuiltinStyle, Paper};
+use resume::model::{Resume, StyleName};
 use resume::style::StyleSource;
-use resume::typeset::fonts::FontSet;
+use resume::typeset::fonts::{FontSet, Metrics};
 use resume::typeset::probe::ProbeKind;
 use resume::typeset::{Compiled, RenderOptions, Typesetter};
 
@@ -21,10 +22,29 @@ fn full_resume() -> Resume {
     assert_some!(resume)
 }
 
+fn bundled_fonts() -> Arc<FontSet> {
+    static FONTS: OnceLock<Arc<FontSet>> = OnceLock::new();
+    Arc::clone(FONTS.get_or_init(|| Arc::new(FontSet::bundled())))
+}
+
+fn compile_with(style: &StyleSource, paper: Paper) -> Compiled {
+    assert_ok!(Typesetter::new(bundled_fonts()).compile(&full_resume(), style, RenderOptions::new(paper)))
+}
+
 fn pragmatic(paper: Paper) -> Compiled {
-    let style = assert_ok!(StyleSource::builtin(BuiltinStyle::Pragmatic));
-    let typesetter = Typesetter::new(Arc::new(FontSet::bundled()));
-    assert_ok!(typesetter.compile(&full_resume(), &style, RenderOptions::new(paper)))
+    compile_with(&assert_ok!(StyleSource::builtin(BuiltinStyle::Pragmatic)), paper)
+}
+
+/// A style under `tests/fixtures/styles`.
+fn fixture_style(name: &str) -> StyleSource {
+    assert_ok!(StyleSource::directory(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/styles"),
+        assert_ok!(StyleName::try_new(name))
+    ))
+}
+
+fn compiled_with(style: &StyleSource) -> Compiled {
+    compile_with(style, Paper::Letter)
 }
 
 /// The text of each page in content-stream order, with runs of whitespace collapsed to one space.
@@ -86,16 +106,23 @@ fn theme_fonts_metadata_is_queryable() {
     let roles = assert_ok!(pragmatic(Paper::Letter).font_roles());
     let described: Vec<_> = roles
         .iter()
-        .map(|r| (r.name.as_str(), r.preferred.as_str(), r.fallback.as_str()))
+        .map(|r| (r.name.as_str(), r.preferred.as_str(), r.fallback.as_str(), r.metrics))
         .collect();
     assert_eq!(
         described,
         [
-            ("body", "Calibri", "Carlito"),
-            ("display", "Calibri", "Carlito"),
-            ("mono", "DejaVu Sans Mono", "DejaVu Sans Mono"),
+            ("body", "Calibri", "Carlito", Metrics::Compatible),
+            ("display", "Calibri", "Carlito", Metrics::Compatible),
+            ("mono", "DejaVu Sans Mono", "DejaVu Sans Mono", Metrics::Compatible),
         ]
     );
+}
+
+#[test]
+fn a_role_without_metric_compatibility_is_reported_as_different() {
+    let roles = assert_ok!(compiled_with(&fixture_style("different-metrics")).font_roles());
+    assert_eq!(roles.len(), 1);
+    assert_eq!(roles[0].metrics, Metrics::Different);
 }
 
 #[test]
@@ -104,24 +131,70 @@ fn every_role_and_era_leaves_a_probe_in_document_order() {
     let kinds: Vec<_> = probes
         .iter()
         .map(|p| match &p.kind {
-            ProbeKind::Role { index, company, .. } => format!("role {index} {company}"),
-            ProbeKind::Era { role, index, name } => format!("era {role}.{index} {name}"),
+            ProbeKind::Role {
+                index,
+                company,
+                title,
+                period,
+                ..
+            } => format!("role {index} {company} / {title:?} / {period}"),
+            ProbeKind::Era {
+                role,
+                index,
+                name,
+                period,
+                ..
+            } => format!("era {role}.{index} {name} / {period}"),
+            _ => unreachable!("only roles and eras are probed"),
         })
         .collect();
     assert_eq!(
         kinds,
         [
-            "role 0 Analytical Engines Ltd",
-            "era 0.0 Programming languages",
-            "era 0.1 Early machines",
-            "era 0.2 Infrastructure",
-            "role 1 Babbage & Co",
-            "role 2 Consulting and Early-Stage Companies",
-            "role 3 University of London",
+            "role 0 Analytical Engines Ltd / Some(\"Principal Engineer\") / Aug 2017 – Present",
+            "era 0.0 Programming languages / 2026 – Present",
+            "era 0.1 Early machines / Spring 2020 – Winter 2021",
+            "era 0.2 Infrastructure / 2022 – 2023",
+            "role 1 Babbage & Co / None / Fall 2012 – Sept 2017",
+            "role 2 Consulting and Early-Stage Companies / None / 2008 – 2012",
+            "role 3 University of London / None / 2004 – 2008",
         ]
     );
     assert!(probes.iter().all(|p| p.y > 0.0 && p.y < p.page_height));
-    assert_eq!(probes[5].page.get(), 2, "the page-break block moves role 2 to page 2");
+}
+
+#[test]
+fn the_page_break_block_moves_the_third_role_to_page_two() {
+    let probes = assert_ok!(pragmatic(Paper::Letter).probes());
+    let consulting = assert_some!(probes.iter().find(|p| matches!(
+        &p.kind,
+        ProbeKind::Role { company, .. } if company.starts_with("Consulting")
+    )));
+    assert_eq!(consulting.page.get(), 2);
+}
+
+#[test]
+fn probes_report_the_height_of_the_paper_they_are_on() {
+    let height = |paper| assert_some!(assert_ok!(pragmatic(paper).probes()).first().map(|p| p.page_height));
+    assert!((height(Paper::Letter) - 792.0).abs() < 0.01);
+    assert!((height(Paper::A4) - 841.89).abs() < 0.01);
+}
+
+#[test]
+fn bullet_labels_come_before_their_text() {
+    let pdf = assert_ok!(pragmatic(Paper::Letter).export_pdf("fixture"));
+    let text = page_texts(&pdf).join(" ");
+    assert!(text.contains("Languages: Rust, Java, Scala"), "{text}");
+    assert!(text.contains("Korrio, Director: Led a youth-sports platform"), "{text}");
+}
+
+#[test]
+fn inline_code_is_set_in_the_mono_font() {
+    let pdf = assert_ok!(pragmatic(Paper::Letter).export_pdf("fixture"));
+    assert!(
+        String::from_utf8_lossy(&pdf).contains("DejaVuSansMono"),
+        "the mono face is embedded"
+    );
 }
 
 #[test]
@@ -136,9 +209,6 @@ fn bundled_mode_embeds_only_bundled_families() {
 }
 
 // ---- embedding and the contract between the Rust and Typst sides -------------------------------
-
-use resume::error::Error;
-use resume::model::StyleName;
 
 fn typst_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -195,55 +265,8 @@ fn styles_that_are_named_but_not_written_yet_are_unknown_not_a_panic() {
 }
 
 #[test]
-fn every_file_under_styles_is_embedded_in_the_binary() {
-    // include_dir does not notice a file added later; build.rs makes cargo re-embed, and this catches a miss.
-    fn walk(dir: &std::path::Path, base: &std::path::Path, out: &mut Vec<String>) {
-        for entry in std::fs::read_dir(dir).expect("styles/ is readable").flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                walk(&path, base, out);
-            } else {
-                let relative = path.strip_prefix(base).expect("under styles/");
-                out.push(
-                    relative
-                        .components()
-                        .map(|c| c.as_os_str().to_string_lossy())
-                        .collect::<Vec<_>>()
-                        .join("/"),
-                );
-            }
-        }
-    }
-    let mut on_disk = Vec::new();
-    walk(&typst_dir().join("styles"), &typst_dir().join("styles"), &mut on_disk);
-    on_disk.sort();
-    assert_eq!(
-        on_disk,
-        [
-            "lib/components.typ",
-            "pragmatic/README.md",
-            "pragmatic/style.typ",
-            "pragmatic/theme.typ"
-        ]
-    );
-    let style = assert_ok!(StyleSource::builtin(BuiltinStyle::Pragmatic));
-    for relative in &on_disk {
-        let vpath = assert_ok!(typst::syntax::VirtualPath::new(format!("/{relative}")));
-        assert!(style.reads(&vpath), "{relative} is not embedded");
-    }
-}
-
-#[test]
 fn malformed_font_metadata_in_a_user_style_is_a_typed_error_not_a_panic() {
-    let style = assert_ok!(StyleSource::directory(
-        typst_dir().join("tests/fixtures/styles"),
-        assert_ok!(StyleName::try_new("bad-probe"))
-    ));
-    let compiled = assert_ok!(Typesetter::new(Arc::new(FontSet::bundled())).compile(
-        &full_resume(),
-        &style,
-        RenderOptions::new(Paper::Letter)
-    ));
+    let compiled = compiled_with(&fixture_style("bad-probe"));
     let err = compiled
         .font_roles()
         .expect_err("the metadata is not a dictionary of roles");
@@ -261,16 +284,28 @@ fn malformed_font_metadata_in_a_user_style_is_a_typed_error_not_a_panic() {
 }
 
 #[test]
+fn malformed_role_metadata_is_a_typed_error_naming_the_field() {
+    for (fixture, field) in [("bad-probe-title", "title"), ("bad-probe-index", "index")] {
+        let err = compiled_with(&fixture_style(fixture))
+            .probes()
+            .expect_err("the role metadata is malformed");
+        assert!(
+            matches!(
+                err,
+                Error::Probe {
+                    label: "resume-role",
+                    ..
+                }
+            ),
+            "{fixture}: {err:?}"
+        );
+        assert!(err.to_string().contains(field), "{fixture}: {err}");
+    }
+}
+
+#[test]
 fn a_style_without_probes_has_no_font_roles_and_no_probes() {
-    let style = assert_ok!(StyleSource::directory(
-        typst_dir().join("tests/fixtures/styles"),
-        assert_ok!(StyleName::try_new("minimal"))
-    ));
-    let compiled = assert_ok!(Typesetter::new(Arc::new(FontSet::bundled())).compile(
-        &full_resume(),
-        &style,
-        RenderOptions::new(Paper::Letter)
-    ));
+    let compiled = compiled_with(&fixture_style("minimal"));
     assert!(assert_ok!(compiled.font_roles()).is_empty());
     assert!(assert_ok!(compiled.probes()).is_empty());
 }
