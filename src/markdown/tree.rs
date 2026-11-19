@@ -253,33 +253,8 @@ impl TextNode {
 ///
 /// Math, strikethrough, YAML metadata, heading attributes, task lists, and definition lists stay off:
 /// a resume writes `$39K` and `~5`, and `---` is not front matter.
-fn options() -> Options {
+pub(super) fn options() -> Options {
     Options::ENABLE_SMART_PUNCTUATION | Options::ENABLE_TABLES | Options::ENABLE_FOOTNOTES
-}
-
-/// True when deleting `delete` from `window` leaves it parsing to the same blocks and the same inline
-/// content, counting a hard break and a soft break as one thing.
-///
-/// An Edit that only removes a line-end marker (a backslash or trailing spaces) uses this to prove it cannot
-/// reshape the document. Removing the marker can leave a blank line, which is a paragraph break, or a line
-/// that is nothing but `-`, `---`, `=`, `#`, or `>`, which becomes a setext underline, an empty heading, or a
-/// block quote. Re-parsing with the parser's own options means the answer cannot drift from the real parse.
-pub(crate) fn deletion_keeps_structure(window: &str, delete: Range<usize>) -> bool {
-    let (Some(head), Some(tail)) = (window.get(..delete.start), window.get(delete.end..)) else {
-        return false;
-    };
-    let edited = format!("{head}{tail}");
-    shape(window) == shape(&edited)
-}
-
-/// The parse events of `text`, with every hard break read as a soft one.
-fn shape(text: &str) -> Vec<Event<'_>> {
-    Parser::new_ext(text, options())
-        .map(|event| match event {
-            Event::HardBreak => Event::SoftBreak,
-            other => other,
-        })
-        .collect()
 }
 
 /// Lowers `text` (already past any BOM) into a tree; every range is shifted by `base`.
@@ -690,46 +665,6 @@ mod tests {
     use claims::{assert_none, assert_some};
     use pretty_assertions::assert_eq;
     use std::path::Path;
-
-    /// `deletion_keeps_structure` over `window` with the first occurrence of `marker` deleted.
-    fn keeps(window: &str, marker: &str) -> bool {
-        let start = window.find(marker).unwrap_or(window.len());
-        deletion_keeps_structure(window, start..start + marker.len())
-    }
-
-    #[test]
-    fn deleting_a_break_marker_after_text_keeps_the_structure() {
-        assert!(keeps("one\\\ntwo", "\\"), "a backslash break becomes a soft break");
-        assert!(keeps("one  \ntwo", "  "), "so do trailing spaces");
-        assert!(keeps("one\r\ntwo  \r\nthree", "  "));
-        assert!(keeps("- item  \n  more", "  "), "a list item keeps its shape");
-        assert!(keeps("a\n# b  \nc", "  "), "even beside a heading");
-    }
-
-    #[test]
-    fn deleting_a_marker_that_leaves_a_blank_line_changes_the_structure() {
-        assert!(!keeps("one\n\\\ntwo", "\\"), "a paragraph break");
-        assert!(!keeps("one\n  \\\ntwo", "\\"), "an indented one is blank too");
-    }
-
-    #[test]
-    fn deleting_a_marker_that_leaves_only_markup_changes_the_structure() {
-        for (window, marker) in [
-            ("one\n-\\\ntwo", "\\"),   // a setext underline
-            ("one\n---\\\ntwo", "\\"), // a setext underline too
-            ("one\n=\\\ntwo", "\\"),   // setext level 1
-            ("one\n#\\\ntwo", "\\"),   // an empty heading
-            ("one\n>\\\ntwo", "\\"),   // an empty block quote
-        ] {
-            assert!(!keeps(window, marker), "{window:?}");
-        }
-    }
-
-    #[test]
-    fn an_unusable_range_is_not_a_proof() {
-        assert!(!deletion_keeps_structure("one\\\ntwo", 3..99), "past the end");
-        assert!(!deletion_keeps_structure("é\\\nx", 1..2), "inside a character");
-    }
 
     fn lowered(text: &str) -> (Document, Vec<Diagnostic>) {
         let mut sink = Sink::new(Path::new("r.md"));

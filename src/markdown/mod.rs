@@ -8,6 +8,7 @@
 //! mechanical.
 
 mod blocks;
+mod edit_safety;
 mod inline;
 mod lint;
 mod period;
@@ -91,6 +92,13 @@ impl Parsed {
 /// is a byte range into `text` (on UTF-8 character boundaries, for LF, CRLF, and mixed line endings).
 pub fn parse(path: impl AsRef<Path>, text: &str) -> Parsed {
     let path = path.as_ref();
+    let mut parsed = analyze(path, text);
+    edit_safety::verify_hard_break_edits(&mut parsed, text, |fixed| analyze(path, fixed));
+    parsed
+}
+
+/// The parse itself, without the whole-document check of hard-break Edits (which re-parses through this).
+fn analyze(path: &Path, text: &str) -> Parsed {
     let mut sink = Sink::new(path);
     if text.len() > MAX_INPUT_BYTES {
         let message = format!("input is {} bytes; the limit is {MAX_INPUT_BYTES}", text.len());

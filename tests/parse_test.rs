@@ -296,6 +296,79 @@ fn hard_break_edit_is_kept_and_changes_nothing_when_text_precedes_the_marker() {
     }
 }
 
+/// Documents where the first version of the hard-break Edit, proven on three lines of raw text, changed what the
+/// document says (found by the review of rsm-141.19). Each is a whole resume; applying only the hard-break Edits
+/// must leave the model and the other findings as they were, which holds because the Edit is withheld.
+const HARD_BREAK_REVIEW_CASES: [(&str, &str); 11] = [
+    (
+        "emphasis opener at the marker, closer 3 lines on",
+        "# Ada\n\n_\\\nSeattle\nPortland\nAustin_ end\n",
+    ),
+    (
+        "bold opener in parentheses",
+        "# Ada\n\n(**\\\nSeattle\nPortland\nAustin** end\n",
+    ),
+    (
+        "inline tag over three lines",
+        "# Ada\n\na <span\\\nclass=\"x\"\nid=\"y\"> b\n",
+    ),
+    (
+        "reference link made live",
+        "# Ada\n\nSee [foo][\\\nbar] now\n\n[bar]: https://x.y\n",
+    ),
+    (
+        "two adjacent Edits that together form a table",
+        "# Ada\n\na|b\\\n-|-\\\nc\n",
+    ),
+    ("setext underline before the window", "Ada\n===\n*\\\nLondon\n"),
+    (
+        "indented lazy line before the window",
+        "# Ada\n\nLondon\n    Seattle\n=\\\nPortland\n",
+    ),
+    ("a leading BOM", "\u{feff}# Ada\n*\\\nLondon\n"),
+    (
+        "backslash then spaces after a reference-definition-like line",
+        "# Ada\n\nHere\n[x]:\n\\  \ns\n",
+    ),
+    (
+        "an opener, a list marker, then the closer",
+        "# Ada\n\n_\\\n1.\nAustin_ end\n",
+    ),
+    ("the property's own seed", "## \n# # # \n-\\\n · **Label**:"),
+];
+
+#[test]
+fn hard_break_edits_never_change_the_document_in_the_review_cases() {
+    for (name, text) in HARD_BREAK_REVIEW_CASES {
+        if let Err(difference) = common::hard_break_edits_change_nothing(text) {
+            panic!("{name}: {difference}");
+        }
+    }
+}
+
+/// The decision about an Edit must not depend on how the lines are terminated.
+#[test]
+fn hard_break_edits_are_offered_identically_for_lf_crlf_and_lone_cr() {
+    for text in [
+        "# Ada\n\nLondon\n    Seattle\nPortland  \nAustin\n",
+        "# Ada\n\nLondon  \nSeattle\\\nPortland\n",
+        "# Ada\n\nLondon\n-\\\nSeattle\n",
+        "# Ada\n\nLondon\n\\\nSeattle\n",
+    ] {
+        let offered = |converted: &str| -> Vec<(usize, usize)> {
+            let parsed = parse("r.md", converted);
+            hard_breaks(&parsed)
+                .iter()
+                .filter_map(|d| d.fix.as_ref().map(|e| (e.range.start, e.range.end)))
+                .collect()
+        };
+        let lf = offered(text);
+        // `\r` and `\n` are one byte each, so the offsets of an LF document and its lone-CR twin line up.
+        assert_eq!(offered(&text.replace('\n', "\r")), lf, "lone CR: {text:?}");
+        assert_eq!(offered(&to_crlf(text)).len(), lf.len(), "CRLF: {text:?}");
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Line endings and the BOM (Windows portability)
 // ---------------------------------------------------------------------------------------------
@@ -682,6 +755,21 @@ fn assert_parses_within(name: &str, text: &str, limit: Duration) {
         text.len()
     );
     assert!(parsed.diagnostics().len() <= 501, "{name}: diagnostics are capped");
+}
+
+#[test]
+fn many_hard_breaks_parse_in_linear_time() {
+    // Each hard break gets a small local proof, and the whole document is parsed once more to check the Edits
+    // together. Doing that once per break would be quadratic: 20,000 breaks would then take minutes, not a second.
+    let head = "# Ada\n\n";
+    for (name, line) in [
+        ("trailing spaces", "x  \n"),
+        ("backslashes", "x\\\n"),
+        ("lone markers", "-\\\n"),
+    ] {
+        let text = format!("{head}{}y\n", line.repeat(20_000));
+        assert_parses_within(name, &text, Duration::from_secs(5));
+    }
 }
 
 #[test]

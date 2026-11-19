@@ -5,6 +5,7 @@
 #![allow(dead_code)]
 
 use resume::diagnostics::{Diagnostic, DiagnosticCode, Edit};
+use resume::markdown::{Parsed, parse};
 
 /// Applies non-overlapping edits from the end of the text backwards, so earlier offsets stay valid.
 pub fn apply_edits(text: &str, edits: &[&Edit]) -> String {
@@ -15,6 +16,44 @@ pub fn apply_edits(text: &str, edits: &[&Edit]) -> String {
         out.replace_range(edit.range.clone(), &edit.replacement);
     }
     out
+}
+
+/// The findings other than hard breaks, as sorted `severity|code|message` keys: what a hard-break Edit must
+/// not change (positions move when text is deleted, so spans are left out).
+pub fn other_findings(parsed: &Parsed) -> Vec<String> {
+    let mut keys: Vec<String> = parsed
+        .diagnostics()
+        .iter()
+        .filter(|d| d.code != DiagnosticCode::HardBreak)
+        .map(|d| format!("{}|{}|{}", d.severity, d.code, d.message))
+        .collect();
+    keys.sort();
+    keys
+}
+
+/// Applies ONLY the hard-break Edits of `text` and checks the claim the parser makes for them: the model and
+/// the other findings are exactly what they were. `Err` describes the difference.
+pub fn hard_break_edits_change_nothing(text: &str) -> Result<(), String> {
+    let before = parse("r.md", text);
+    let edits: Vec<&Edit> = before
+        .diagnostics()
+        .iter()
+        .filter(|d| d.code == DiagnosticCode::HardBreak)
+        .filter_map(|d| d.fix.as_ref())
+        .collect();
+    let fixed = apply_edits(text, &edits);
+    let after = parse("r.md", &fixed);
+    if before.best_effort() != after.best_effort() {
+        return Err(format!("the model changed\nbefore: {text:?}\nafter:  {fixed:?}"));
+    }
+    if other_findings(&before) != other_findings(&after) {
+        return Err(format!(
+            "the other findings changed: {:?} -> {:?}\nbefore: {text:?}\nafter:  {fixed:?}",
+            other_findings(&before),
+            other_findings(&after)
+        ));
+    }
+    Ok(())
 }
 
 /// The Edits carried by `diagnostics`.

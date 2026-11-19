@@ -30,6 +30,11 @@ const TOKENS: &[&str] = &[
     "—",
     "--",
     "|",
+    "<span",
+    ">",
+    "=",
+    "[x]:",
+    "    ",
     "•",
     "**",
     "*",
@@ -226,6 +231,85 @@ proptest! {
             prop_assert!(bold_after >= bold_before, "bold spans {bold_before} -> {bold_after}\nbefore: {text:?}\nafter: {fixed:?}");
             prop_assert!(marks_after <= marks_before, "literal marks {marks_before} -> {marks_after}\nbefore: {text:?}\nafter: {fixed:?}");
         }
+    }
+}
+
+/// Line fragments around a hard break: openers whose closer comes later, halves of a tag or a reference link,
+/// lines that are only markup, and indented lines. Alone they rarely meet at a line end, so token soup misses them.
+const BREAK_FRAGMENTS: &[&str] = &[
+    "London",
+    "Seattle",
+    "Portland",
+    "word",
+    "_",
+    "(**",
+    "**",
+    "*",
+    "-",
+    "---",
+    "=",
+    "#",
+    ">",
+    "1.",
+    "    indented",
+    "[x]:",
+    "[foo][",
+    "bar] now",
+    "See [foo]",
+    "a <span",
+    "class=\"x\"",
+    "id=\"y\"> b",
+    "c>",
+    "a|b",
+    "-|-",
+    "`code",
+    "code`",
+    "Austin_ end",
+    "Austin** end",
+];
+
+/// Most lines carry no marker, some a backslash, some two spaces.
+const BREAK_MARKERS: &[&str] = &["", "", "", "\\", "\\", "  "];
+
+/// A contact paragraph of two to six fragment lines with markers, sometimes followed by a reference definition,
+/// in LF, CRLF, or lone-CR line endings, with or without a BOM.
+fn hard_break_soup() -> impl Strategy<Value = String> {
+    let lines = prop::collection::vec(
+        (
+            prop::sample::select(BREAK_FRAGMENTS),
+            prop::sample::select(BREAK_MARKERS),
+        ),
+        2..7,
+    );
+    (lines, any::<bool>(), 0..3usize, any::<bool>()).prop_map(|(lines, definition, ending, bom)| {
+        let body = lines
+            .iter()
+            .map(|(fragment, marker)| format!("{fragment}{marker}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut doc = format!("# Ada\n\n{body}\n");
+        if definition {
+            doc.push_str("\n[bar]: https://x.y\n");
+        }
+        let doc = match ending {
+            0 => doc,
+            1 => doc.replace('\n', "\r\n"),
+            _ => doc.replace('\n', "\r"),
+        };
+        if bom { format!("\u{feff}{doc}") } else { doc }
+    })
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(cases()))]
+
+    /// A hard-break Edit is offered only when it cannot change how the document is read. Stated as strongly as it
+    /// can be: apply only those Edits, and the parsed model and every other finding are exactly what they were.
+    /// (The words-and-bold property above is a weaker oracle: it missed a tag that became raw HTML, a reference
+    /// link made live, and a table formed by two Edits that were each safe alone.)
+    #[test]
+    fn hard_break_edits_never_change_the_document(text in prop_oneof![hard_break_soup(), structured_markdown()]) {
+        prop_assert_eq!(common::hard_break_edits_change_nothing(&text), Ok(()));
     }
 }
 
