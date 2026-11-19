@@ -1,6 +1,7 @@
 //! ABOUTME: Whole-document tests for the Markdown parser: fixtures, snapshots, line endings, and properties.
 //! ABOUTME: Per-convention and per-code unit tests live beside the code in `src/markdown`.
 
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use std::{env, fs, thread};
@@ -485,6 +486,76 @@ fn bom_is_ignored_for_the_model_and_spans_shift() {
             assert!(sb.range.start >= 3, "{name}: no span may include the BOM");
         }
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// A finding about a list points at the list's marker (rsm-141.20, rsm-141.21)
+// ---------------------------------------------------------------------------------------------
+
+/// Where each finding with `code` points in `text`, and the text there.
+fn quoted(text: &str, code: DiagnosticCode) -> Vec<(Range<usize>, &str)> {
+    let parsed = parse("r.md", text);
+    parsed
+        .diagnostics()
+        .iter()
+        .filter(|d| d.code == code)
+        .map(|d| {
+            let range = assert_some!(d.span.as_ref(), "{d:?}").range.clone();
+            (range.clone(), &text[range])
+        })
+        .collect()
+}
+
+#[test]
+fn a_nested_list_after_a_blank_line_and_a_tab_points_at_its_marker() {
+    // rsm-141.20: the span began with the blank line's line ending and the tab (13..18, "\n\t1. ").
+    let text = "–\n- \n:\n- :\n\n\t1. ";
+    assert_eq!(quoted(text, DiagnosticCode::NestedList), [(15..18, "1. ")]);
+}
+
+#[test]
+fn a_nested_list_indented_three_spaces_points_at_its_marker() {
+    // rsm-141.21: the span began with the space beyond the parent's content column (18..22, " - :").
+    let text = "###Acme\n- \n\n- :\n   - :";
+    assert_eq!(quoted(text, DiagnosticCode::NestedList), [(19..22, "- :")]);
+}
+
+#[test]
+fn every_finding_about_a_list_points_at_its_marker() {
+    use DiagnosticCode::{ContentBeforeSection, NestedList, UnsupportedMarkdown};
+    let role = |body: &str| format!("# Ada\n\nHere\n\n## S\n\n### Acme · Eng · 2015 – 2017\n\n{body}");
+    for (text, code, expected) in [
+        // A numbered list is reported as a nested list and as unsupported, and both point at the marker.
+        (role("- parent\n   1. first\n"), NestedList, "1. first"),
+        (role("- parent\n   1. first\n"), UnsupportedMarkdown, "1. first"),
+        (
+            role("   1. first\n   2. second\n"),
+            UnsupportedMarkdown,
+            "1. first\n   2. second",
+        ),
+        (role("- parent\n\n\t- child\n"), NestedList, "- child"),
+        // A BOM shifts every range; the span still indexes the original text and starts at the marker.
+        (
+            format!("\u{feff}{}", role("- parent\n\n\t- child\n")),
+            NestedList,
+            "- child",
+        ),
+        // A list before the first section is an error, indented or not.
+        ("# Ada\n\nHere\n\n   - a\n".to_string(), ContentBeforeSection, "- a"),
+        // So is a list before the name heading.
+        ("   - a\n\n# Ada\n".to_string(), ContentBeforeSection, "- a"),
+    ] {
+        let found = quoted(&text, code);
+        assert_eq!(found.len(), 1, "{text:?}: {found:?}");
+        assert_eq!(found[0].1, expected, "{text:?}: {code:?}");
+    }
+}
+
+#[test]
+fn a_missing_name_is_reported_at_the_marker_of_a_leading_list() {
+    // The finding has no width: it sits where the first block starts, and an indented list starts at its marker.
+    let found = quoted("   - a\n", DiagnosticCode::MissingName);
+    assert_eq!(found, [(3..3, "")]);
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -313,6 +313,69 @@ proptest! {
     }
 }
 
+/// What can come before a list marker on a line, and what the marker can be.
+const LIST_INDENTS: &[&str] = &["", " ", "  ", "   ", "    ", "      ", "\t", " \t", "\t\t"];
+const LIST_MARKERS: &[&str] = &["-", "*", "+", "1.", "2)", "10."];
+const LIST_TEXTS: &[&str] = &["a", ":", "", "**Label:** x", "item two"];
+
+/// A document made only of list lines (one to eight, blank lines between some), put in a role, before the first
+/// section, after no name, or before the name; in LF, CRLF, or lone-CR line endings, with or without a BOM.
+///
+/// In a role a line may be indented any amount: that is where nested lists, tabs, and the unspent part of a
+/// tab come from. Outside a role the property also reads `content-before-section` and `missing-name` as
+/// findings about a list, so every top-level block has to be one: there a line is indented at most three
+/// spaces, because from four on a line that is not inside an item is an indented code block, whose span
+/// rightly starts after its indent (a line six spaces in after an item whose content starts in column seven).
+fn list_soup() -> impl Strategy<Value = String> {
+    let line = (
+        prop::sample::select(LIST_INDENTS),
+        prop::sample::select(LIST_MARKERS),
+        prop::sample::select(LIST_TEXTS),
+        any::<bool>(),
+    );
+    let first_indent = prop::sample::select(&LIST_INDENTS[..4]);
+    let lines = (first_indent, prop::collection::vec(line, 0..8));
+    (lines, 0..4usize, 0..3usize, any::<bool>()).prop_map(|((first, rest), place, ending, bom)| {
+        let first = format!("{first}- a\n");
+        let rest: String = rest
+            .iter()
+            .map(|(indent, marker, text, blank)| {
+                let indent = if place == 0 || LIST_INDENTS[..4].contains(indent) {
+                    indent
+                } else {
+                    &"   "
+                };
+                format!("{}{indent}{marker} {text}\n", if *blank { "\n" } else { "" })
+            })
+            .collect();
+        let lists = format!("{first}{rest}");
+        let doc = match place {
+            0 => format!("{PREAMBLE}{lists}"),
+            1 => format!("# Ada\n\nHere\n\n{lists}"),
+            2 => lists,
+            _ => format!("{lists}\n# Ada\n\nHere\n"),
+        };
+        let doc = match ending {
+            0 => doc,
+            1 => doc.replace('\n', "\r\n"),
+            _ => doc.replace('\n', "\r"),
+        };
+        if bom { format!("\u{feff}{doc}") } else { doc }
+    })
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(cases()))]
+
+    /// A finding about a list points at the list's first marker, however it is indented and whatever precedes
+    /// it. (`spans_are_in_bounds` checks this only for `nested-list`; the other findings built on a list's
+    /// range, and a document that is nothing but lists, are covered here.)
+    #[test]
+    fn list_findings_point_at_a_marker(text in list_soup()) {
+        prop_assert_eq!(common::list_findings_point_at_a_marker(&text), Ok(()));
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Generated documents: the model is what the generator says it should be
 // ---------------------------------------------------------------------------------------------

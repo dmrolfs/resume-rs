@@ -56,6 +56,37 @@ pub fn hard_break_edits_change_nothing(text: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// True for a finding whose span must start at a list marker: it names a list, not a block that may be indented.
+fn is_about_a_list(d: &Diagnostic) -> bool {
+    match d.code {
+        // In a document made only of lists, every block before the name or the first section is a list.
+        DiagnosticCode::NestedList | DiagnosticCode::ContentBeforeSection | DiagnosticCode::MissingName => true,
+        DiagnosticCode::UnsupportedMarkdown => d.message.starts_with("numbered lists"),
+        DiagnosticCode::InputLimit => d.message.starts_with("lists are nested"),
+        _ => false,
+    }
+}
+
+/// Checks the claim the parser makes for a document made only of lists (after an optional name, contact line,
+/// section, and role): the text at the start of every finding about a list is a list marker, so the caret
+/// never sits under indentation or on the blank line before the list. `Err` describes the first violation.
+pub fn list_findings_point_at_a_marker(text: &str) -> Result<(), String> {
+    for d in parse("r.md", text).diagnostics().iter().filter(|d| is_about_a_list(d)) {
+        let Some(span) = d.span.as_ref() else {
+            return Err(format!("{} has no span\n{text:?}", d.code));
+        };
+        let at = text.get(span.range.start..).unwrap_or("");
+        if !at.starts_with(['-', '*', '+']) && !at.starts_with(|c: char| c.is_ascii_digit()) {
+            let shown: String = at.chars().take(12).collect();
+            return Err(format!(
+                "{} ({}) at {:?} points at {shown:?}, not a list marker\n{text:?}",
+                d.code, d.message, span.range
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// The Edits carried by `diagnostics`.
 pub fn edits_of(diagnostics: &[Diagnostic]) -> Vec<&Edit> {
     diagnostics.iter().filter_map(|d| d.fix.as_ref()).collect()
@@ -70,6 +101,10 @@ pub fn subject_matches(code: DiagnosticCode, source: &str) -> bool {
     let is_pair = |delimiter: &str| {
         source.len() >= 2 * delimiter.len() && source.starts_with(delimiter) && source.ends_with(delimiter)
     };
+    // A span that starts with a line ending points at the line before the thing it names.
+    if source.starts_with(['\n', '\r']) {
+        return false;
+    }
     match code {
         PeriodHyphen => {
             !source.is_empty()

@@ -7,3 +7,5 @@
 cc bd4983b736f6e8e5c7759bcba5658ffef226673d5f33308cb7cd04bc605a7fe4 # shrinks to text = "# \n · \\    \n · "
 cc f0c5d2661060ea8e0d876b922204dcdd3ac54f4eed4a6485afb609280c843e79 # shrinks to text = ":\n## \n- 1. "
 cc aab152257f19a2dc03451d2966c0d2cdf1388a8dcf59eb0292113d99576a4ca0 # shrinks to text = "# \n ·  – \t\n · "
+cc 58d44d2a00b64ea40aed9a4fad6496b30583bd31e542338931f10820242ed3d4 # shrinks to text = "–\n- \n:\n- :\n\n\t1. "
+cc 23b856c1019c1e26bb603ca3cf90cb685e104c50bb839b84e6a1e4a8cab9fadf # shrinks to text = "###Acme\n- \n\n- :\n   - :"

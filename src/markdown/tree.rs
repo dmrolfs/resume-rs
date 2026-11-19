@@ -412,6 +412,26 @@ impl<'t, 's, 'p> Lowerer<'t, 's, 'p> {
         range.start + self.base..range.start + visible + self.base
     }
 
+    /// Moves the start of a list's `range` (already shifted by `base`) to the list's first marker.
+    ///
+    /// The parser starts a list inside another one where the parent item's content column ends, so the
+    /// indentation beyond that column, the unspent part of a tab, and, after a blank line, the blank line's
+    /// own line ending all come before the marker. A list at the top level starts at the beginning of its
+    /// line, so its indentation comes first. A finding about the list has to point at the marker, as a finding
+    /// about a block quote, a heading, or any other block does.
+    fn at_first_marker(&self, range: Range<usize>) -> Range<usize> {
+        let leading = self.source_text(&range).map_or(0, |list| {
+            list.len() - list.trim_start_matches([' ', '\t', '\n', '\r']).len()
+        });
+        range.start + leading..range.end
+    }
+
+    /// The source text of `range`, which is in original coordinates (shifted by `base`).
+    fn source_text(&self, range: &Range<usize>) -> Option<&'t str> {
+        self.text
+            .get(range.start.checked_sub(self.base)?..range.end.checked_sub(self.base)?)
+    }
+
     fn start(&mut self, tag: Tag<'_>, range: Range<usize>) {
         match tag {
             Tag::Paragraph => {
@@ -435,7 +455,10 @@ impl<'t, 's, 'p> Lowerer<'t, 's, 'p> {
                 range,
                 text: String::new(),
             }),
-            Tag::List(first) => self.start_list(first.is_some(), range),
+            Tag::List(first) => {
+                let range = self.at_first_marker(range);
+                self.start_list(first.is_some(), range);
+            }
             Tag::Item => self.stack.push(Frame::Item {
                 blocks: Vec::new(),
                 tight: Vec::new(),
@@ -591,7 +614,7 @@ impl<'t, 's, 'p> Lowerer<'t, 's, 'p> {
     }
 
     fn push_text(&mut self, text: &str, range: Range<usize>) {
-        let verbatim = self.text.get(range.start - self.base..range.end - self.base) == Some(text);
+        let verbatim = self.source_text(&range) == Some(text);
         let Some(target) = self.inline_target() else { return };
         if let Some(InlineNode::Text(node)) = target.last_mut() {
             node.push(text, range, verbatim);
@@ -814,6 +837,99 @@ mod tests {
         let (doc, diagnostics) = lowered(&text);
         assert_eq!(list_depth(&doc.blocks), MAX_LIST_DEPTH);
         assert!(diagnostics.iter().any(|d| d.code == DiagnosticCode::InputLimit));
+    }
+
+    /// The source each list in `blocks` covers, outer lists before the lists inside them.
+    fn list_sources<'t>(text: &'t str, blocks: &[BlockNode], found: &mut Vec<&'t str>) {
+        for block in blocks {
+            if let BlockNode::List(list) = block {
+                found.push(&text[list.range.clone()]);
+                for item in &list.items {
+                    list_sources(text, &item.blocks, found);
+                }
+            }
+        }
+    }
+
+    /// What each list in `text` quotes, outermost first.
+    fn lists_quoted(text: &str) -> Vec<&str> {
+        let (doc, _) = lowered(text);
+        let mut found = Vec::new();
+        list_sources(text, &doc.blocks, &mut found);
+        found
+    }
+
+    #[test]
+    fn a_nested_list_starts_at_its_first_marker_whatever_precedes_it() {
+        // The parser starts a nested list where the parent item's content column ends, so spaces beyond
+        // it, the unspent part of a tab, and (after a blank line) the blank line's own line ending all
+        // come before the marker; none of them belong to the list.
+        for (text, nested) in [
+            ("- a\n  - b\n", "- b"),
+            ("- a\n   - b\n", "- b"),
+            ("- a\n    - b\n", "- b"),
+            ("- a\n\n    - b\n", "- b"),
+            ("- a\n\t- b\n", "- b"),
+            ("- a\n\n\t- b\n", "- b"),
+            ("- a\n\n  \t- b\n", "- b"),
+            ("- a\n\n   - b\n   - c\n", "- b\n   - c"),
+            ("1. a\n   1. b\n", "1. b"),
+            ("- a\n   1. b\n", "1. b"),
+            ("- a\r\n\r\n\t- b\r\n", "- b"),
+            ("- a\r\r\t- b\r", "- b"),
+            ("- a\n\n\t- b", "- b"),
+        ] {
+            let quoted = lists_quoted(text);
+            let inner = assert_some!(quoted.get(1), "{text:?} has no nested list: {quoted:?}");
+            assert_eq!(*inner, nested, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn a_list_starts_at_its_first_marker_when_the_text_is_shifted_by_a_base() {
+        // `parse` lowers the text after a BOM, so every range it gets is shifted by the BOM's length.
+        let text = "- a\n\n\t- b\n";
+        let mut sink = Sink::new(Path::new("r.md"));
+        let doc = lower(text, 3, &mut sink);
+        let [BlockNode::List(outer)] = doc.blocks.as_slice() else {
+            panic!("expected one list, got {:?}", doc.blocks)
+        };
+        let Some(BlockNode::List(inner)) = outer.items[0].blocks.get(1) else {
+            panic!("expected a nested list, got {:?}", outer.items)
+        };
+        assert_eq!(outer.range, 3..12, "the outer list");
+        assert_eq!(inner.range, 9..12, "`- b`, not the blank line and the tab before it");
+    }
+
+    #[test]
+    fn a_top_level_list_starts_at_its_first_marker() {
+        for (text, quoted) in [
+            ("- a\n", "- a"),
+            ("   - a\n", "- a"),
+            ("\n- a\n", "- a"),
+            ("para\n\n  1. a\n  2. b\n", "1. a\n  2. b"),
+        ] {
+            assert_eq!(lists_quoted(text), [quoted], "{text:?}");
+        }
+    }
+
+    #[test]
+    fn the_depth_cap_finding_points_at_the_list_marker() {
+        // Each level is indented one space past its parent's content column, which is what puts leading
+        // spaces in the parser's range for the list.
+        for ending in ["\n", "\r\n", "\r"] {
+            let text: String = (0..12)
+                .map(|i| format!("{}- item {i}{ending}", "   ".repeat(i)))
+                .collect();
+            let (_, diagnostics) = lowered(&text);
+            let limit = assert_some!(diagnostics.iter().find(|d| d.code == DiagnosticCode::InputLimit));
+            let range = assert_some!(limit.span.as_ref()).range.clone();
+            assert!(
+                text[range.clone()].starts_with("- item"),
+                "{ending:?}: {:?}",
+                &text[range]
+            );
+        }
     }
 
     #[test]
