@@ -14,7 +14,10 @@
 // its own above the two sides.
 #let header(theme, resume) = {
   let parts = contact-parts(resume.contact)
-  let side(..groups) = groups.pos().filter(g => g.len() > 0).map(g => join-items(g)).join(linebreak(), default: [])
+  let side(..groups) = text(
+    size: theme.size.contact,
+    groups.pos().filter(g => g.len() > 0).map(g => join-items(g)).join(linebreak(), default: []),
+  )
   let name = text(font: font-stack(theme.fonts.display), size: theme.size.name, resume.name)
   let (where, reach) = (side(parts.where, parts.links), side(parts.phones, parts.emails))
   layout(size => {

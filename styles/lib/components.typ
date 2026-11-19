@@ -194,7 +194,7 @@
   let lead = if role.title != none { strong(role.title) + [ · ] + strong(role.company) } else {
     strong(role.company)
   }
-  grid(columns: (1fr, auto), column-gutter: 1em, lead, align(right, strong(role.period.text)))
+  text(size: theme.size.role, grid(columns: (1fr, auto), column-gutter: 1em, lead, align(right, strong(role.period.text))))
 }
 
 // Name and period of an era.

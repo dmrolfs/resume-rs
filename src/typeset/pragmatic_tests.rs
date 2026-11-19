@@ -405,7 +405,7 @@ fn bundled_and_original_body_fonts_break_lines_identically() {
 #[ignore = "needs RESUME_ORIGINAL_FONTS_DIR: proprietary Calibri and Georgia files, local only"]
 fn the_identity_check_catches_line_pitch_taken_from_font_metrics() {
     let (_dir, style) = weakened(
-        "top: 0.952em, bottom: -0.269em, leading: 0pt",
+        "top: 0.952em, bottom: -0.269em, leading: 0.1em",
         "top: \"cap-height\", bottom: \"baseline\", leading: 0.589em",
     );
     let (originals, bundled) = originals_and_bundled(&style);
@@ -422,7 +422,8 @@ fn consecutive_and_trailing_page_breaks_never_leave_a_blank_page() {
 
 #[test]
 fn wrapped_bullet_lines_sit_one_theme_line_pitch_apart() {
-    // The pitch comes from explicit text edges (0.952em + 0.269em at 10.5pt), so it is the same for any body font.
+    // The pitch comes from explicit text edges and leading (0.952em + 0.269em + 0.1em at 11pt), so it is the same
+    // for any body font.
     let md = format!(
         "# T P\n\nCity · a@b.co\n\n## A\n\n- {}\n",
         "wrapword ".repeat(80).trim_end()
@@ -436,8 +437,8 @@ fn wrapped_bullet_lines_sit_one_theme_line_pitch_apart() {
     assert!(ys.len() >= 3, "the bullet must wrap: {ys:?}");
     for pair in ys.windows(2) {
         assert!(
-            (pair[1] - pair[0] - 10.5 * 1.221).abs() < 0.01,
-            "line pitch {} is not 12.82pt",
+            (pair[1] - pair[0] - 11.0 * 1.321).abs() < 0.01,
+            "line pitch {} is not 14.53pt",
             pair[1] - pair[0]
         );
     }

@@ -10,33 +10,36 @@
     display: (preferred: "Calibri", fallback: "Carlito", metric-compatible: true),
     mono: (preferred: "DejaVu Sans Mono", fallback: "DejaVu Sans Mono", metric-compatible: true),
   ),
-  size: (body: 10.5pt, name: 24pt, heading: 13pt, footer: 8.5pt),
+  // `role` is the role line (title, company, period); `contact` is the header text beside the name.
+  size: (body: 11pt, name: 24pt, heading: 14pt, role: 12pt, contact: 12pt, footer: 8.5pt),
   color: (
     text: rgb("#000000"),
     accent: rgb("#1155cc"),
-    link: rgb("#000000"),
+    link: rgb("#1155cc"),
     muted: rgb("#595959"),
   ),
   // The page margins; the bottom one leaves room for the footer.
-  margin: (x: 0.5in, top: 0.5in, bottom: 0.7in),
+  margin: (x: 0.6in, top: 0.7in, bottom: 0.75in),
   footer-descent: 35%,
   // Line pitch is set from explicit lengths, not font metrics, so a fallback font with a slightly
-  // different cap height still gives identical line positions. 0.952em above and 0.269em below the baseline is Calibri's single line, 1.22em.
-  line: (top: 0.952em, bottom: -0.269em, leading: 0pt),
+  // different cap height still gives identical line positions. 0.952em above and 0.269em below the
+  // baseline is Calibri's single line, 1.22em, which the template uses; `leading` adds 0.1em between
+  // lines so the page reads less dense.
+  line: (top: 0.952em, bottom: -0.269em, leading: 0.1em),
   spacing: (
-    section: 12pt,
-    section-below: 5pt,
-    role: 9pt,
-    role-line-below: 2pt,
-    era: 5pt,
-    era-line-below: 1pt,
-    blurb: 1pt,
-    bullet: 1.5pt,
-    paragraph: 3pt,
+    section: 18pt,
+    section-below: 7pt,
+    role: 14pt,
+    role-line-below: 3pt,
+    era: 8pt,
+    era-line-below: 2pt,
+    blurb: 2pt,
+    bullet: 2.5pt,
+    paragraph: 5pt,
   ),
   // `name-gap`: the least clear space between the name and either side before the name moves to a line of its
   // own; `stacked-gap` is the space under the name then.
   header: (name-gap: 12pt, stacked-gap: 4pt),
   rule: (weight: 1pt, gap: 2pt),
-  bullet: (marker: [•], indent: 0.1in, gap: 0.1in),
+  bullet: (marker: [•], indent: 0.15in, gap: 0.15in),
 )
