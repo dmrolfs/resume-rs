@@ -64,6 +64,9 @@ pub enum Error {
     #[snafu(display("typesetting panicked during {stage}: {message}"))]
     TypesetPanicked { stage: Stage, message: String },
 
+    #[snafu(display("cannot read {}: {source}", path.display()))]
+    ReadInput { path: PathBuf, source: std::io::Error },
+
     #[snafu(display("cannot create the output directory {}: {source}", path.display()))]
     CreateOutputDir { path: PathBuf, source: std::io::Error },
 

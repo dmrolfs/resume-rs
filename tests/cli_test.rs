@@ -1,6 +1,9 @@
 //! ABOUTME: End-to-end tests of the `resume` binary's command-line interface.
 //! ABOUTME: Uses assert_cmd to run the built binary and check exit codes and output.
 
+use std::fs;
+use std::path::Path;
+
 use assert_cmd::Command;
 use predicates::str::{contains, is_match};
 
@@ -59,4 +62,135 @@ fn help_ignores_an_exe_suffix_in_argv0() -> std::io::Result<()> {
         "help leaked the extension:\n{stdout}"
     );
     Ok(())
+}
+
+// ============================================================================
+// `resume build` through the real binary: exit codes, streams, and color
+// ============================================================================
+
+/// Copies the fixture `name` into `dir` as `file`, and returns a command that runs in `dir`.
+fn in_workspace(dir: &Path, fixture: &str, file: &str) -> Command {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(fixture);
+    fs::copy(&source, dir.join(file)).expect("the fixture exists");
+    let mut command = resume();
+    command.current_dir(dir);
+    command
+}
+
+#[test]
+fn a_clean_build_exits_0_and_writes_the_pdf() {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    in_workspace(dir.path(), "full.md", "Resume.md")
+        .args(["build", "Resume.md", "--fonts", "bundled"])
+        .assert()
+        .code(0)
+        .stderr(contains("ok "))
+        .stdout("");
+    assert!(dir.path().join("out").join("Resume.pdf").is_file());
+}
+
+#[test]
+fn an_error_in_the_resume_exits_1_and_writes_no_pdf() {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    in_workspace(dir.path(), "errors-role.md", "Bad.md")
+        .args(["build", "Bad.md", "--fonts", "bundled"])
+        .assert()
+        .code(1)
+        .stderr(contains("no PDF written"))
+        .stderr(contains("Bad.md:"));
+    assert!(!dir.path().join("out").exists());
+}
+
+#[test]
+fn a_missing_input_exits_1() {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    resume()
+        .current_dir(dir.path())
+        .args(["build", "nothing.md", "--fonts", "bundled"])
+        .assert()
+        .code(1)
+        .stderr(contains("cannot read"));
+}
+
+#[test]
+fn the_dry_run_flag_writes_nothing_through_the_real_binary() {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    in_workspace(dir.path(), "full.md", "Resume.md")
+        .args(["--dry-run", "build", "Resume.md", "--fonts", "bundled"])
+        .assert()
+        .code(0)
+        .stderr(contains("would write"));
+    assert!(!dir.path().join("out").exists());
+}
+
+#[test]
+fn no_command_exits_2() {
+    resume().assert().code(2).stderr(contains("Usage"));
+}
+
+#[test]
+fn build_without_a_file_exits_2() {
+    resume().arg("build").assert().code(2);
+}
+
+#[test]
+fn fonts_bundled_with_font_path_exits_2() {
+    resume()
+        .args(["build", "a.md", "--fonts", "bundled", "--font-path", "somewhere"])
+        .assert()
+        .code(2)
+        .stderr(contains("--font-path"));
+}
+
+#[test]
+fn two_inputs_that_would_write_the_same_pdf_exit_2_before_anything_is_written() {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    resume()
+        .current_dir(dir.path())
+        .args(["build", "a/Resume.md", "b/resume.md"])
+        .assert()
+        .code(2)
+        .stderr(contains("would both write"));
+    assert!(!dir.path().join("out").exists());
+}
+
+#[test]
+fn json_goes_to_stdout_and_the_summary_to_stderr() {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let output = in_workspace(dir.path(), "full.md", "Resume.md")
+        .args(["build", "Resume.md", "--fonts", "bundled", "--format", "json"])
+        .output()
+        .expect("the binary runs");
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.lines().all(|line| line.starts_with("{\"type\":\"diagnostic\"")),
+        "stdout holds only diagnostics: {stdout}"
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).starts_with("ok "));
+}
+
+#[test]
+fn color_never_and_no_color_leave_no_escape_bytes_and_always_adds_them() {
+    // A failing input gives colored output to compare: the summary marker and the excerpt.
+    let run = |args: &[&str], no_color: bool| {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let mut command = in_workspace(dir.path(), "errors-role.md", "Bad.md");
+        command.args(["build", "Bad.md", "--fonts", "bundled"]).args(args);
+        if no_color {
+            command.env("NO_COLOR", "1");
+        } else {
+            command.env_remove("NO_COLOR");
+        }
+        String::from_utf8_lossy(&command.output().expect("the binary runs").stderr).into_owned()
+    };
+    assert!(run(&["--color", "always"], false).contains('\u{1b}'), "always colors");
+    assert!(!run(&["--color", "never"], false).contains('\u{1b}'), "never does not");
+    assert!(!run(&["--color", "auto"], true).contains('\u{1b}'), "NO_COLOR does not");
+    assert!(
+        !run(&["--color", "auto"], false).contains('\u{1b}'),
+        "auto does not color a pipe"
+    );
 }

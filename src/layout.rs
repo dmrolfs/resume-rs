@@ -44,6 +44,8 @@ pub struct LayoutReport {
     pub pages: usize,
     /// Where each role starts and ends, in document order.
     pub roles: Vec<RolePlacement>,
+    /// What each font role resolved to; the summary line names them.
+    pub fonts: Vec<FontResolution>,
     /// The findings: page limit, overflow, stranded headings, a sparse last page, then fonts.
     pub diagnostics: Vec<Diagnostic>,
 }
@@ -76,6 +78,7 @@ impl LayoutReport {
         Self {
             pages: input.pages.len(),
             roles: role_placements(input.pages, input.probes),
+            fonts: input.fonts.to_vec(),
             diagnostics,
         }
     }
@@ -621,6 +624,19 @@ mod tests {
                 (DiagnosticCode::FontMissing, Severity::Error),
             ]
         );
+    }
+
+    #[test]
+    fn the_report_keeps_the_font_resolutions_for_the_summary() {
+        let fonts = [fallback("body", Metrics::Compatible)];
+        let report = LayoutReport::from_input(&LayoutInput {
+            pages: &[full_page()],
+            probes: &[],
+            fonts: &fonts,
+            fonts_mode: FontsMode::Auto,
+            max_pages: None,
+        });
+        assert_eq!(report.fonts, fonts);
     }
 
     #[test]

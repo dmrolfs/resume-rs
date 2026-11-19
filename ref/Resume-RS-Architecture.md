@@ -752,7 +752,7 @@ resume [--dry-run] [--format human|json] [--color auto|always|never] <COMMAND>
 
 | Command | With `--dry-run` |
 |---|---|
-| `build` | Parses, compiles, and runs the layout checks, then reports `would write out/X.pdf (3 pages, overwrites existing)`. Writes nothing. |
+| `build` | Parses, compiles, runs the layout checks, and exports the PDF (so an export error shows and the exit code matches a real build's), then reports `would write out/X.pdf (3 pages, overwrites existing)`. Writes nothing, and creates no directory. |
 | `doctor --fix` | Prints the unified diff of the fixes and leaves the file unchanged |
 | `export-style`, `export` | Lists the files that would be created or overwritten |
 | `watch` | Rejected at argument parsing (clap `conflicts_with`), since watching without writing has no purpose |
@@ -760,9 +760,14 @@ resume [--dry-run] [--format human|json] [--color auto|always|never] <COMMAND>
 
 `check` is a read-only alias of `doctor`. It runs the same assessment and prints the same report, but it doesn't accept `--fix` or `--explain`, so `check` in a script or a pre-commit hook can never modify files. `doctor` is the command for fixing (`--fix`) and learning (`--explain`). A no-write build is `build --dry-run`.
 
-- `build` prints one summary line per file, for example `ok out/Resume-Org-Leader.pdf  experienced  3 pages  1 warning  built in 84ms`, followed by the diagnostics.
-- **Exit codes:** 0 on success (warnings allowed), 1 on any error diagnostic or failed build, 2 on a usage error (from clap).
-- **Defaults:** `--style pragmatic`, `--out out`, `--paper letter`, `--fonts auto`, `--color auto`, `--debounce 150ms`.
+- `build` prints one summary line per file, then a fonts line, then the findings. For example: `ok out/Resume-Org-Leader.pdf  pragmatic  3 pages  0 errors, 1 warning  built in 84ms`, then `  fonts: body Carlito (fallback for Calibri); display Gelasio (fallback for Georgia)`. The counts are the renderer's own `Summary` text (`0 errors, 1 warning`), so there is one count format. Markers are `ok` and `error` (green and red when color is on), separators are two spaces and `; `, and nothing the tool prints itself is outside ASCII (a font name or a path is the user's text and passes through). The time is whole milliseconds, at least 1, from reading the input to the end of the write; the one-time font scan is not in it. A `--dry-run` line reads `ok would write out/X.pdf (3 pages, overwrites existing)  pragmatic  ...  checked in 80ms`, with `new file` or `creates out` in place of `overwrites existing`. An input that has errors reads `error drafts/Resume.md  2 errors, 0 warnings  no PDF written`. Paths are shown relative to the current directory when they are under it.
+- **Findings and fonts.** A metric-compatible fallback (`font-fallback-metric`, a note) is already named on the fonts line, so human output leaves the note out and its count; `--format json` keeps every finding. A fallback that changes widths (`font-fallback-layout`, a warning) and a missing font (`font-missing`, an error) are always shown. Layout findings have no span: the hint names the role.
+- **A layout error still writes the PDF.** When the document compiled but a layout check fails (`page-limit-exceeded`, `content-overflows-page`), `build` writes the PDF and exits 1, so the author can open it and see what overflowed. Only an input with format errors (no model) writes nothing. `--dry-run` runs the same checks and exports the PDF, so its exit code is a real build's.
+- **Several inputs.** Files are built in the order given, each with its own summary line; an error in one never hides or skips the others, and the exit code is the worst of them. Two inputs whose output names are equal ignoring case (`a/Resume.md`, `b/resume.md`) are a usage error before anything is written. The style and the font set are resolved once, so an unknown style or an unreadable `--font-path` fails the run before any file is read.
+- **Streams.** Summaries and human findings go to stderr, like cargo and rustc. With `--format json`, stdout holds only JSON lines (the summary and fonts lines still go to stderr, because they are human text), and a closed pipe (`resume build ... --format json | head`) ends the output quietly. `--color` and `NO_COLOR` follow the Rendering rules.
+- **Exit codes:** 0 on success (warnings allowed), 1 on any error finding, failed build, or operational error (an unreadable input, an output that cannot be written), 2 on a usage error (from clap, plus two checks clap cannot express: `--fonts bundled` with `--font-path`, and two inputs that would write the same PDF).
+- **Defaults:** `--style pragmatic`, `--out out`, `--paper letter`, `--fonts auto`, `--color auto`, `--debounce 150ms`. `--styles-dir` has no default, so nothing is read from the current directory unless asked.
+- **Structure.** `src/cli.rs` holds the clap types and `Cli::try_parse_validated`; `src/commands/` holds the commands as library code over injected streams (`Io`, `Env`, `Outcome`), so almost everything is tested in process; `src/main.rs` only builds the real streams and environment and turns the `Outcome` into an exit code. A test fails if any file under `src/commands/` writes the file system directly: every write goes through `output::Writer`.
 
 ### Watch (`src/watch.rs`)
 

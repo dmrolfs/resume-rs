@@ -44,6 +44,26 @@ enum StyleFiles {
     },
 }
 
+/// Finds the style `name`: in `styles_dir` if one is given and has it, otherwise among the built-in styles.
+///
+/// A style in the directory wins over a built-in of the same name, so a copy made with `export-style` can be
+/// edited in place.
+///
+/// # Errors
+/// - `Error::StyleRoot` - `styles_dir` cannot be opened
+/// - `Error::StyleMissingMain` - the style's directory has no `style.typ`
+/// - `Error::UnknownStyle` - neither the directory nor the built-in set has the style
+pub fn resolve(name: &StyleName, styles_dir: Option<&Path>) -> Result<StyleSource, Error> {
+    if let Some(root) = styles_dir {
+        match StyleSource::directory(root, name.clone()) {
+            // The directory has no such style: the built-in set may.
+            Err(Error::UnknownStyle { .. }) => {}
+            found => return found,
+        }
+    }
+    StyleSource::embedded(&BUILT_IN_STYLES, name.clone())
+}
+
 impl StyleSource {
     /// Opens the style `name` inside the directory `root`.
     ///
@@ -394,5 +414,34 @@ mod tests {
             built_in.display_path(&vpath("/minimal/style.typ")),
             PathBuf::from("<built-in>").join("minimal").join("style.typ")
         );
+    }
+
+    #[test]
+    fn resolve_finds_a_built_in_style_when_there_is_no_directory() {
+        let style = assert_ok!(resolve(&name("pragmatic"), None));
+        assert_eq!(style.name().as_ref() as &str, "pragmatic");
+    }
+
+    #[test]
+    fn resolve_uses_the_style_in_the_directory_when_it_has_one() {
+        // `minimal` exists only as a fixture directory, so finding it proves the directory is searched.
+        let found = assert_ok!(resolve(&name("minimal"), Some(&fixtures_path())));
+        assert_eq!(found.name().as_ref() as &str, "minimal");
+        assert!(found.reads(&found.main_path()));
+    }
+
+    #[test]
+    fn resolve_falls_back_to_the_built_in_set_when_the_directory_lacks_the_style() {
+        let style = assert_ok!(resolve(&name("pragmatic"), Some(&fixtures_path())));
+        assert_eq!(style.name().as_ref() as &str, "pragmatic");
+        assert!(style.reads(&style.main_path()), "the built-in files are read");
+    }
+
+    #[test]
+    fn resolve_reports_an_unknown_style_and_a_directory_that_cannot_be_opened() {
+        let unknown = assert_err!(resolve(&name("nothing-like-it"), Some(&fixtures_path())));
+        assert!(matches!(unknown, Error::UnknownStyle { .. }), "{unknown}");
+        let missing = assert_err!(resolve(&name("pragmatic"), Some(Path::new("/no/such/styles"))));
+        assert!(matches!(missing, Error::StyleRoot { .. }), "{missing}");
     }
 }
