@@ -75,3 +75,20 @@ locations first. An item that matches nothing is treated as a location, so nothi
   different style.
 - Inline kinds, block kinds, and resume schema versions the style does not know stop the render with an
   error instead of dropping content.
+
+## Where it differs from the template, and why
+
+Chosen in the visual review against the template's PDF (rsm-141.7.3):
+
+| Setting | Template | Here | Why |
+|---|---|---|---|
+| Text sizes | body 11pt, role line 12pt, headings 14pt, contact 12pt | the same | |
+| Line pitch | 1.22em | 1.32em (`line.leading: 0.1em`) | the template's density is tiring to read |
+| Spacing between blocks and margins | roomy | similar (`spacing`, `margin`) | |
+| Company on the role line | centered column | after the title (`Title · Company`) | long titles crowd a centered column |
+| Summary | no heading | a `Summary` heading | screening software finds sections by heading |
+| Bullet indent | 0.25in marker, 0.5in text | 0.15in marker, 0.15in gap | keeps line width |
+| Links | blue in the body, black in the header | blue (`#1155cc`) and underlined everywhere | black links read as a font style |
+| Skill lists | tab-aligned labels | bold labels in the line | a tab column breaks on long labels |
+| Footer | none | name and `Page N of M` | helps on a multi-page resume |
+| Font | Calibri | Calibri when installed, else Carlito | same line breaks either way |
