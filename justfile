@@ -42,13 +42,16 @@ clippy:
 test:
     cargo test --no-fail-fast
 
-# Needs cargo-machete (cargo install cargo-machete --locked); CI installs it. It reads the source text, so it sees
-# what the `unused_dependencies` lint in Cargo.toml cannot: a dependency that another one also pulls in, and an
-# unused [dev-dependencies] entry (`--with-metadata` adds those; it leaves Cargo.lock as it is).
+# Needs cargo-machete (cargo install cargo-machete --locked --version 0.9.2, the version CI pins). Two checks.
+# First, cargo's `unused_dependencies` lint on the library and binary alone: clippy's all-targets run compiles the
+# test units, so a normal dependency that only `#[cfg(test)]` code uses looks used there. Then cargo-machete, which
+# reads the source text and so sees what the lint cannot: an unused dependency another one also pulls in, and an
+# unused [dev-dependencies] entry (`--with-metadata` adds those; it does not change Cargo.lock when that is current).
 
-[doc('Fail on a dependency in Cargo.toml that no source file names (needs cargo-machete)')]
+[doc('Fail on a dependency nothing uses: the lint on the library and binary, then cargo-machete')]
 [group('gate')]
 unused-deps:
+    cargo check --lib --bins
     cargo machete --with-metadata
 
 [doc('The quality gate: formatting, lints, unused dependencies, and tests')]

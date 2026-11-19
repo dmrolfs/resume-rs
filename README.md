@@ -31,7 +31,7 @@ Common recipes (run `just` for the full list):
 | `just audit` | Check dependencies for known vulnerabilities (needs `cargo-audit`) |
 | `just verify` | Everything to run before pushing, including both cross-builds (macOS only) |
 
-`just check` needs `cargo-machete` (`cargo install cargo-machete --locked`; CI installs it); dependencies are added when first used, and the gate enforces it (see Dependency hygiene in `ref/Resume-RS-Architecture.md`). Recipes that need an optional tool print the `cargo install` command if it is missing. The recipes without a
+`just check` needs `cargo-machete` (`cargo install cargo-machete --locked --version 0.9.2`, the version CI pins; without it the gate fails with cargo's "no such command: `machete`"); dependencies are added when first used, and the gate enforces it (see Dependency hygiene in `ref/Resume-RS-Architecture.md`). Recipes that need an optional tool print the `cargo install` command if it is missing. The recipes without a
 platform attribute also run on Windows, where `just` uses PowerShell, so they must stay plain commands:
 `tests/justfile_test.rs` enforces this, because a recipe that breaks loading on Windows would break all of them.
 

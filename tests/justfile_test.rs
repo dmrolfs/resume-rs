@@ -194,4 +194,7 @@ fn the_unused_dependency_check_is_a_plain_cargo_machete_run() {
     // Without `--with-metadata`, machete only reads [dependencies]; with it, [dev-dependencies] are checked
     // too, and the cargo lint in Cargo.toml never checks those.
     assert!(body.contains("--with-metadata"), "{body}");
+    // Clippy's all-targets run builds the test units, so a normal dependency used only by `#[cfg(test)]` code
+    // looks used there. Checking the library and binary alone is what shows it is not.
+    assert!(body.contains("cargo check --lib --bins"), "{body}");
 }

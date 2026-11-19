@@ -31,7 +31,8 @@ multiple_crate_versions = "allow"
 
 # cargo-machete (`just unused-deps`) reads source text, so it cannot see a crate that is only named by code a
 # macro generates: nutype's `validate(regex = ...)` expands to `::regex::Regex`, so `regex` stays a direct
-# dependency without a `regex::` path anywhere in src/.
+# dependency without a `regex::` path anywhere in src/. Neither check can see it go unused, so
+# tests/manifest_test.rs fails when nothing in src/ uses `validate(regex` any more.
 [package.metadata.cargo-machete]
 ignored = ["regex"]
 
