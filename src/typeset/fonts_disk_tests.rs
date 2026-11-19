@@ -6,6 +6,8 @@ use std::sync::Arc;
 
 use claims::{assert_ok, assert_some};
 use pretty_assertions::assert_eq;
+use typst::layout::Abs;
+use typst::text::FontVariations;
 
 use super::*;
 use crate::model::options::Paper;
@@ -414,4 +416,86 @@ fn resolved_font_appears_in_the_pdf() {
         text.contains("NewCM10") && !text.contains("LibertinusSerif"),
         "the fallback was not used"
     );
+}
+
+// ---- Bundled mode and the fallbacks -------------------------------------------------------------
+
+#[test]
+fn bundled_and_hermetic_auto_pdfs_are_byte_identical() {
+    // Auto mode with nothing extra found must render exactly like Bundled mode: the mode itself never
+    // reaches the output, only the fonts do. The cross-OS PDF gate relies on this.
+    let style = assert_ok!(StyleSource::directory(
+        crate_path("tests/fixtures/styles"),
+        assert_ok!(StyleName::try_new("font-stack-helper"))
+    ));
+    let render = |set: FontSet| {
+        let compiled =
+            assert_ok!(Typesetter::new(Arc::new(set)).compile(&resume(), &style, RenderOptions::new(Paper::Letter)));
+        assert_ok!(compiled.export_pdf("fixture"))
+    };
+    let bundled = render(assert_ok!(FontSet::builder().mode(FontsMode::Bundled).build()));
+    let hermetic_auto = render(assert_ok!(hermetic().build()));
+    assert!(bundled == hermetic_auto, "Bundled and hermetic Auto differ");
+}
+
+/// Sample text for width comparisons: printable ASCII plus the punctuation a resume uses.
+const WIDTH_SAMPLE: &str =
+    " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~–—’“”•";
+
+/// Advance of `ch` in em, or `None` when the font has no glyph for it.
+fn advance_em(font: &Font, ch: char) -> Option<f64> {
+    let instance = font
+        .clone()
+        .instantiate(font.info().variant, Abs::pt(10.0), &FontVariations::default());
+    let glyph = instance.ttf().glyph_index(ch)?.0;
+    Some(instance.x_advance(glyph)?.get())
+}
+
+/// The font of `family` with this weight and slant in the bundled set.
+fn bundled_font(set: &FontSet, family: &str, bold: bool, italic: bool) -> Font {
+    let index = assert_some!((0..set.origins().len()).find(|i| {
+        set.book().info(*i).is_some_and(|info| {
+            info.family == family
+                && (info.variant.weight.to_number() >= 600) == bold
+                && (info.variant.style == typst::text::FontStyle::Italic) == italic
+        })
+    }));
+    assert_some!(set.font(index))
+}
+
+/// Proves the claim the fallbacks exist for: same advance widths as the proprietary originals, so
+/// line breaks match. Needs the originals, which are never committed.
+#[test]
+#[ignore = "needs RESUME_ORIGINAL_FONTS_DIR with Calibri, Georgia, and Arial in four variants named <Family>-<Variant>.ttf"]
+fn fallback_widths_match_the_originals() {
+    let dir = PathBuf::from(assert_ok!(std::env::var("RESUME_ORIGINAL_FONTS_DIR")));
+    let set = FontSet::bundled();
+    let variants = [
+        ("Regular", false, false),
+        ("Bold", true, false),
+        ("Italic", false, true),
+        ("BoldItalic", true, true),
+    ];
+    for (original, fallback) in [("Calibri", "Carlito"), ("Georgia", "Gelasio"), ("Arial", "Arimo")] {
+        for (name, bold, italic) in variants {
+            let path = dir.join(format!("{original}-{name}.ttf"));
+            let bytes = assert_ok!(std::fs::read(&path), "{} is required", path.display());
+            let original_font = assert_some!(Font::new(Bytes::new(bytes), 0));
+            let fallback_font = bundled_font(&set, fallback, bold, italic);
+            let worst = WIDTH_SAMPLE
+                .chars()
+                .filter_map(|ch| Some((ch, advance_em(&original_font, ch)?, advance_em(&fallback_font, ch)?)))
+                .map(|(ch, a, b)| (ch, ((a - b) / a).abs()))
+                .fold(
+                    (' ', 0.0_f64),
+                    |worst, next| if next.1 > worst.1 { next } else { worst },
+                );
+            assert!(
+                worst.1 <= 0.002,
+                "{fallback} {name} differs from {original} by {:.2}% at {:?}",
+                worst.1 * 100.0,
+                worst.0
+            );
+        }
+    }
 }

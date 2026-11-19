@@ -410,3 +410,83 @@ fn export_works_after_the_memoization_cache_is_evicted() {
     Typesetter::evict_cache(0);
     assert!(assert_ok!(compiled.export_pdf("fixture")).starts_with(b"%PDF-"));
 }
+
+// ---- the font-stack mechanism (rsm-141.7.1) -------------------------------------------------------
+
+fn bundled_mode_typesetter() -> Typesetter {
+    let set = assert_ok!(
+        resume::typeset::fonts::FontSet::builder()
+            .mode(resume::model::options::FontsMode::Bundled)
+            .build()
+    );
+    Typesetter::new(Arc::new(set))
+}
+
+#[test]
+fn font_stack_keeps_only_installed_families_and_renders_without_warnings() {
+    let compiled = assert_ok!(bundled_mode_typesetter().compile(
+        &full_resume(),
+        &style("font-stack-helper"),
+        RenderOptions::default()
+    ));
+    assert!(
+        compiled.warnings().is_empty(),
+        "Calibri is not installed, but the stack must not name it: {:?}",
+        compiled.warnings()
+    );
+}
+
+#[test]
+fn bundled_mode_embeds_only_bundled_families_even_on_a_machine_that_has_calibri() {
+    let compiled = assert_ok!(bundled_mode_typesetter().compile(
+        &full_resume(),
+        &style("font-stack-helper"),
+        RenderOptions::default()
+    ));
+    let pdf = assert_ok!(compiled.export_pdf("fixture"));
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(text.contains("+Carlito"), "the bundled fallback was not used");
+    assert!(
+        !text.contains("Calibri"),
+        "an installed Calibri leaked into a bundled-mode PDF"
+    );
+}
+
+#[test]
+fn font_stack_with_neither_family_installed_still_warns_so_the_problem_is_visible() {
+    let compiled = assert_ok!(bundled_mode_typesetter().compile(
+        &full_resume(),
+        &style("font-stack-none"),
+        RenderOptions::default()
+    ));
+    let warning = assert_some_warning(compiled.warnings(), "unknown font family: nada sans");
+    assert_eq!(warning.code, DiagnosticCode::TypstWarning);
+}
+
+fn assert_some_warning<'a>(warnings: &'a [Diagnostic], message: &str) -> &'a Diagnostic {
+    warnings
+        .iter()
+        .find(|d| d.message == message)
+        .unwrap_or_else(|| panic!("no warning {message:?} in {warnings:?}"))
+}
+
+#[test]
+fn font_stack_uses_the_preferred_family_when_it_is_installed() {
+    // Libertinus Serif is in the bundled set, so it counts as installed and wins over the fallback.
+    let compiled = assert_ok!(bundled_mode_typesetter().compile(
+        &full_resume(),
+        &style("font-stack-installed"),
+        RenderOptions::default()
+    ));
+    assert!(compiled.warnings().is_empty(), "{:?}", compiled.warnings());
+    let pdf = assert_ok!(compiled.export_pdf("fixture"));
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(
+        text.contains("+LibertinusSerif"),
+        "the installed preferred family was not used"
+    );
+    assert!(
+        !text.contains("+Carlito"),
+        "the fallback was used although the preferred family is installed"
+    );
+}

@@ -7,6 +7,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 
 use snafu::ResultExt;
+use typst::foundations::Bytes;
 use typst::text::{Font, FontBook, FontInfo, FontVariant};
 use typst::utils::LazyHash;
 use typst_kit::fonts::{FontPath, FontStore};
@@ -150,9 +151,39 @@ impl FontSet {
     }
 }
 
-/// The fonts shipped in the binary, in a fixed order.
+/// The free, metric-compatible stand-ins for the template fonts, embedded unmodified.
+///
+/// Carlito stands in for Calibri, Gelasio for Georgia, and Arimo for Arial. They are static files, not
+/// variable fonts: a later variable face would win a tie against an earlier static one of the same
+/// family, and statics need no weight handling. They are never subset or instanced (Carlito has a
+/// Reserved Font Name). Licenses and sources are in `fonts/LICENSES.md`. TeX Gyre Pagella joins them
+/// in rsm-141.9, where it is first used.
+const FALLBACK_FACES: &[&[u8]] = &[
+    include_bytes!("../../fonts/carlito/Carlito-Regular.ttf"),
+    include_bytes!("../../fonts/carlito/Carlito-Bold.ttf"),
+    include_bytes!("../../fonts/carlito/Carlito-Italic.ttf"),
+    include_bytes!("../../fonts/carlito/Carlito-BoldItalic.ttf"),
+    include_bytes!("../../fonts/gelasio/Gelasio-Regular.ttf"),
+    include_bytes!("../../fonts/gelasio/Gelasio-Bold.ttf"),
+    include_bytes!("../../fonts/gelasio/Gelasio-Italic.ttf"),
+    include_bytes!("../../fonts/gelasio/Gelasio-BoldItalic.ttf"),
+    include_bytes!("../../fonts/arimo/Arimo-Regular.ttf"),
+    include_bytes!("../../fonts/arimo/Arimo-Bold.ttf"),
+    include_bytes!("../../fonts/arimo/Arimo-Italic.ttf"),
+    include_bytes!("../../fonts/arimo/Arimo-BoldItalic.ttf"),
+];
+
+/// The fonts shipped in the binary, in a fixed order: typst-kit's (Typst's own defaults, `raw`, and
+/// math need them, and their indexes must not move), then the fallbacks.
 fn bundled_faces() -> Vec<(Font, FontInfo)> {
-    typst_kit::fonts::embedded().collect()
+    let fallbacks = FALLBACK_FACES
+        .iter()
+        .flat_map(|bytes| Font::iter(Bytes::new(*bytes)))
+        .map(|font| {
+            let info = font.info().clone();
+            (font, info)
+        });
+    typst_kit::fonts::embedded().chain(fallbacks).collect()
 }
 
 /// The key that makes one face the same face however it was reached (symlinks, `/var` vs
@@ -618,21 +649,63 @@ mod tests {
     // ---- the bundled set --------------------------------------------------------------------
 
     #[test]
-    fn bundled_set_is_exactly_the_typst_kit_fonts() {
-        // The font set is an input to every PDF byte, so a typst-kit bump that changes it must fail here.
+    fn bundled_set_lists_typst_kit_fonts_plus_the_fallback_families() {
+        // The font set is an input to every PDF byte, so any change to it must fail here.
         let set = FontSet::bundled();
         assert_eq!(
             set.families(),
             [
+                "Arimo",
+                "Carlito",
                 "DejaVu Sans Mono",
+                "Gelasio",
                 "Libertinus Serif",
                 "New Computer Modern",
                 "New Computer Modern Math"
             ]
         );
-        assert_eq!(set.origins().len(), 17, "a face was added or removed");
+        // typst-kit's 17 faces first (so their indexes never move), then 4 variants of each of 3 families.
+        assert_eq!(set.origins().len(), 17 + 12, "a face was added or removed");
         assert!(set.origins().iter().all(|o| *o == FontOrigin::Bundled));
         assert_eq!(set.mode(), FontsMode::Bundled);
+    }
+
+    #[test]
+    fn typst_kit_faces_come_first_in_their_own_order_so_their_indexes_never_move() {
+        let set = FontSet::bundled();
+        let expected: Vec<(String, FontOrigin)> = typst_kit::fonts::embedded()
+            .map(|(_, info)| (info.family, FontOrigin::Bundled))
+            .collect();
+        assert_eq!(set.faces()[..expected.len()], expected[..]);
+    }
+
+    #[test]
+    fn every_fallback_family_has_all_four_variants_and_is_static() {
+        let set = FontSet::bundled();
+        for family in ["Arimo", "Carlito", "Gelasio"] {
+            let mut variants: Vec<(FontStyle, u16)> = (0..set.origins().len())
+                .filter_map(|i| set.book().info(i))
+                .filter(|info| info.family == family)
+                .inspect(|info| {
+                    assert!(
+                        !info.flags.contains(FontFlags::VARIABLE),
+                        "{family} must be static: a later variable face would beat an earlier static one"
+                    )
+                })
+                .map(|info| (info.variant.style, info.variant.weight.to_number()))
+                .collect();
+            variants.sort_by_key(|(style, weight)| (*style as u8, *weight));
+            assert_eq!(
+                variants,
+                [
+                    (FontStyle::Normal, 400),
+                    (FontStyle::Normal, 700),
+                    (FontStyle::Italic, 400),
+                    (FontStyle::Italic, 700)
+                ],
+                "{family} needs regular, bold, italic, and bold italic"
+            );
+        }
     }
 
     #[test]
@@ -1007,8 +1080,15 @@ mod tests {
 
     #[test]
     fn role_resolution_reports_missing_when_neither_font_exists() {
-        let resolved = &FontSet::bundled().resolve(&[role("Calibri", "Carlito", Metrics::Compatible)])[0];
-        assert_eq!(*resolved, missing());
+        let resolved = &FontSet::bundled().resolve(&[role("Not Installed", "Also Missing", Metrics::Compatible)])[0];
+        assert_eq!(
+            *resolved,
+            FontResolution::Missing {
+                role: "body".into(),
+                preferred: "Not Installed".into(),
+                fallback: "Also Missing".into()
+            }
+        );
         assert_eq!(resolved.origin(), None);
         let error = assert_some!(resolved.diagnostic(FontsMode::Auto));
         assert_eq!(

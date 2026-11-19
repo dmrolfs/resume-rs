@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use typst::diag::{FileError, FileResult, PackageError};
-use typst::foundations::{Bytes, Datetime, Dict, Duration, Str, Value};
+use typst::foundations::{Array, Bytes, Datetime, Dict, Duration, Str, Value};
 use typst::syntax::{FileId, RootedPath, Source, VirtualPath, VirtualRoot};
 use typst::text::{Font, FontBook};
 use typst::utils::LazyHash;
@@ -44,7 +44,10 @@ pub(crate) struct ResumeWorld {
 
 impl ResumeWorld {
     pub(crate) fn new(style: StyleSource, fonts: Arc<FontSet>, resume_json: Vec<u8>, paper: Paper) -> Self {
-        let inputs = Dict::from_iter([(Str::from("paper"), Value::Str(Str::from(paper.as_ref())))]);
+        let inputs = Dict::from_iter([
+            (Str::from("paper"), Value::Str(Str::from(paper.as_ref()))),
+            (Str::from("fonts"), Value::Array(installed_families(&fonts))),
+        ]);
         Self {
             library: LazyHash::new(Library::builder().with_inputs(inputs).build()),
             fonts,
@@ -116,6 +119,18 @@ fn require_project_file(id: FileId) -> FileResult<()> {
             PACKAGES_UNSUPPORTED.into(),
         )))),
     }
+}
+
+/// The families Typst can use, lowercased as Typst folds them, for `sys.inputs.fonts`.
+///
+/// Typst warns `unknown font family` for every missing name in a `text(font: (..))` list and cannot
+/// be told not to, so a style builds its list from this instead (the `font-stack` helper).
+fn installed_families(fonts: &FontSet) -> Array {
+    fonts
+        .families()
+        .into_iter()
+        .map(|family| Value::Str(Str::from(family.to_lowercase())))
+        .collect()
 }
 
 fn project_file(vpath: VirtualPath) -> FileId {
@@ -211,6 +226,27 @@ mod tests {
         assert!(assert_ok!(world.source(world.main())).text().contains("import"));
         let helper = assert_ok!(world.source(id("/lib/helper.typ")));
         assert!(helper.text().contains("greeting"));
+    }
+
+    #[test]
+    fn installed_families_are_the_lowercased_families_of_the_font_set() {
+        let families = installed_families(&FontSet::bundled());
+        let names: Vec<String> = families
+            .iter()
+            .map(|v| assert_ok!(v.clone().cast::<Str>()).to_string())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "arimo",
+                "carlito",
+                "dejavu sans mono",
+                "gelasio",
+                "libertinus serif",
+                "new computer modern",
+                "new computer modern math"
+            ]
+        );
     }
 
     #[test]

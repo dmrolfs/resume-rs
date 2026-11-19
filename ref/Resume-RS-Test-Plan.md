@@ -157,6 +157,15 @@ Pure and injected-source tests in `src/typeset/fonts.rs` (synthetic `FontInfo`; 
 - [x] `fonts_mode_names_match_clap_and_strum`, `font_origin_names_are_kebab_case_and_round_trip`, `the_font_codes_have_advice_that_says_how_to_get_the_font`
 - Not covered: Windows `canonicalize` beyond the case-spelling test, Windows Office directories, Linux fontconfig, a font file vanishing during a real scan (the guard is tested with injected panics).
 
+### rsm-141.7.1: Bundled fallback fonts and the installed-families input
+Unit tests in `src/typeset/fonts.rs`, `fonts_disk_tests.rs`, and `world.rs`; integration in `tests/render_test.rs` and `tests/fonts_license_test.rs`:
+- [x] `bundled_set_lists_typst_kit_fonts_plus_the_fallback_families` (7 families, 29 faces), `typst_kit_faces_come_first_in_their_own_order_so_their_indexes_never_move`, `every_fallback_family_has_all_four_variants_and_is_static` (no VARIABLE flag; protects the tie-break design)
+- [x] `installed_families_are_the_lowercased_families_of_the_font_set` (`sys.inputs.fonts`)
+- [x] `font_stack_keeps_only_installed_families_and_renders_without_warnings`, `font_stack_uses_the_preferred_family_when_it_is_installed`, `font_stack_with_neither_family_installed_still_warns_so_the_problem_is_visible`
+- [x] `bundled_mode_embeds_only_bundled_families_even_on_a_machine_that_has_calibri`, `bundled_and_hermetic_auto_pdfs_are_byte_identical`
+- [x] `every_embedded_font_file_is_listed_in_licenses_md`, `every_font_family_directory_keeps_its_license_text_beside_the_fonts`
+- [x] Ignored unless `RESUME_ORIGINAL_FONTS_DIR` is set (Calibri, Georgia, Arial in four variants, named `<Family>-<Variant>.ttf`): `fallback_widths_match_the_originals`, which fails above 0.2% per glyph advance and was checked to fail for a wrong pairing
+
 ### rsm-141.7: Components and pragmatic
 - [ ] `full_fixture_renders_in_pragmatic_without_warnings`
 - [ ] `pragmatic_text_order_title_company_dates`: from `lopdf` text extraction.
