@@ -5,7 +5,7 @@ use std::ops::Range;
 
 use url::Url;
 
-use super::tree::{InlineNode, TextNode};
+use super::tree::{InlineNode, TextNode, deletion_keeps_structure};
 use super::{Finding, Sink, Source, lint};
 use crate::diagnostics::{DiagnosticCode, Edit};
 use crate::model::{Inline, LinkUrl};
@@ -327,23 +327,56 @@ fn report_inline_html(range: &Range<usize>, html: &str, sink: &mut Sink<'_>) {
 
 /// A hard break (two trailing spaces or a backslash) is almost always accidental; the edit removes it.
 ///
-/// No edit is offered when a literal backslash precedes trailing spaces: deleting the spaces would
-/// leave a backslash before the newline, which is itself a hard break.
+/// The edit is offered only when removing the marker cannot change how the document is read. Re-parsing the
+/// lines around the break proves that: a line that is only the marker would become a blank line (a paragraph
+/// break), a line of only `-`, `---`, `#`, or `>` would become a setext underline, an empty heading, or a
+/// block quote, and spaces after a literal backslash would leave that backslash as the break marker. In those
+/// cases the finding says to rewrite the line instead.
 fn report_hard_break(range: &Range<usize>, src: &Source<'_>, sink: &mut Sink<'_>) {
     let written = src.slice(range);
     let visible = written.trim_end_matches(['\r', '\n']);
     let span = range.start..range.start + visible.len();
-    let spaces_after_backslash = !visible.starts_with('\\') && src.text[..range.start].ends_with('\\');
+    let window = lines_around(src.text, &span);
+    let keeps_structure = src
+        .text
+        .get(window.clone())
+        .is_some_and(|around| deletion_keeps_structure(around, span.start - window.start..span.end - window.start));
+    let hint = if keeps_structure {
+        "remove the trailing spaces or backslash; a blank line starts a new paragraph"
+    } else {
+        "rewrite or delete this line: removing only the marker would change how the paragraph is read, \
+         for example by leaving a blank line or a line of markup"
+    };
     let mut finding = Finding::new(
         DiagnosticCode::HardBreak,
         span.clone(),
         "a hard line break is rendered as a space",
     )
-    .hint("remove the trailing spaces or backslash; a blank line starts a new paragraph");
-    if !spaces_after_backslash {
+    .hint(hint);
+    if keeps_structure {
         finding = finding.fix(span, "");
     }
     sink.report(finding);
+}
+
+/// The source line holding `at`, with the line before it and the line after it: enough context for a
+/// block-level change to show when text is deleted from the middle one.
+fn lines_around(text: &str, at: &Range<usize>) -> Range<usize> {
+    let line_start = text[..at.start].rfind(['\n', '\r']).map_or(0, |i| i + 1);
+    let before = &text[..line_start];
+    let before = before
+        .strip_suffix("\r\n")
+        .or_else(|| before.strip_suffix(['\n', '\r']))
+        .unwrap_or(before);
+    let start = before.rfind(['\n', '\r']).map_or(0, |i| i + 1);
+
+    let end_of_line = text[at.end..].find(['\n', '\r']).map_or(text.len(), |i| at.end + i);
+    let next_start = end_of_line + if text[end_of_line..].starts_with("\r\n") { 2 } else { 1 };
+    let end = text
+        .get(next_start..)
+        .and_then(|rest| rest.find(['\n', '\r']))
+        .map_or(text.len(), |i| next_start + i);
+    start..end
 }
 
 /// For a leading `**Label**: text`, the edit that moves the colon inside the bold: `**Label:** text`.
@@ -481,6 +514,58 @@ mod tests {
         assert_eq!(codes(&diagnostics), vec![DiagnosticCode::HardBreak]);
         assert_eq!(diagnostics[0].fix, None);
         assert!(!diagnostics[0].hints.is_empty());
+    }
+
+    /// `lines_around` for the first occurrence of `marker` in `text`, as the text it selects.
+    fn around<'t>(text: &'t str, marker: &str) -> &'t str {
+        let start = text.find(marker).unwrap_or(0);
+        &text[lines_around(text, &(start..start + marker.len()))]
+    }
+
+    #[test]
+    fn lines_around_is_the_previous_the_current_and_the_next_line() {
+        let text = "a\nb\nc  \nd\ne";
+        assert_eq!(around(text, "  "), "b\nc  \nd");
+    }
+
+    #[test]
+    fn lines_around_stops_at_the_edges_of_the_text() {
+        assert_eq!(around("x  \ny\nz", "  "), "x  \ny", "no line before the first");
+        assert_eq!(around("w\nx  \ny", "  "), "w\nx  \ny", "the last line is the next one");
+    }
+
+    #[test]
+    fn lines_around_reaches_the_end_of_the_line_from_a_span_in_the_middle_of_it() {
+        // A hard break's span always ends its line, but the function does not assume that.
+        assert_eq!(around("a\nb c d\ne\nf", " c"), "a\nb c d\ne");
+        assert_eq!(around("a\r\nb c d\r\ne\r\nf", " c"), "a\r\nb c d\r\ne");
+    }
+
+    #[test]
+    fn lines_around_handles_every_line_ending() {
+        assert_eq!(around("a\r\nb\r\nc  \r\nd\r\ne", "  "), "b\r\nc  \r\nd", "CRLF");
+        assert_eq!(around("a\rb\rc  \rd\re", "  "), "b\rc  \rd", "a lone CR");
+        assert_eq!(around("a\n\nc  \nd", "  "), "\nc  \nd", "a blank line before is a line");
+    }
+
+    #[test]
+    fn hard_break_on_a_line_of_its_own_has_no_edit_and_says_what_to_do() {
+        let (_, diagnostics) = converted("one\n\\\ntwo");
+        assert_eq!(codes(&diagnostics), vec![DiagnosticCode::HardBreak]);
+        assert_eq!(diagnostics[0].fix, None);
+        assert!(
+            diagnostics[0].hints[0].contains("rewrite or delete this line"),
+            "{:?}",
+            diagnostics[0].hints
+        );
+    }
+
+    #[test]
+    fn hard_break_after_text_keeps_the_ordinary_hint() {
+        let (_, diagnostics) = converted("one  \ntwo");
+        assert!(diagnostics[0].hints[0].starts_with("remove the trailing spaces or backslash"));
+        let (_, indented) = converted("one\n  two  \nthree");
+        assert!(assert_some!(indented[0].fix.as_ref()).replacement.is_empty());
     }
 
     #[test]

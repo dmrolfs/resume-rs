@@ -5,6 +5,7 @@ use std::collections::HashSet;
 
 use claims::assert_ok;
 use proptest::prelude::*;
+use resume::diagnostics::Severity;
 use resume::markdown::{Parsed, parse};
 use serde_json::{Value, json};
 
@@ -96,6 +97,12 @@ const LINES: &[&str] = &[
     "- hard break  ",
     "  continued",
     "- backslash break\\",
+    "\\",
+    "  \\",
+    "-\\",
+    "#\\",
+    "---\\",
+    "= \\",
     "  - nested bullet",
     "1. numbered",
     "**Era · 2016 – 2017**",
@@ -167,8 +174,26 @@ fn emphasis_stats(parsed: &Parsed) -> (usize, usize) {
     (bold, marks)
 }
 
+/// 512 cases by default; `PROPTEST_CASES=50000 cargo test --test parse_property_test` runs deeper locally
+/// (`ProptestConfig::with_cases` would otherwise ignore the variable).
+fn cases() -> u32 {
+    std::env::var("PROPTEST_CASES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(512)
+}
+
+/// How many findings are errors.
+fn error_count(parsed: &Parsed) -> usize {
+    parsed
+        .diagnostics()
+        .iter()
+        .filter(|d| d.severity == Severity::Error)
+        .count()
+}
+
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(512))]
+    #![proptest_config(ProptestConfig::with_cases(cases()))]
 
     /// An Edit rewrites separators, dashes, spellings of Present, colons, and breaks. It must never add or
     /// remove a word, never leave a bold span unclosed (which is how a colon moved next to text corrupts a
@@ -179,6 +204,22 @@ proptest! {
         let fixed = apply_edits(&text, &edits_of(before.diagnostics()));
         prop_assert_eq!(words(&text), words(&fixed), "an Edit changed the words");
         let after = parse("r.md", &fixed);
+        // An Edit that fixes an error can unmask others behind it (an error rejects its whole paragraph, so
+        // what follows is only checked once it is fixed). An Edit that fixes a warning is a style change,
+        // and must never create an error.
+        let fixes_only_warnings = before
+            .diagnostics()
+            .iter()
+            .filter(|d| d.fix.is_some())
+            .all(|d| d.severity != Severity::Error);
+        if fixes_only_warnings {
+            prop_assert!(
+                error_count(&after) <= error_count(&before),
+                "a warning's Edit added an error: {} -> {}\nbefore: {text:?}\nafter: {fixed:?}",
+                error_count(&before),
+                error_count(&after)
+            );
+        }
         let (bold_before, marks_before) = emphasis_stats(&before);
         let (bold_after, marks_after) = emphasis_stats(&after);
         if before.best_effort().is_some() && after.best_effort().is_some() {

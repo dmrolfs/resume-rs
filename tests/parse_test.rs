@@ -210,6 +210,93 @@ fn warnings_fixable_edits_apply_cleanly() {
 }
 
 // ---------------------------------------------------------------------------------------------
+// The hard-break Edit must not change what the document says (rsm-141.19)
+// ---------------------------------------------------------------------------------------------
+
+/// A whole resume whose contact paragraph is `contact`, so the hard break sits in real structure.
+fn with_contact(contact: &str) -> String {
+    format!("# Ada\n\n{contact}\n\n## Experience\n\n### Acme · Eng · 2015 – 2017\n\n- built\n")
+}
+
+/// The `hard-break` findings of `text`.
+fn hard_breaks(parsed: &Parsed) -> Vec<&Diagnostic> {
+    parsed
+        .diagnostics()
+        .iter()
+        .filter(|d| d.code == DiagnosticCode::HardBreak)
+        .collect()
+}
+
+/// Contact paragraphs where deleting the marker (a backslash or trailing spaces) would let the rest of the
+/// line be read as block syntax, or leave a blank line, so the document's structure would change.
+const UNSAFE_HARD_BREAKS: [&str; 6] = [
+    "London\n\\\nSeattle",    // a line that is only the backslash: leaves a blank line
+    "London\n  \\\nSeattle",  // the same, indented
+    "London\n-\\\nSeattle",   // `-` alone under a paragraph is a setext heading underline
+    "London\n---\\\nSeattle", // `---` alone likewise
+    "London\n#\\\nSeattle",   // `#` alone is an empty heading, which interrupts a paragraph
+    "London\n= \\\nSeattle",  // `=` under a paragraph is a setext underline
+];
+
+#[test]
+fn hard_break_edit_is_withheld_when_removing_the_marker_would_change_the_structure() {
+    for contact in UNSAFE_HARD_BREAKS {
+        let text = with_contact(contact);
+        let parsed = parse("r.md", &text);
+        let found = hard_breaks(&parsed);
+        assert_eq!(found.len(), 1, "{contact:?}: {:?}", parsed.diagnostics());
+        assert_none!(found[0].fix.as_ref(), "{contact:?} must not be offered an Edit");
+        assert!(
+            !found[0].hints.is_empty(),
+            "{contact:?}: a finding without an Edit says what to do"
+        );
+    }
+}
+
+/// The inputs the property `applying_edits_preserves_words_and_emphasis` found, verbatim.
+#[test]
+fn hard_break_edit_is_withheld_for_the_inputs_the_property_found() {
+    for text in ["##   \n#  · \n–\n\\\n · **Label**:", "## \n# # # \n-\\\n · **Label**:"] {
+        let parsed = parse("r.md", text);
+        let found = hard_breaks(&parsed);
+        assert!(!found.is_empty(), "{text:?} should still warn");
+        assert!(found.iter().all(|d| d.fix.is_none()), "{text:?}: {found:?}");
+        assert_eq!(
+            apply_edits(text, &edits_of(parsed.diagnostics())),
+            text,
+            "no Edit, so no change"
+        );
+    }
+}
+
+/// Where the marker follows text on its line, the Edit only turns a hard break into a soft one: the model
+/// is identical after applying it.
+#[test]
+fn hard_break_edit_is_kept_and_changes_nothing_when_text_precedes_the_marker() {
+    for contact in [
+        "London  \nSeattle",
+        "London\\\nSeattle",
+        "London · **UK**  \nSeattle",
+        "London\nSeattle  \nPortland",
+        "Python - Rust\\\nGo",
+    ] {
+        let text = with_contact(contact);
+        let parsed = parse("r.md", &text);
+        let found = hard_breaks(&parsed);
+        assert!(!found.is_empty(), "{contact:?} should warn");
+        assert!(
+            found.iter().all(|d| d.fix.is_some()),
+            "{contact:?} keeps its Edit: {found:?}"
+        );
+
+        let fixed = apply_edits(&text, &edits_of(parsed.diagnostics()));
+        let after = parse("r.md", &fixed);
+        assert_eq!(parsed.best_effort(), after.best_effort(), "{contact:?} -> {fixed:?}");
+        assert!(hard_breaks(&after).is_empty(), "{contact:?} -> {fixed:?}");
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
 // Line endings and the BOM (Windows portability)
 // ---------------------------------------------------------------------------------------------
 

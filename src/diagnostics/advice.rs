@@ -173,7 +173,7 @@ impl DiagnosticCode {
             HardBreak => Some(&Advice {
                 summary: "A hard line break is rendered as a space.",
                 why: "Project convention: paragraphs and bullets flow as one block; trailing spaces or a backslash at a line end are usually accidental.",
-                fix: "Remove the trailing spaces or backslash; use a blank line to start a new paragraph.",
+                fix: "Remove the trailing spaces or backslash (delete the whole line if it holds only the marker); use a blank line to start a new paragraph.",
                 example: Some(("Led the team  \nand shipped", "Led the team\nand shipped")),
             }),
             TextTooLong => Some(&Advice {
