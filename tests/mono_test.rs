@@ -68,7 +68,7 @@ fn section_headings_are_set_in_capitals() {
 fn the_contact_details_are_one_line_under_the_name() {
     let pdf = assert_ok!(mono(Paper::Letter).export_pdf("fixture"));
     let text = page_texts(&pdf).remove(0);
-    let line = "London, UK · ada@example.com · Notes · GitHub";
+    let line = "ada@example.com · London, UK · Notes · GitHub";
     assert!(text.contains(line), "{text}");
     assert!(position(&text, "Ada Lovelace") < position(&text, line));
 }
@@ -170,11 +170,11 @@ fn the_built_in_mono_style_and_the_same_files_on_disk_render_the_same_bytes() {
 
 #[test]
 fn an_edited_copy_of_the_mono_theme_renders_differently() {
-    // `header.gap` and `tracking.heading` are mono's own keys: each must change the output.
+    // `header.gap` is mono's own key and `accent` colors the section titles and rules: each must change the output.
     let reference = assert_ok!(mono(Paper::Letter).export_pdf("fixture"));
     for (from, to) in [
         ("header: (gap: 4pt)", "header: (gap: 20pt)"),
-        ("heading: 0.6pt", "heading: 3pt"),
+        ("accent: rgb(\"#000000\")", "accent: rgb(\"#cc0000\")"),
     ] {
         let tmp = assert_ok!(tempfile::tempdir());
         for relative in ["lib/components.typ", "mono/style.typ", "mono/theme.typ"] {

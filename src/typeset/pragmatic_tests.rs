@@ -36,6 +36,10 @@ struct Run {
     x: f64,
     text: String,
     bold: bool,
+    /// Width of the run, in points.
+    width: f64,
+    /// The fill as hex, such as `#000000`; `None` for a gradient or pattern.
+    fill: Option<String>,
 }
 
 fn collect_runs(frame: &Frame, origin: Point, out: &mut Vec<Run>) {
@@ -52,6 +56,11 @@ fn collect_runs(frame: &Frame, origin: Point, out: &mut Vec<Run>) {
                 x: at.x.to_pt(),
                 text: run.text.to_string(),
                 bold: run.font.info().variant.weight.to_number() >= 600,
+                width: run.width().to_pt(),
+                fill: match &run.fill {
+                    typst::visualize::Paint::Solid(color) => Some(color.to_hex().to_string()),
+                    _ => None,
+                },
             }),
             _ => {}
         }
@@ -650,13 +659,27 @@ fn mono() -> StyleSource {
     builtin_style(BuiltinStyle::Mono)
 }
 
-/// Where mono's left margin is: 0.6in.
-const MONO_LEFT_MARGIN_PT: f64 = 43.2;
+/// The left and right edges, in points, of the line of text that holds `needle` on the first page.
+fn line_extent(compiled: &Compiled, needle: &str) -> (f64, f64) {
+    let runs = page_runs(compiled, 0);
+    let y = run_containing(&runs, needle).y;
+    let on_line: Vec<_> = runs.iter().filter(|r| (r.y - y).abs() < 0.3).collect();
+    let left = on_line.iter().map(|r| r.x).fold(f64::MAX, f64::min);
+    let right = on_line.iter().map(|r| r.x + r.width).fold(f64::MIN, f64::max);
+    (left, right)
+}
+
+/// True when the line holding `needle` is centered on the page, to within a point and a half.
+fn is_centered(compiled: &Compiled, needle: &str) -> bool {
+    let (left, right) = line_extent(compiled, needle);
+    let page = compiled.document.pages()[0].frame.width().to_pt();
+    ((left + right) / 2.0 - page / 2.0).abs() < 1.5
+}
 
 #[test]
 fn the_mono_heading_checks_fail_once_their_stickiness_is_removed() {
-    // The sweep reads headings by their text; this proves it still sees mono's (capitalized sections, title-first
-    // role lines, a role without a title) by removing each guarantee from a mono copy.
+    // The sweep reads headings by their text; this proves it still sees mono's (capitalized sections, a role
+    // without a title) by removing each guarantee from a mono copy.
     for (what, from, to, expected) in &WEAKENINGS[..3] {
         let (_dir, style) = weakened_in("mono", from, to);
         let found = violations(&style, SWEEP);
@@ -668,7 +691,7 @@ fn the_mono_heading_checks_fail_once_their_stickiness_is_removed() {
 }
 
 #[test]
-fn the_mono_role_line_bolds_the_title_and_nothing_else() {
+fn the_mono_role_line_is_bold_throughout_like_the_template() {
     let md = "# Ada Lovelace\n\nCity · a@b.co\n\n## Experience\n\n### Acme Corp · Principal Engineer · 2020 – Present\n\nA blurb.\n\n- one\n\n### Babbage & Co · 2012 – 2017\n\n- two\n";
     let compiled = compile(&mono(), md);
     let runs = page_runs(&compiled, 0);
@@ -679,39 +702,41 @@ fn the_mono_role_line_bolds_the_title_and_nothing_else() {
         run_containing(&runs, "2020 – Present"),
     );
     assert!(
-        title.bold && !company.bold && !period.bold,
+        title.bold && company.bold && period.bold,
         "{title:?} {company:?} {period:?}"
+    );
+    assert!(
+        title.x < company.x && company.x < period.x,
+        "title, then company, then period"
     );
     assert!(period.x > middle, "the period is at the right");
     assert!((title.y - period.y).abs() < 0.3 && (title.y - company.y).abs() < 0.3);
-    // Without a title the company is all there is, so it carries the weight; the period stays regular.
+    // Without a title the company is all there is.
     let (alone, alone_period) = (run_containing(&runs, "Babbage"), run_containing(&runs, "2012 – 2017"));
-    assert!(alone.bold && !alone_period.bold, "{alone:?} {alone_period:?}");
+    assert!(alone.bold && alone_period.bold, "{alone:?} {alone_period:?}");
     assert!(alone_period.x > middle && (alone.y - alone_period.y).abs() < 0.3);
 }
 
 #[test]
-fn the_mono_contact_items_are_sorted_into_one_line_under_the_left_aligned_name() {
-    let md = "# Ada Lovelace\n\n[GitHub](https://github.com/ada) · a@b.co · (415) 555-0123 · City, ST\n\n## Summary\n\n- one\n";
+fn the_mono_contact_items_are_one_centered_line_under_the_centered_name_in_the_books_order() {
+    let md = "# Ada Lovelace\n\n[GitHub](https://github.com/ada) · City, ST · (415) 555-0123 · a@b.co\n\n## Summary\n\n- one\n";
     let compiled = compile(&mono(), md);
     let lines = page_lines(&compiled, 0);
     let texts: Vec<_> = lines.iter().take(3).map(|(_, t)| t.as_str()).collect();
     assert_eq!(
         texts,
-        ["Ada Lovelace", "City, ST · (415) 555-0123 · a@b.co · GitHub", "SUMMARY"]
+        ["Ada Lovelace", "a@b.co · (415) 555-0123 · City, ST · GitHub", "SUMMARY"]
     );
     assert!(lines[1].0 > lines[0].0, "the contact line is under the name");
-    let name = run_containing(&page_runs(&compiled, 0), "Ada");
-    assert!(
-        (name.x - MONO_LEFT_MARGIN_PT).abs() < 1.5,
-        "the name is at the left margin: {name:?}"
-    );
+    assert!(is_centered(&compiled, "Lovelace"), "the name is centered");
+    assert!(is_centered(&compiled, "a@b.co"), "the contact line is centered");
 }
 
 #[test]
 fn a_mono_contact_line_that_is_too_wide_wraps_between_items_never_inside_one() {
     let md = "# Ada Lovelace\n\nSan Francisco Bay Area, CA · (415) 555-0123 · ada.lovelace@analytical-engines.example.com · [linkedin.com/in/ada-lovelace](https://linkedin.com/in/ada-lovelace)\n\n## Summary\n\n- one\n";
-    let lines = page_lines(&compile(&mono(), md), 0);
+    let compiled = compile(&mono(), md);
+    let lines = page_lines(&compiled, 0);
     let before_summary = lines
         .iter()
         .position(|(_, t)| t == "SUMMARY")
@@ -725,14 +750,16 @@ fn a_mono_contact_line_that_is_too_wide_wraps_between_items_never_inside_one() {
             lines.iter().any(|(_, t)| t.contains(item)),
             "`{item}` was split: {lines:?}"
         );
+        assert!(is_centered(&compiled, item), "the line with `{item}` is centered");
     }
 }
 
 #[test]
-fn a_mono_resume_without_a_contact_line_renders_the_name_then_the_first_section() {
+fn a_mono_resume_without_a_contact_line_renders_the_centered_name_then_the_first_section() {
     let compiled = compile_lenient(&mono(), "# Ada Lovelace\n\n## Summary\n\n- one\n");
     let lines = page_lines(&compiled, 0);
     assert_eq!((lines[0].1.as_str(), lines[1].1.as_str()), ("Ada Lovelace", "SUMMARY"));
+    assert!(is_centered(&compiled, "Lovelace"));
     assert_eq!(compiled.page_count(), 1);
 }
 
@@ -742,5 +769,21 @@ fn mono_capitalizes_whatever_the_section_is_called() {
     let text = text_of(&compile(&mono(), md));
     for title in ["R&D", "CAFÉ 2024", "LANGUAGES AND TECHNOLOGIES"] {
         assert!(text.lines().any(|l| l == title), "`{title}` not a line of {text}");
+    }
+}
+
+#[test]
+fn mono_has_no_color_but_its_links() {
+    // The template is black on white. Section titles, the name, the body, and the rule are black; links are
+    // blue, as in pragmatic, because a black link reads as a font style.
+    let md = "# Ada Lovelace\n\n[GitHub](https://github.com/ada) · a@b.co\n\n## Experience\n\n- Body with a [link](https://example.com).\n";
+    let compiled = compile(&mono(), md);
+    let runs = page_runs(&compiled, 0);
+    let fill = |needle: &str| run_containing(&runs, needle).fill;
+    for black in ["Lovelace", "EXPERIENCE", "Body with"] {
+        assert_eq!(fill(black).as_deref(), Some("#000000"), "`{black}`");
+    }
+    for blue in ["GitHub", "link"] {
+        assert_eq!(fill(blue).as_deref(), Some("#1155cc"), "`{blue}`");
     }
 }

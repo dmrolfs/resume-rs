@@ -1,15 +1,13 @@
 # mono
 
-The layout for people whose job titles carry the weight: a left-aligned name with one contact line under it,
-capitalized section headings, and a role line that leads with the title. It follows The Mono Engineer's
-resume template (a slight variation of the Pragmatic Engineer's, also the layout of Standard Resume's
-Alexander), set in Calibri when installed and the bundled, metric-compatible Carlito otherwise. This first
-version was written from the book's description of the template, not from the template file; the visual
-review compares them.
+The Mono Engineer's resume template from The Tech Resume Inside Out: black on white, a centered name with one
+contact line under it, and capitalized section titles over a black rule. It is the Pragmatic template's body with
+a different header and no color, and it suits people whose companies or titles should carry the weight. Set in
+Calibri when installed and the bundled, metric-compatible Carlito otherwise.
 
 ```
-Ada Lovelace
-London, UK · +44 20 7946 0000 · ada@example.com · linkedin.com/in/ada
+                              Ada Lovelace
+        ada@example.com · +44 20 7946 0000 · London, UK · linkedin.com/in/ada
 
 SUMMARY ─────────────────────────────────────────────────────────────────
 • One bullet per achievement, never split across pages
@@ -23,7 +21,7 @@ Builds mechanical computers for scientific customers.
 
 | File | What it holds |
 |---|---|
-| `style.typ` | Structure: the header, the capitalized section title, the title-first role line, and the loop over sections and blocks. |
+| `style.typ` | Structure: the centered header, the capitalized section title, and the loop over sections and blocks. |
 | `theme.typ` | Values: font roles, sizes, colors, spacing, margins, line pitch. |
 | `../lib/components.typ` | Shared by every style: inlines, bullets, role and era lines, footer, probes. |
 
@@ -32,19 +30,30 @@ To customize, run `resume export-style mono <dir>` and edit `theme.typ` in the c
 
 ## How it differs from pragmatic
 
-- The name is on the left and the contact items are one line under it (location, phone, email, then links),
-  not split around the name.
-- Section titles are set in capitals, in the accent color, with a little extra letter spacing (`tracking.heading`).
-  The capitals are real text in the PDF (`SUMMARY`, not `Summary`), and `ß` becomes `SS`.
-- Sizes: the name is 26 pt (pragmatic 24), section titles 12 pt (14), and the role line and contact line 11 pt
-  (12). Eras keep the shared look: italic name, regular period.
-- The role line is **Title** · Company: the title is bold, and the company and the period are regular weight.
-  A role without a title shows its company in bold.
-- Text is near black (`#1a1a1a`), not pure black.
+- The name and the contact line are centered. The contact items are one line in the book's order: email, phone,
+  location, then links. Pragmatic splits them around the name.
+- Section titles are set in capitals, in black bold over a black rule. `color.accent` is black, so nothing on the
+  page is colored except the links, which stay blue as in pragmatic.
+- The name is 24 pt and the section titles are 12 pt (pragmatic: 14 pt headings).
+- The capitals are real text in the PDF (`SUMMARY`, not `Summary`), and `ß` becomes `SS`.
 
-Everything else comes from the shared components, so the same guarantees hold: a role heading never ends a
-page, a bullet never splits across pages, and line positions are the same with Calibri and Carlito. The theme
-keys are described in the pragmatic README; `header.gap` and `tracking.heading` are mono's own.
+Everything else is shared with pragmatic and was approved for it: Calibri/Carlito at 11 pt, the role line with
+the title, company, and period all bold, company after the title, the `Summary` heading, bullets at 0.15 in, the
+spacing, line pitch, and footer. The guarantees are shared too: a role heading never ends a page, a bullet never
+splits across pages, and line positions are the same with Calibri and Carlito. The theme keys are described in
+the pragmatic README; `header.gap` is mono's own.
+
+## Where it differs from the template, and why
+
+| Setting | Template | Here | Why |
+|---|---|---|---|
+| Company on the role line | centered column, with the team and location on a second line | after the title (`Title · Company`) | long titles crowd a centered column; the same choice as pragmatic |
+| Summary | no heading | a `Summary` heading | screening software finds sections by heading |
+| Links | black, underlined | blue, underlined | black links read as a font style |
+| Contact order | as written | email, phone, location, links | the book's order, kept whatever the order in the file |
+| Bullets, spacing, line pitch | roomy, large bullets | as approved for pragmatic | |
+| Skill lists | tab-aligned labels | bold labels in the line | a tab column breaks on long labels |
+| Footer | none | name and `Page N of M` | helps on a multi-page resume |
 
 ## Limits
 
