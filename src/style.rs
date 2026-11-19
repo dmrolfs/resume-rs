@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use include_dir::Dir;
+use include_dir::{Dir, include_dir};
 use snafu::{OptionExt, ResultExt};
 use typst::diag::{FileError, FileResult};
 use typst::foundations::Bytes;
@@ -11,6 +11,10 @@ use typst::syntax::VirtualPath;
 
 use crate::error::{Error, StyleMissingMainSnafu, StyleOutsideRootSnafu, StyleRootSnafu, UnknownStyleSnafu};
 use crate::model::StyleName;
+use crate::model::options::BuiltinStyle;
+
+/// The built-in styles and the files they share (`lib/`), embedded at build time.
+static BUILT_IN_STYLES: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/styles");
 
 /// Display root for files served from the embedded set. Angle brackets are invalid in Windows
 /// file names, so this can never collide with a real path and is never opened.
@@ -97,6 +101,23 @@ impl StyleSource {
             name,
             files: StyleFiles::Embedded(dir),
         })
+    }
+
+    /// Opens a style embedded in the binary.
+    ///
+    /// # Errors
+    /// `Error::UnknownStyle` or `Error::StyleMissingMain` when the embedded set lacks the style: a build
+    /// defect, or a style that exists as a name (`mono`, `experienced`) but has not been written yet.
+    pub fn builtin(style: BuiltinStyle) -> Result<Self, Error> {
+        let name = StyleName::try_new(style.as_ref()).expect("built-in style names are valid style names");
+        Self::embedded(&BUILT_IN_STYLES, name)
+    }
+
+    /// True when `vpath` is a file this style can read; for tests that check what was embedded.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn reads(&self, vpath: &VirtualPath) -> bool {
+        self.read(vpath).is_ok()
     }
 
     #[must_use]
