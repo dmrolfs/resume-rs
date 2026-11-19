@@ -118,9 +118,10 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      # Rung 1 of rsm-141.15. Each OS renders the same synthetic resume with the fonts embedded in typst-kit
-      # (installed fonts cannot reach it) under the same ident, and uploads the PDF. The `determinism` job
-      # below compares the two files byte for byte.
+      # Rung 2 of rsm-141.15. Each OS renders the full synthetic fixture in the built-in pragmatic style with the
+      # fonts of `--fonts bundled` under the same ident, and uploads the PDF. The test refuses a PDF that embeds
+      # any other font; the Windows runner has Calibri, which the style prefers. The `determinism` job below
+      # compares the two files byte for byte.
       - name: Write the cross-OS reference PDF
         shell: bash
         env:

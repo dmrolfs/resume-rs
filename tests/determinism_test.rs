@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use claims::assert_ok;
 use lopdf::Document;
-use resume::model::options::Paper;
+use resume::model::options::{BuiltinStyle, FontsMode, Paper};
 use resume::model::{Resume, StyleName};
 use resume::style::StyleSource;
 use resume::typeset::fonts::FontSet;
@@ -182,18 +182,83 @@ fn a_fresh_process_matches_this_warm_one() {
     assert_same_bytes(&render_in_child(&[]).pdf, &render_full("fixture"), "child vs parent");
 }
 
-/// Writes the reference PDF that CI compares across operating systems (rsm-141.15, rung 1).
+/// The full fixture in the built-in pragmatic style with the fonts of `--fonts bundled`.
+fn render_pragmatic_bundled(mode: FontsMode, ident: &str) -> Vec<u8> {
+    let style = assert_ok!(StyleSource::builtin(BuiltinStyle::Pragmatic));
+    let fonts = assert_ok!(FontSet::builder().mode(mode).build());
+    let typesetter = Typesetter::new(Arc::new(fonts));
+    let resume = resume_from("tests/fixtures/full.md");
+    let compiled = assert_ok!(typesetter.compile(&resume, &style, RenderOptions::new(Paper::Letter)));
+    assert_ok!(compiled.export_pdf(ident))
+}
+
+/// The base names of the fonts a PDF embeds, without the subset prefix (`ABCDEF+Carlito-Bold` is `Carlito-Bold`).
+fn embedded_fonts(pdf: &[u8]) -> Vec<String> {
+    let doc = assert_ok!(Document::load_mem(pdf));
+    let mut names: Vec<String> = doc
+        .objects
+        .values()
+        .filter_map(|object| object.as_dict().ok())
+        .filter(|dict| dict.get(b"Type").and_then(|t| t.as_name()).ok() == Some(b"FontDescriptor".as_slice()))
+        .filter_map(|dict| dict.get(b"FontName").and_then(|n| n.as_name()).ok())
+        .map(|name| {
+            let name = String::from_utf8_lossy(name);
+            name.split_once('+')
+                .map_or(name.to_string(), |(_, base)| base.to_string())
+        })
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// True when every embedded font is one `--fonts bundled` ships: the Carlito, Gelasio, and Arimo fallbacks
+/// or a font typst-kit embeds (DejaVu Sans Mono for code, New Computer Modern, Libertinus).
+fn only_bundled(fonts: &[String]) -> bool {
+    const BUNDLED: [&str; 6] = ["Carlito", "Gelasio", "Arimo", "DejaVu", "NewCM", "Libertinus"];
+    fonts
+        .iter()
+        .all(|font| BUNDLED.iter().any(|family| font.starts_with(family)))
+}
+
+#[test]
+fn the_reference_pdf_embeds_only_bundled_fonts_and_uses_the_fallbacks() {
+    let fonts = embedded_fonts(&render_pragmatic_bundled(FontsMode::Bundled, "determinism"));
+    assert!(only_bundled(&fonts), "{fonts:?}");
+    assert!(fonts.iter().any(|f| f.starts_with("Carlito")), "{fonts:?}");
+}
+
+#[test]
+#[ignore = "needs Calibri installed (or RESUME_FONT_PATH pointing at it); proves the check above can fail"]
+fn an_auto_build_on_a_machine_with_calibri_is_not_only_bundled() {
+    let fonts = embedded_fonts(&render_pragmatic_bundled(FontsMode::Auto, "determinism"));
+    assert!(
+        !only_bundled(&fonts),
+        "Calibri was not picked up, so this proves nothing: {fonts:?}"
+    );
+}
+
+/// Writes the reference PDF that CI compares across operating systems (rsm-141.15, rung 2).
 ///
 /// Ignored by default; CI runs it with `RESUME_DETERMINISM_OUT` set on each OS and an `ubuntu-latest`
-/// job compares the files byte for byte. It uses only the fonts embedded in typst-kit, so installed
-/// fonts cannot reach the output, and a fixed ident, so the file name cannot either.
+/// job compares the files byte for byte. It renders the full fixture in the built-in pragmatic style with
+/// the fonts of `--fonts bundled`, and refuses to write a PDF that embeds anything else. The Windows runner
+/// has Calibri, which the style prefers, so a match also shows that the bundled mode excludes it. A fixed
+/// ident keeps the output file name out of the bytes.
 #[test]
 #[ignore = "writes the cross-OS reference PDF; run by CI with RESUME_DETERMINISM_OUT set"]
 fn write_determinism_pdf() {
     let out =
         PathBuf::from(std::env::var("RESUME_DETERMINISM_OUT").expect("set RESUME_DETERMINISM_OUT to the output path"));
+    let pdf = render_pragmatic_bundled(FontsMode::Bundled, "determinism");
+    let fonts = embedded_fonts(&pdf);
+    assert!(
+        only_bundled(&fonts),
+        "the reference PDF embeds a font --fonts bundled does not ship: {fonts:?}"
+    );
+    println!("embedded fonts: {}", fonts.join(", "));
     if let Some(parent) = out.parent() {
         assert_ok!(std::fs::create_dir_all(parent));
     }
-    assert_ok!(std::fs::write(&out, render_full("determinism")));
+    assert_ok!(std::fs::write(&out, pdf));
 }
