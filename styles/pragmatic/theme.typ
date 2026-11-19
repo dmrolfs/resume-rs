@@ -34,8 +34,9 @@
     bullet: 1.5pt,
     paragraph: 3pt,
   ),
-  // `name-share`: the widest the name may be, as a fraction of the line, to stay between the two sides.
-  header: (name-share: 0.55, stacked-gap: 4pt),
+  // `name-gap`: the least clear space between the name and either side before the name moves to a line of its
+  // own; `stacked-gap` is the space under the name then.
+  header: (name-gap: 12pt, stacked-gap: 4pt),
   rule: (weight: 1pt, gap: 2pt),
   bullet: (marker: [•], indent: 0.1in, gap: 0.1in),
 )

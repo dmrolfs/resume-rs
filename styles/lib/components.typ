@@ -7,7 +7,10 @@
 // The families the CLI says are installed, lowercased, or `none` outside the CLI (then nothing is filtered).
 #let installed-families() = {
   let given = sys.inputs.at("fonts", default: none)
-  if given == none { none } else { given.map(lower) }
+  if given == none { none } else {
+    assert(type(given) == array, message: "sys.inputs.fonts must be an array of family names")
+    given.map(lower)
+  }
 }
 
 // The families of `(preferred, fallback)` that are installed. Typst warns `unknown font family` for every
@@ -43,6 +46,9 @@
 
 // ---- model helpers --------------------------------------------------------------------------------
 
+// The JSON contract version these components understand.
+#let schema-version = 1
+
 // Numbers every role (document order, from 0) and every era (within its role, from 0) so probes can
 // name them. Pure: returns a new resume; the JSON contract itself carries no indexes.
 #let index-roles(resume) = {
@@ -50,19 +56,19 @@
   let sections = ()
   for section in resume.sections {
     let blocks = ()
-    for block in section.blocks {
-      if block.kind == "role" {
+    for blk in section.blocks {
+      if blk.kind == "role" {
         let eras = 0
         let body = ()
-        for part in block.body {
+        for part in blk.body {
           if part.kind == "era" {
             body.push((..part, index: eras))
             eras += 1
           } else { body.push(part) }
         }
-        blocks.push((..block, index: next, body: body))
+        blocks.push((..blk, index: next, body: body))
         next += 1
-      } else { blocks.push(block) }
+      } else { blocks.push(blk) }
     }
     sections.push((..section, blocks: blocks))
   }
@@ -72,13 +78,16 @@
 // ---- inlines --------------------------------------------------------------------------------------
 
 // Text, strong, emph, link and code runs. Text is inserted as a string, never re-parsed as markup.
+// An unknown kind stops the render: dropping it would silently lose part of the resume.
 #let render-inlines(items) = {
   for item in items {
     if item.kind == "text" { item.text } else if item.kind == "strong" {
       strong(render-inlines(item.content))
     } else if item.kind == "emph" { emph(render-inlines(item.content)) } else if item.kind == "link" {
       link(item.url, render-inlines(item.content))
-    } else if item.kind == "code" { raw(item.text) }
+    } else if item.kind == "code" { raw(item.text) } else {
+      panic("unknown inline kind `" + item.kind + "`: the style and the resume schema have drifted apart")
+    }
   }
 }
 
@@ -87,32 +96,53 @@
   let parts = items.map(item => if item.kind == "text" or item.kind == "code" { item.text } else {
     inlines-text(item.content)
   })
-  parts.join()
+  parts.join(default: "")
 }
 
 // ---- contact line ---------------------------------------------------------------------------------
+
+// Drops the whitespace at the two ends of an item, so a separator's padding is gone and the space inside
+// `LinkedIn: <link>` stays.
+#let _trim-edges(item) = {
+  let kept(items) = items.filter(i => i.kind != "text" or i.text != "")
+  let trimmed = item
+  if trimmed.len() > 0 and trimmed.first().kind == "text" {
+    trimmed.first() = (..trimmed.first(), text: trimmed.first().text.trim(at: start))
+  }
+  trimmed = kept(trimmed)
+  if trimmed.len() > 0 and trimmed.last().kind == "text" {
+    trimmed.last() = (..trimmed.last(), text: trimmed.last().text.trim(at: end))
+  }
+  kept(trimmed)
+}
 
 // Splits the contact line at its ` · ` separators into items, each an array of inlines.
 #let contact-items(contact) = {
   let items = ((),)
   for inline in contact {
     if inline.kind == "text" and inline.text.contains("·") {
-      let parts = inline.text.split("·")
-      for (i, part) in parts.enumerate() {
+      for (i, part) in inline.text.split("·").enumerate() {
         if i > 0 { items.push(()) }
-        if part.trim() != "" { items.last().push((kind: "text", text: part.trim())) }
+        if part != "" { items.last().push((kind: "text", text: part)) }
       }
     } else { items.last().push(inline) }
   }
-  items.filter(item => item.len() > 0)
+  items.map(_trim-edges).filter(item => item.len() > 0)
 }
 
-#let _has-link(item) = item.any(i => i.kind == "link")
-#let _is-email(item) = {
-  let flat = inlines-text(item)
-  flat.contains("@") or item.any(i => i.kind == "link" and i.url.starts-with("mailto:"))
-}
-#let _is-phone(item) = inlines-text(item).trim().match(regex("^\+?[0-9][0-9 ().\-]{6,}$")) != none
+#let _is-link(inline) = inline.kind == "link"
+#let _has-link(item) = item.any(_is-link)
+
+// An email address, optionally after a label (`Email: a@b.co`). Only text without a link is tested this way:
+// a link such as `[@ada](https://mastodon.social/@ada)` is a link, not an address.
+#let _email-text = regex("^([^\s:@]+:\s*)?[^\s@]+@[^\s@]+\.[^\s@]+$")
+#let _is-email(item) = if _has-link(item) {
+  item.any(inline => _is-link(inline) and inline.url.starts-with("mailto:"))
+} else { inlines-text(item).trim().match(_email-text) != none }
+
+// A phone number: digits with the usual separators, an optional `+` or `(`, an optional extension.
+#let _phone-text = regex("^\+?[0-9(][0-9 ().\-]{6,}(\s*(ext|x)\.?\s*\d+)?$")
+#let _is-phone(item) = inlines-text(item).trim().match(_phone-text) != none
 
 // Sorts the contact items into the pragmatic header's two sides: `where` (location, then links) and
 // `reach` (phone, then email). Anything unrecognized counts as location, so nothing is dropped.
@@ -134,28 +164,75 @@
 
 // ---- bullets --------------------------------------------------------------------------------------
 
-// One bullet: an optional strong label, then the text. Unbreakable, so it never splits across pages.
-#let bullet(theme, item) = block(
-  breakable: false,
-  above: theme.spacing.bullet,
-  below: theme.spacing.bullet,
-  list(
-    marker: theme.bullet.marker,
-    indent: theme.bullet.indent,
-    body-indent: theme.bullet.gap,
+// The bullets of one group as a single list, so the PDF tags them as one list. Each item is unbreakable,
+// so it never splits across pages: its row cannot break, and moves whole. A bullet taller than a page cannot
+// be kept whole; it overflows the page instead (see the README).
+#let bullets(theme, items) = list(
+  marker: theme.bullet.marker,
+  indent: theme.bullet.indent,
+  body-indent: theme.bullet.gap,
+  tight: false,
+  spacing: theme.spacing.bullet,
+  ..items.map(item => block(
+    breakable: false,
+    above: 0pt,
+    below: 0pt,
     {
       if item.label != none { strong[#render-inlines(item.label):] + [ ] }
       render-inlines(item.content)
     },
-  ),
+  )),
 )
 
-#let bullets(theme, items) = for item in items { bullet(theme, item) }
+// ---- heading content ------------------------------------------------------------------------------
 
-// ---- headings -------------------------------------------------------------------------------------
+// What the three kinds of heading show. A style may replace any of them (see `default-headings`); the
+// stickiness and spacing stay with the components that call them, so a replacement keeps the guarantees.
 
-// A section heading with a rule. Sticky, so it moves to the next page with the block after it.
-#let section-heading(theme, title) = heading(level: 1, title)
+// Title, company and period of a role.
+#let role-heading-content(theme, role) = {
+  let lead = if role.title != none { strong(role.title) + [ · ] + strong(role.company) } else {
+    strong(role.company)
+  }
+  grid(columns: (1fr, auto), column-gutter: 1em, lead, align(right, strong(role.period.text)))
+}
+
+// Name and period of an era.
+#let era-heading-content(theme, era) = grid(
+  columns: (1fr, auto),
+  column-gutter: 1em,
+  emph(era.name),
+  align(right, era.period.text),
+)
+
+// The section title, in the accent color.
+#let section-heading-content(theme, title) = text(
+  font: font-stack(theme.fonts.display),
+  size: theme.size.heading,
+  weight: "bold",
+  fill: theme.color.accent,
+  title,
+)
+
+// Pass a copy with one entry replaced as `headings:` to render, say, role lines differently.
+#let default-headings = (
+  section: section-heading-content,
+  role: role-heading-content,
+  era: era-heading-content,
+)
+
+// ---- headings and blurbs --------------------------------------------------------------------------
+
+// A section heading with a rule under it. Sticky, so it moves to the next page with the block after it.
+#let section-heading(theme, title, headings: default-headings) = block(
+  width: 100%,
+  sticky: true,
+  above: theme.spacing.section,
+  below: theme.spacing.section-below,
+  stroke: (bottom: theme.rule.weight + theme.color.accent),
+  inset: (bottom: theme.rule.gap),
+  heading(level: 1, (headings.section)(theme, title)),
+)
 
 // A paragraph of inlines.
 #let paragraph(theme, content) = block(above: theme.spacing.paragraph, below: theme.spacing.paragraph, render-inlines(content))
@@ -169,17 +246,8 @@
   render-inlines(content),
 )
 
-// Title, company and period of a role, as the default (pragmatic) heading content.
-#let role-heading-content(theme, role) = {
-  let lead = if role.title != none { strong(role.title) + [ · ] + strong(role.company) } else {
-    strong(role.company)
-  }
-  grid(columns: (1fr, auto), column-gutter: 1em, lead, align(right, strong(role.period.text)))
-}
-
-// A role heading. Sticky, so it never ends a page: it moves with the next block. `heading-content` renders the
-// heading, so a style can lay the same facts out differently and keep the guarantees.
-#let role-line(theme, role, heading-content: role-heading-content) = {
+// A role heading. Sticky, so it never ends a page: it moves with the next block.
+#let role-line(theme, role, headings: default-headings) = {
   let follows = role.blurb != none or role.body.len() > 0
   block(
     sticky: follows,
@@ -188,53 +256,48 @@
     below: theme.spacing.role-line-below,
     {
       role-probe(role)
-      heading(level: 2, outlined: false, heading-content(theme, role))
+      heading(level: 2, outlined: false, (headings.role)(theme, role))
     },
   )
 }
 
-// An era heading inside a role: name and period. Sticky for the same reason.
-#let era-heading-content(theme, era) = grid(
-  columns: (1fr, auto),
-  column-gutter: 1em,
-  emph(era.name),
-  align(right, era.period.text),
-)
-
-#let era-line(theme, role-index, era, heading-content: era-heading-content) = block(
+// An era heading inside a role. Sticky for the same reason.
+#let era-line(theme, role-index, era, headings: default-headings) = block(
   sticky: true,
   breakable: false,
   above: theme.spacing.era,
   below: theme.spacing.era-line-below,
   {
     era-probe(role-index, era)
-    heading-content(theme, era)
+    (headings.era)(theme, era)
   },
 )
 
 // ---- blocks ---------------------------------------------------------------------------------------
 
 // A role with its blurb and body (eras, bullets, paragraphs).
-#let role(theme, r, heading-content: role-heading-content) = {
-  role-line(theme, r, heading-content: heading-content)
-  if r.blurb != none { blurb(theme, r.blurb, sticky: r.body.len() > 0) }
-  for part in r.body {
+#let render-role(theme, role, headings: default-headings) = {
+  role-line(theme, role, headings: headings)
+  if role.blurb != none { blurb(theme, role.blurb, sticky: role.body.len() > 0) }
+  for part in role.body {
     if part.kind == "era" {
-      era-line(theme, r.index, part)
+      era-line(theme, role.index, part, headings: headings)
       bullets(theme, part.items)
     } else if part.kind == "bullets" { bullets(theme, part.items) } else if part.kind == "paragraph" {
       paragraph(theme, part.content)
-    }
+    } else { panic("unknown role body kind `" + part.kind + "`: the style and the resume schema have drifted apart") }
   }
 }
 
 // One block of a section.
-#let render-block(theme, block, role-heading-content: role-heading-content) = {
-  if block.kind == "paragraph" { paragraph(theme, block.content) } else if block.kind == "bullets" {
-    bullets(theme, block.items)
-  } else if block.kind == "role" { role(theme, block, heading-content: role-heading-content) } else if (
-    block.kind == "page-break"
-  ) { pagebreak(weak: true) }
+#let render-block(theme, blk, headings: default-headings) = {
+  if blk.kind == "paragraph" { paragraph(theme, blk.content) } else if blk.kind == "bullets" {
+    bullets(theme, blk.items)
+  } else if blk.kind == "role" { render-role(theme, blk, headings: headings) } else if (
+    blk.kind == "page-break"
+  ) { pagebreak(weak: true) } else {
+    panic("unknown block kind `" + blk.kind + "`: the style and the resume schema have drifted apart")
+  }
 }
 
 // ---- page furniture -------------------------------------------------------------------------------
@@ -250,8 +313,12 @@
 }
 
 // Document-wide rules: metadata, page, text, paragraph, links, code, and the font-role probe. Use as
-// `#show: resume-document.with(theme, resume)`.
+// `#show: resume-document.with(theme, resume)`. Stops when the resume is of a schema this file does not know.
 #let resume-document(theme, resume, body) = {
+  assert(
+    resume.schema == schema-version,
+    message: "this style reads resume schema " + str(schema-version) + ", but the resume is schema " + repr(resume.schema),
+  )
   set document(title: resume.name, author: resume.name)
   set page(
     paper: sys.inputs.at("paper", default: "us-letter"),
@@ -259,6 +326,7 @@
     footer: footer(theme, resume.name),
     footer-descent: theme.footer-descent,
   )
+  // The page language is fixed (not read from the resume) so output does not depend on the machine.
   set text(
     font: font-stack(theme.fonts.body),
     size: theme.size.body,
@@ -271,26 +339,11 @@
     bottom-edge: theme.line.bottom,
   )
   set par(leading: theme.line.leading, spacing: theme.spacing.paragraph, justify: false)
-  set list(spacing: 0pt)
   show link: it => text(fill: theme.color.link, underline(it))
   show raw: set text(font: font-stack(theme.fonts.mono), size: 0.92em)
-  show heading.where(level: 1): it => block(
-    width: 100%,
-    sticky: true,
-    above: theme.spacing.section,
-    below: theme.spacing.section-below,
-    stroke: (bottom: theme.rule.weight + theme.color.accent),
-    inset: (bottom: theme.rule.gap),
-    text(
-      font: font-stack(theme.fonts.display),
-      size: theme.size.heading,
-      weight: "bold",
-      fill: theme.color.accent,
-      it.body,
-    ),
-  )
-  // Typst sizes and bolds headings by level; role lines keep the body size and set their own weights.
-  show heading.where(level: 2): it => text(size: theme.size.body, weight: "regular", it.body)
+  // Typst sizes and bolds headings by level. Every heading is neutral: its content, from `default-headings`,
+  // sets its own size and weight.
+  show heading: it => text(size: theme.size.body, weight: "regular", it.body)
   [#metadata(theme.fonts) <resume-fonts>]
   body
 }

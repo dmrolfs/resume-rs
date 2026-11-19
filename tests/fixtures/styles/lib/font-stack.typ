@@ -5,7 +5,10 @@
 // The families the CLI says are installed, lowercased, or `none` outside the CLI (then nothing is filtered).
 #let installed-families() = {
   let given = sys.inputs.at("fonts", default: none)
-  if given == none { none } else { given.map(lower) }
+  if given == none { none } else {
+    assert(type(given) == array, message: "sys.inputs.fonts must be an array of family names")
+    given.map(lower)
+  }
 }
 
 // The families of `(preferred, fallback)` that are installed. When neither is, the fallback is returned
