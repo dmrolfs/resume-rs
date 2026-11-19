@@ -3,6 +3,7 @@
 
 mod diag;
 pub mod fonts;
+pub mod geometry;
 pub(crate) mod pdf;
 pub mod probe;
 pub(crate) mod world;
@@ -146,6 +147,12 @@ impl Compiled {
         probe::font_roles(&self.document)
     }
 
+    /// Where the page body is on each page and how far its content reaches, in document order.
+    #[must_use]
+    pub fn geometry(&self) -> Vec<geometry::PageGeometry> {
+        geometry::page_geometry(&self.document)
+    }
+
     /// Where each role and era heading landed, in document order.
     ///
     /// # Errors
@@ -195,6 +202,9 @@ fn panic_message(payload: &(dyn Any + Send)) -> String {
         .or_else(|| payload.downcast_ref::<String>().cloned())
         .unwrap_or_else(|| "a non-string panic payload".to_string())
 }
+
+#[cfg(test)]
+mod geometry_tests;
 
 #[cfg(test)]
 mod pragmatic_tests;

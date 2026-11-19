@@ -224,22 +224,33 @@ impl DiagnosticCode {
                     r#"body: (preferred: "Calibri", fallback: "Carlito")"#,
                 )),
             }),
-            // Content (doctor), Layout (render), and Setup: written by the tasks that own them.
-            LongBullet
-            | UnquantifiedBullet
-            | WeakOpener
-            | FirstPerson
-            | SloppyPhrase
-            | LongSummary
-            | EducationNotLast
-            | OldRoleDetail
-            | PageLimitExceeded
-            | HeadingNearPageBottom
-            | SparseLastPage
-            | UnknownStyle
-            | StyleMissingMain
-            | OutputNotWritable
-            | TypstError
+            PageLimitExceeded => Some(&Advice {
+                summary: "The resume runs past the page limit given with `--max-pages`.",
+                why: "Project convention: `--max-pages` states how many pages the output may have, and the count is taken from the laid-out document, after fonts and line breaks are final, so a build that needs more pages fails.",
+                fix: "Cut the oldest or weakest bullets, tighten the long ones, or drop a role's detail until the page count fits, then rebuild. If no limit applies, leave `--max-pages` off.",
+                example: None,
+            }),
+            HeadingNearPageBottom => Some(&Advice {
+                summary: "A role or era heading sits at the foot of a page with almost nothing under it.",
+                why: "Project convention: a heading with only a line or two beneath it at the bottom of a page reads as stranded. The shipped styles keep a heading with the content that follows, so this guards against an edited style.",
+                fix: "Add a page break before the heading (`<div class=\"page-break\"></div>` on its own lines), or tighten the text above it so the role moves up. If you edited the style, restore its keep-with-next behavior for headings.",
+                example: None,
+            }),
+            SparseLastPage => Some(&Advice {
+                summary: "The last page is less than 15% full.",
+                why: "Project convention: a last page holding only a few lines looks unfinished and costs a page. The fill is measured against the page body, so it does not depend on the margins.",
+                fix: "Trim or tighten about the last page's worth of text, such as a long bullet or an old role's detail, to save the page. If the page count is fine, there is nothing to change.",
+                example: None,
+            }),
+            ContentOverflowsPage => Some(&Advice {
+                summary: "A block of content is taller than a page and runs off it.",
+                why: "Project convention: a bullet cannot be split across pages, so one taller than the page body runs past its bottom, and Typst gives no warning. The overflowing text is cut from the PDF.",
+                fix: "Split the bullet into several shorter bullets, or shorten it until it fits on one page, then rebuild.",
+                example: None,
+            }),
+            // Content (doctor) and Setup: written by the tasks that own them.
+            LongBullet | UnquantifiedBullet | WeakOpener | FirstPerson | SloppyPhrase | LongSummary
+            | EducationNotLast | OldRoleDetail | UnknownStyle | StyleMissingMain | OutputNotWritable | TypstError
             | TypstWarning => None,
         }
     }
@@ -314,10 +325,38 @@ mod tests {
     }
 
     #[test]
-    fn codes_without_advice_are_not_format_codes() {
-        // The tasks that write Content, Layout, and Setup advice flip this to "every code has advice".
+    fn every_layout_code_has_advice() {
+        for code in DiagnosticCode::iter().filter(|c| c.category() == Category::Layout) {
+            assert_some!(code.advice(), "{code} has no advice");
+        }
+    }
+
+    #[test]
+    fn the_codes_that_report_a_page_problem_say_how_to_change_the_resume() {
+        for code in [
+            DiagnosticCode::PageLimitExceeded,
+            DiagnosticCode::HeadingNearPageBottom,
+            DiagnosticCode::SparseLastPage,
+            DiagnosticCode::ContentOverflowsPage,
+        ] {
+            let advice = assert_some!(code.advice(), "{code} has no advice");
+            assert!(
+                advice.fix.len() > 30,
+                "{code}: the fix says what to change: {}",
+                advice.fix
+            );
+        }
+    }
+
+    #[test]
+    fn codes_without_advice_are_content_or_setup_codes() {
+        // The tasks that write Content and Setup advice flip this to "every code has advice".
         for code in DiagnosticCode::iter().filter(|c| c.advice().is_none()) {
-            assert_ne!(code.category(), Category::Format, "{code}");
+            assert!(
+                matches!(code.category(), Category::Content | Category::Setup),
+                "{code} ({}) has no advice",
+                code.category()
+            );
         }
     }
 }

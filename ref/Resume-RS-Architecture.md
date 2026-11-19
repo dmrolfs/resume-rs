@@ -653,14 +653,29 @@ pub struct LayoutReport {
     pub roles: Vec<RolePlacement>,
     pub diagnostics: Vec<Diagnostic>,
 }
-pub struct RolePlacement { pub company: Company, pub title: Option<Title>, pub first_page: usize, pub last_page: usize }
+pub struct RolePlacement { pub index: usize, pub company: String, pub title: Option<String>,
+                           pub first_page: NonZeroUsize, pub last_page: NonZeroUsize }
+pub struct LayoutInput<'a> { pub pages: &'a [PageGeometry], pub probes: &'a [Probe],
+                             pub fonts: &'a [FontResolution], pub fonts_mode: FontsMode,
+                             pub max_pages: Option<PageLimit> }
+impl LayoutReport { pub fn from_input(&LayoutInput) -> Self;   // pure: every check, in a fixed order
+                    pub fn of(&Compiled, &FontSet, Option<PageLimit>) -> Result<Self, Error>; }
 ```
+
+`RolePlacement` holds `String`s and the role's index, because that is what the probes carry; rebuilding validated newtypes from style metadata would add a way to fail for no gain. The checks are pure functions over `PageGeometry` (measured by `typeset/geometry.rs`, the only code besides `probe.rs` that reads page frames), `Probe`, and `FontResolution`, so they are tested without Typst. `of` is the thin adapter. The findings come in a fixed order: page limit, overflow, stranded headings, sparse last page, fonts. None has a span (a layout finding names a page, not a place in the Markdown); the hint names the role or heading.
 
 Checks, run on every render:
 - **`page-limit-exceeded`** (error, only with `--max-pages`): names the page count and the limit.
-- **`heading-near-page-bottom`** (warning): a role or era heading in the bottom 8% of a page. Sticky blocks make this rare, so it acts as a guard if a style is edited.
-- **`sparse-last-page`** (warning): the last page is less than 15% full ("trim or tighten to save a page").
+- **`content-overflows-page`** (error): content on a page runs past the bottom of the page body. A bullet cannot break across pages, so a bullet taller than the body overflows without any Typst warning, and the text past the bottom is cut from the PDF. One finding per page, naming the role placed most recently before it. It is found by walking the leaves (text baselines, shapes, images), not by measuring frames: Typst clamps the frame of an unbreakable block to the body, so the frame box looks fine while its text runs 500 pt past the page. An overflow smaller than the gap between the body bottom and the footer (about 1.4 lines in `pragmatic`) is not reported, and overlaps nothing.
+- **`heading-near-page-bottom`** (warning): a role or era heading whose top is in the bottom 8% of the page body. Sticky blocks make this rare, so it acts as a guard if a style is edited.
+- **`sparse-last-page`** (warning): the last page of a document of two or more pages is less than 15% full ("trim or tighten to save a page"). An empty last page counts as 0%, and a one-page resume is never sparse.
 - **`font-fallback-metric`** (note), **`font-fallback-layout`** (warning), **`font-missing`** (error): see the Fonts section. Each one names the role, the requested font, and the font that was used.
+
+**Both percentages are measured against the page body, not the page height.** The body runs from the top of the first body block to the top of the footer; the page height would include both margins and the footer, so the same resume in a style with different margins would be judged differently. Typst flattens the page body into the page frame, so the body is not one inner frame: the frame's top-level items are the blocks, and a block that can break (a paragraph of plain text) is inlined as bare text. `geometry.rs` is the only code besides `probe.rs` that reads page frames. It separates artifacts from body by Typst's own tags. The header, footer, and background are artifacts, and Typst marks each with an `ArtifactElem` start tag and its end tag; whether the artifact is one group or inlined items depends on its content (a footer made of a grid is a group, a footer of plain text is inlined, which a verified experiment showed when the first version looked only for groups), so both forms are read, and only an artifact of kind `Footer` bounds the body. The body top is the smallest top of any body item over the whole document (content always starts at the region top on some page), using a text baseline when a body has no block at all; the body bottom is the footer's top, or the page height when a page has no footer; the content bottom is the lowest body text baseline, shape, or image, found by walking the leaves (`move` shifts a frame's position, so it is honored).
+
+Limits: a group's transform is ignored, so rotated, scaled, or skewed content is measured by its unrotated position; a style that sets `page(foreground: ..)` has its foreground counted as body, because Typst does not mark the foreground as an artifact (the shipped styles do not use it); the body bottom is the footer top, which is about 2% above the true body bottom in `pragmatic`, and the top of an inlined footer is taken as its first baseline.
+
+**Role placement** comes from the role probes. A role starts on its probe's page. It ends on the page before the next role when that role opens its page (its top is within 1 pt of the body top) and on the next role's page otherwise. The last role ends on the last page. When a non-role section follows the last role, `last_page` can be one page too high; an exact value needs an end-of-role probe, which `doctor`'s page map (rsm-141.11) can add if it needs one.
 
 ### Doctor (`src/doctor/`)
 

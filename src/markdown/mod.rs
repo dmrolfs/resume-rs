@@ -330,6 +330,7 @@ pub(crate) const fn severity_of(code: DiagnosticCode) -> Severity {
         | PageLimitExceeded
         | HeadingNearPageBottom
         | SparseLastPage
+        | ContentOverflowsPage
         | FontFallbackMetric
         | FontFallbackLayout
         | FontMissing

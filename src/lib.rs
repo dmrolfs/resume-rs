@@ -10,6 +10,7 @@
 pub mod cli;
 pub mod diagnostics;
 pub mod error;
+pub mod layout;
 pub mod markdown;
 pub mod model;
 pub mod style;

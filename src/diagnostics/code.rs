@@ -65,6 +65,7 @@ pub enum DiagnosticCode {
     PageLimitExceeded,
     HeadingNearPageBottom,
     SparseLastPage,
+    ContentOverflowsPage,
     FontFallbackMetric,
     FontFallbackLayout,
     FontMissing,
@@ -114,6 +115,7 @@ impl DiagnosticCode {
             PageLimitExceeded
             | HeadingNearPageBottom
             | SparseLastPage
+            | ContentOverflowsPage
             | FontFallbackMetric
             | FontFallbackLayout
             | FontMissing => Category::Layout,
@@ -197,6 +199,15 @@ mod tests {
         assert_eq!(DiagnosticCode::TypstWarning.category(), Category::Setup);
         assert_eq!(DiagnosticCode::TypstWarning.to_string(), "typst-warning");
         assert_eq!(DiagnosticCode::TypstError.to_string(), "typst-error");
+    }
+
+    #[test]
+    fn content_overflows_page_is_a_layout_code_with_a_stable_id() {
+        assert_eq!(DiagnosticCode::ContentOverflowsPage.category(), Category::Layout);
+        assert_eq!(
+            DiagnosticCode::ContentOverflowsPage.to_string(),
+            "content-overflows-page"
+        );
     }
 
     #[test]

@@ -173,7 +173,7 @@ fn markdown(spacers: usize, seed: u64) -> (String, usize) {
     (md, bullet)
 }
 
-fn fonts() -> Arc<FontSet> {
+pub(super) fn fonts() -> Arc<FontSet> {
     static FONTS: OnceLock<Arc<FontSet>> = OnceLock::new();
     Arc::clone(FONTS.get_or_init(|| Arc::new(FontSet::bundled())))
 }
@@ -187,7 +187,7 @@ fn compile(style: &StyleSource, md: &str) -> Compiled {
 }
 
 /// Compiles `md` whatever warnings it parses with.
-fn compile_lenient(md: &str) -> Compiled {
+pub(super) fn compile_lenient(md: &str) -> Compiled {
     let (resume, _) = crate::markdown::parse("lenient.md", md).into_parts();
     let typesetter = Typesetter::new(fonts());
     assert_ok!(typesetter.compile(&assert_some!(resume), &builtin(), RenderOptions::new(Paper::Letter)))
