@@ -217,9 +217,9 @@ fn page_ends(lines: &Lines) -> BTreeSet<Violation> {
         if last.contains("ZE") {
             found.insert(Violation::EraHeadingEndsPage);
         }
-        if ["Summary", "Experience", "Education"]
+        if ["SUMMARY", "EXPERIENCE", "EDUCATION"]
             .iter()
-            .any(|s| last.starts_with(s))
+            .any(|s| last.to_uppercase().starts_with(s))
         {
             found.insert(Violation::SectionHeadingEndsPage);
         }
@@ -268,7 +268,11 @@ fn bullet_integrity(lines: &Lines, bullets: usize) -> BTreeSet<Violation> {
 }
 
 fn builtin() -> StyleSource {
-    assert_ok!(StyleSource::builtin(BuiltinStyle::Pragmatic))
+    builtin_style(BuiltinStyle::Pragmatic)
+}
+
+fn builtin_style(style: BuiltinStyle) -> StyleSource {
+    assert_ok!(StyleSource::builtin(style))
 }
 
 /// The sweep over the built-in style, computed once for the tests that read it.
@@ -281,6 +285,16 @@ fn builtin_violations() -> BTreeSet<Violation> {
 fn headings_blurbs_and_bullets_keep_their_pagination_guarantees() {
     assert_eq!(
         builtin_violations(),
+        BTreeSet::new(),
+        "headings or blurbs stranded, or bullets split"
+    );
+}
+
+#[test]
+fn mono_keeps_the_same_pagination_guarantees() {
+    // Mono replaces the role and section heading content; the guarantees must survive that.
+    assert_eq!(
+        violations(&builtin_style(BuiltinStyle::Mono), SWEEP),
         BTreeSet::new(),
         "headings or blurbs stranded, or bullets split"
     );
@@ -398,6 +412,13 @@ fn originals_and_bundled(style: &StyleSource) -> (Lines, Lines) {
 #[ignore = "needs RESUME_ORIGINAL_FONTS_DIR: proprietary Calibri and Georgia files, local only"]
 fn bundled_and_original_body_fonts_break_lines_identically() {
     let (originals, bundled) = originals_and_bundled(&builtin());
+    assert_eq!(originals, bundled);
+}
+
+#[test]
+#[ignore = "needs RESUME_ORIGINAL_FONTS_DIR: proprietary Calibri and Georgia files, local only"]
+fn bundled_and_original_body_fonts_break_lines_identically_in_mono() {
+    let (originals, bundled) = originals_and_bundled(&builtin_style(BuiltinStyle::Mono));
     assert_eq!(originals, bundled);
 }
 

@@ -189,6 +189,8 @@ In-crate (`src/typeset/pragmatic_tests.rs`, reads frames) and through the public
 ### rsm-141.8: mono
 - [ ] `full_fixture_renders_in_mono_without_warnings`
 - [ ] `mono_text_order_title_then_company`
+- [ ] `section_headings_are_set_in_capitals`, `the_contact_details_are_one_line_under_the_name`, `footer_shows_name_and_page_of_total`, `roles_and_eras_leave_probes_in_document_order`, `font_roles_prefer_calibri_and_fall_back_to_carlito`, `bundled_mode_embeds_only_bundled_families`, and `the_built_in_mono_style_and_the_same_files_on_disk_render_the_same_bytes` (`tests/mono_test.rs`)
+- [ ] `mono_keeps_the_same_pagination_guarantees` (sweep, `src/typeset/pragmatic_tests.rs`) and the ignored `bundled_and_original_body_fonts_break_lines_identically_in_mono` (needs `RESUME_ORIGINAL_FONTS_DIR`)
 
 ### rsm-141.9: experienced
 - [ ] `full_fixture_renders_in_experienced_without_warnings`

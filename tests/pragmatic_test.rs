@@ -257,11 +257,9 @@ fn an_edited_copy_of_the_theme_renders_differently() {
 }
 
 #[test]
-fn styles_that_are_named_but_not_written_yet_are_unknown_not_a_panic() {
-    for style in [BuiltinStyle::Mono, BuiltinStyle::Experienced] {
-        let err = StyleSource::builtin(style).expect_err("rsm-141.8 and rsm-141.9 write these");
-        assert!(matches!(err, Error::UnknownStyle { .. }), "{err:?}");
-    }
+fn a_style_that_is_named_but_not_written_yet_is_unknown_not_a_panic() {
+    let err = StyleSource::builtin(BuiltinStyle::Experienced).expect_err("rsm-141.9 writes this");
+    assert!(matches!(err, Error::UnknownStyle { .. }), "{err:?}");
 }
 
 #[test]
