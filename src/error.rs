@@ -1,4 +1,4 @@
-//! ABOUTME: Operational errors: style lookup, thread and serialization failures, Typst compile and export.
+//! ABOUTME: Operational errors: style lookup, writing output, thread failures, Typst compile and export.
 //! ABOUTME: Content problems are `Diagnostic`s; `Compile` and `ExportPdf` carry them so one run reports all.
 
 use std::path::PathBuf;
@@ -64,6 +64,25 @@ pub enum Error {
     #[snafu(display("typesetting panicked during {stage}: {message}"))]
     TypesetPanicked { stage: Stage, message: String },
 
+    #[snafu(display("cannot create the output directory {}: {source}", path.display()))]
+    CreateOutputDir { path: PathBuf, source: std::io::Error },
+
+    #[snafu(display("cannot write {}: {source}", path.display()))]
+    WriteOutput { path: PathBuf, source: std::io::Error },
+
+    /// The target is open in another program, which on Windows stops it being replaced.
+    #[snafu(display("{} is in use by another program: {source}", path.display()))]
+    OutputLocked { path: PathBuf, source: std::io::Error },
+
+    #[snafu(display("{} is read-only", path.display()))]
+    OutputReadOnly { path: PathBuf },
+
+    #[snafu(display("{} is a directory", path.display()))]
+    OutputIsDirectory { path: PathBuf },
+
+    #[snafu(display("{} already exists", path.display()))]
+    OutputExists { path: PathBuf },
+
     #[snafu(display("the style failed to compile ({} errors)", errors_in(diagnostics)))]
     Compile {
         diagnostics: Vec<Diagnostic>,
@@ -77,6 +96,110 @@ pub enum Error {
     },
 }
 
+impl Error {
+    /// What the user can do about this error, when there is something specific.
+    #[must_use]
+    pub fn hint(&self) -> Option<&'static str> {
+        match self {
+            Self::OutputLocked { .. } => Some("close the PDF viewer or use -o <DIR>"),
+            Self::OutputReadOnly { .. } => Some("make the file writable or delete it, or use -o <DIR>"),
+            Self::OutputIsDirectory { .. } => Some("remove it or use -o <DIR> to write elsewhere"),
+            Self::OutputExists { .. } => Some("use --force to replace it"),
+            _ => None,
+        }
+    }
+}
+
 fn errors_in(diagnostics: &[Diagnostic]) -> usize {
     diagnostics.iter().filter(|d| d.severity == Severity::Error).count()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use claims::assert_some;
+
+    fn path() -> PathBuf {
+        PathBuf::from("out/Resume.pdf")
+    }
+
+    fn io() -> std::io::Error {
+        std::io::Error::other("the disk said no")
+    }
+
+    #[test]
+    fn a_locked_output_says_to_close_the_viewer_or_write_elsewhere() {
+        let hint = assert_some!(
+            Error::OutputLocked {
+                path: path(),
+                source: io()
+            }
+            .hint()
+        );
+        assert!(hint.contains("close the PDF viewer") && hint.contains("-o"), "{hint}");
+    }
+
+    #[test]
+    fn an_output_that_cannot_be_replaced_says_what_to_do_about_it() {
+        let read_only = assert_some!(Error::OutputReadOnly { path: path() }.hint());
+        assert!(
+            read_only.contains("read-only") || read_only.contains("writable"),
+            "{read_only}"
+        );
+        let directory = assert_some!(Error::OutputIsDirectory { path: path() }.hint());
+        assert!(directory.contains("-o"), "{directory}");
+        let exists = assert_some!(Error::OutputExists { path: path() }.hint());
+        assert!(exists.contains("--force"), "{exists}");
+    }
+
+    #[test]
+    fn a_failure_with_nothing_specific_to_do_has_no_hint() {
+        assert!(
+            Error::WriteOutput {
+                path: path(),
+                source: io()
+            }
+            .hint()
+            .is_none()
+        );
+        assert!(
+            Error::CreateOutputDir {
+                path: path(),
+                source: io()
+            }
+            .hint()
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn output_errors_name_the_path_and_carry_the_cause() {
+        let locked = Error::OutputLocked {
+            path: path(),
+            source: io(),
+        }
+        .to_string();
+        assert!(
+            locked.contains("Resume.pdf") && locked.contains("the disk said no"),
+            "{locked}"
+        );
+        let write = Error::WriteOutput {
+            path: path(),
+            source: io(),
+        }
+        .to_string();
+        assert!(
+            write.contains("Resume.pdf") && write.contains("the disk said no"),
+            "{write}"
+        );
+        let dir = Error::CreateOutputDir {
+            path: path(),
+            source: io(),
+        }
+        .to_string();
+        assert!(
+            dir.contains("output directory") && dir.contains("the disk said no"),
+            "{dir}"
+        );
+    }
 }

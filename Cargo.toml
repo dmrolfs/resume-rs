@@ -49,6 +49,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 snafu = "0.9.2"
 strum = { version = "0.28.0", features = ["derive"] }
+tempfile = "3"
 time = { version = "0.3.55", features = ["serde"] }
 typst = "=0.15.1"
 typst-kit = { version = "=0.15.1", default-features = false, features = ["embedded-fonts", "scan-fonts"] }
@@ -67,4 +68,3 @@ pretty_assertions = "1.4.1"
 proptest = { version = "1.12.0", default-features = false, features = ["std"] }
 rayon = "1"
 sha2 = "0.11"
-tempfile = "3"

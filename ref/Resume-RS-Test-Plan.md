@@ -196,6 +196,7 @@ In-crate (`src/typeset/pragmatic_tests.rs`, reads frames) and through the public
 - [ ] `experienced_skills_render_label_value_rows`
 
 ### rsm-141.10: CLI, --dry-run, and layout report
+- [x] Output writer (slice 2; `src/output.rs`, `src/error.rs`): a new file, replacing a file, creating the output directory, no leftover temp file, the permissions a plain write would give (unix), a directory target and a read-only target refused on every OS, `Refuse` never overwrites but writes a new file, a dry run touches nothing and says whether it replaces and which directory it would create, a dry run reports the refusals a write would hit, a failed persist leaves no temp file, `classify` maps an existing target to `OutputExists` and anything else to `WriteOutput` with its cause, and the hints of the output errors. `cfg(windows)`: `output_locked_reports_hint` (a handle with `share_mode(0)`) and `output_locked_by_a_reader_that_shares_reads` (`FILE_SHARE_READ`) assert `OutputLocked`, the hint, the old bytes intact, and no temp file, and print the raw OS error so CI records which code occurs. Compile-checked locally against `x86_64-pc-windows-gnu`; run on `windows-latest`.
 - [ ] `build_writes_pdf_and_prints_summary`: includes the page count and build time.
 - [ ] `build_dry_run_writes_nothing_and_reports_target`
 - [ ] `max_pages_exceeded_exits_1`
