@@ -55,6 +55,9 @@ pub enum Error {
     #[snafu(display("scanning {origin} fonts panicked: {message}"))]
     FontScanPanicked { origin: FontOrigin, message: String },
 
+    #[snafu(display("the style's `<{label}>` metadata is malformed: {detail}"))]
+    Probe { label: &'static str, detail: String },
+
     #[snafu(display("cannot start the typesetting thread: {source}"))]
     SpawnTypesetThread { source: std::io::Error },
 

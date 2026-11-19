@@ -4,6 +4,7 @@
 mod diag;
 pub mod fonts;
 pub(crate) mod pdf;
+pub mod probe;
 pub(crate) mod world;
 
 use std::any::Any;
@@ -137,6 +138,22 @@ impl Compiled {
         &self.sources
     }
 
+    /// The font roles the style declared in `theme.fonts`, in declaration order.
+    ///
+    /// # Errors
+    /// `Error::Probe` when `<resume-fonts>` is not a dictionary of `(preferred, fallback, metric-compatible)`.
+    pub fn font_roles(&self) -> Result<Vec<fonts::FontRole>, Error> {
+        probe::font_roles(&self.document)
+    }
+
+    /// Where each role and era heading landed, in document order.
+    ///
+    /// # Errors
+    /// `Error::Probe` when a probe's metadata does not have the documented shape.
+    pub fn probes(&self) -> Result<Vec<probe::Probe>, Error> {
+        probe::probes(&self.document)
+    }
+
     /// Writes the PDF. `ident` should be stable for the same logical document, such as the output file stem.
     ///
     /// # Errors
@@ -178,6 +195,9 @@ fn panic_message(payload: &(dyn Any + Send)) -> String {
         .or_else(|| payload.downcast_ref::<String>().cloned())
         .unwrap_or_else(|| "a non-string panic payload".to_string())
 }
+
+#[cfg(test)]
+mod pragmatic_tests;
 
 #[cfg(test)]
 mod tests {

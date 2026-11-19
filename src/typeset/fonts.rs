@@ -308,13 +308,13 @@ impl FontSetBuilder {
     }
 
     #[cfg(test)]
-    fn system_source(mut self, source: impl Fn() -> Vec<Scanned> + Send + Sync + 'static) -> Self {
+    pub(crate) fn system_source(mut self, source: impl Fn() -> Vec<Scanned> + Send + Sync + 'static) -> Self {
         self.system = Box::new(source);
         self
     }
 
     #[cfg(test)]
-    fn application_dirs(mut self, dirs: Vec<PathBuf>) -> Self {
+    pub(crate) fn application_dirs(mut self, dirs: Vec<PathBuf>) -> Self {
         self.application_dirs = dirs;
         self
     }

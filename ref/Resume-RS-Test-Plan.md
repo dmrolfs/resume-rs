@@ -166,6 +166,15 @@ Unit tests in `src/typeset/fonts.rs`, `fonts_disk_tests.rs`, and `world.rs`; int
 - [x] `every_embedded_font_file_is_listed_in_licenses_md`, `every_font_family_directory_keeps_its_license_text_beside_the_fonts`
 - [x] Ignored unless `RESUME_ORIGINAL_FONTS_DIR` is set (Calibri, Georgia, Arial in four variants, named `<Family>-<Variant>.ttf`): `fallback_widths_match_the_originals`, which fails above 0.2% per glyph advance and was checked to fail for a wrong pairing
 
+### rsm-141.7.2: Components, probes, and the pragmatic style
+In-crate (`src/typeset/pragmatic_tests.rs`, reads frames) and through the public API (`tests/pragmatic_test.rs`):
+- [x] `full_fixture_renders_in_pragmatic_without_warnings` (Letter and A4, 2 pages), `pragmatic_text_order_name_then_title_company_period` (lopdf `extract_text`, whitespace-normalized), `footer_shows_name_and_page_of_total`, `pdf_is_tagged`
+- [x] `role_heading_is_kept_with_first_bullet`, `bullet_does_not_split_across_pages`: a sweep of spacer lines puts the page break at every offset of 7 generated roles; `the_check_fails_for_a_style_without_sticky_headings` and `..._with_breakable_bullets` prove the check can fail; `consecutive_and_trailing_page_breaks_never_leave_a_blank_page`
+- [x] `theme_fonts_metadata_is_queryable`, `every_role_and_era_leaves_a_probe_in_document_order`, `malformed_font_metadata_in_a_user_style_is_a_typed_error_not_a_panic`, `a_style_without_probes_has_no_font_roles_and_no_probes`
+- [x] `the_built_in_pragmatic_style_and_the_same_files_on_disk_render_the_same_bytes`, `an_edited_copy_of_the_theme_renders_differently`, `every_file_under_styles_is_embedded_in_the_binary`, `styles_that_are_named_but_not_written_yet_are_unknown_not_a_panic`, `the_font_stack_helper_in_the_fixtures_is_the_one_components_ships`
+- [x] Ignored unless `RESUME_ORIGINAL_FONTS_DIR` holds Calibri and Georgia in four variants: `bundled_and_original_body_fonts_break_lines_identically` (text, x, and baseline y of every line, full fixture and generated resumes) and its negative control `the_identity_check_catches_line_pitch_taken_from_font_metrics`
+- Not covered: Windows rendering of the embedded `./theme.typ` import (CI proves it), tag-tree order versus content-stream order, a section heading followed directly by a page break.
+
 ### rsm-141.7: Components and pragmatic
 - [ ] `full_fixture_renders_in_pragmatic_without_warnings`
 - [ ] `pragmatic_text_order_title_company_dates`: from `lopdf` text extraction.
