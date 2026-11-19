@@ -65,3 +65,14 @@ These keep output identical on macOS and Windows:
 - **No `-C target-cpu=native`** and no reliance on the machine's clock, locale, or installed fonts for
   anything that affects output bytes.
 - **Don't hash a windows-gnu build against the MSVC build.** The gnu build is only a local compile check.
+
+## Licenses
+
+The program is MIT licensed (`LICENSE`). The binary also embeds fonts, which keep their own licenses:
+
+- `fonts/` holds Carlito, Gelasio, and Arimo under the SIL Open Font License 1.1, with each family's license
+  text beside its files and the sources, versions, and checksums in [`fonts/LICENSES.md`](fonts/LICENSES.md).
+  They stand in for Calibri, Georgia, and Arial, which are never bundled.
+- Typst's own fonts (Libertinus Serif, New Computer Modern, DejaVu Sans Mono) come with the `typst-assets`
+  crate under their own licenses, listed in `fonts/LICENSES.md`.
+- `bundled_font_notices()` returns the notices for the bundled fallback fonts as text, so the CLI can print them.

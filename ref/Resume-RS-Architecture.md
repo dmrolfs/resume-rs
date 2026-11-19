@@ -566,7 +566,7 @@ Each style is a directory:
 
 All three put the name and "Page N of M" in the footer, which the current tool already does.
 
-**Bundled fonts** (`fonts/`, with `LICENSES.md`): only the free fallbacks (Carlito, Gelasio, Arimo, and TeX Gyre Pagella from rsm-141.9, where it is first used), in regular, bold, italic, and bold italic. The template fonts (Calibri, Georgia, Book Antiqua, Arial) are the preferred fonts in each theme and are used when installed. See Fonts: Preferred Originals with Bundled Fallbacks.
+**Bundled fonts** (`fonts/`, with `LICENSES.md`): besides typst-kit's own fonts, only the free fallbacks (Carlito, Gelasio, Arimo, and TeX Gyre Pagella from rsm-141.9, where it is first used), in regular, bold, italic, and bold italic. The template fonts (Calibri, Georgia, Book Antiqua, Arial) are the preferred fonts in each theme and are used when installed. See Fonts: Preferred Originals with Bundled Fallbacks.
 
 ### Fonts: Preferred Originals with Bundled Fallbacks (`src/typeset/fonts.rs`)
 
@@ -591,11 +591,11 @@ Cambria was dropped. Caladea doesn't match the installed Cambria 6.90 (lines are
      - system fonts via `typst-kit` `scan-fonts`: macOS `/System/Library/Fonts`, `/Library/Fonts`, `/Network/Library/Fonts`, `~/Library/Fonts`, the `AssetsV2` mobile-asset fonts, and Adobe's CoreSync directories; Windows `%SYSTEMROOT%\Fonts`, `%USERPROFILE%\AppData\Local\Microsoft\Windows\Fonts`, the same under `Roaming`, and Adobe's directories. Windows needs no extra layer for system or per-user fonts
      - known application font directories: on macOS, `/Applications/Microsoft {Word,Excel,PowerPoint,Outlook}.app/Contents/Resources/DFonts`, where Office keeps Calibri and Cambria. The system scan does not look there, so a Mac with Office reports Calibri as `(application)`, not `(system)`. Word, Excel, and PowerPoint ship identical directories, so a directory whose files (name and size) an earlier one already holds is skipped
      - every `--font-path <DIR>` (repeatable) and every entry in `RESUME_FONT_PATH`
-   - `--fonts bundled` uses only the bundled fallbacks.
+   - `--fonts bundled` uses only the bundled fonts (typst-kit's and the fallbacks).
    - TrueType and OpenType collections (`.ttc`) are loaded natively.
    - **Order and identity (rsm-141.18).** Layers are bundled, `--font-path` directories in command-line order, `RESUME_FONT_PATH` entries, application directories, then system. Inside one scan, faces are sorted by canonical path and face index, because typst-kit returns directory-enumeration order (verified not path-sorted). A face is identified by canonical path and index, so a symlink or a `/var` versus `/private/var` spelling cannot load it twice (typst-kit alone returned 8 faces for 4). Typst breaks a tie toward the earliest face only among equal static faces; a later variable font or a closer variant still wins, so a bundled family must ship every variant it needs.
    - **Errors.** An explicit `--font-path` or `RESUME_FONT_PATH` entry that is not a readable directory is `Error::FontDirectory` and fails the build (a single file is rejected too). System and application directories are best effort. typst-kit panics if a font file vanishes mid-scan, so a scan is retried once (a font manager or installer running at the same moment is the usual cause) and a second panic surfaces as `Error::FontScanPanicked`, naming the layer and directory. The stored path of every face is the canonical one, so a relative `--font-path` still loads after the working directory changes. `--fonts bundled` reads neither the disk nor the environment, so a stray `RESUME_FONT_PATH` is harmless.
-   - **Cost.** An Auto build scans every installed font: about 0.8 s on a Mac with 1,100 faces, once per process. `--fonts bundled` takes about 2 ms.
+   - **Cost.** An Auto build scans every installed font: about 0.8 s on a Mac with 1,100 faces, once per process. `--fonts bundled` takes about 5 ms (it parses the 29 bundled faces).
 3. **Resolution is reported.** `components.typ` emits `metadata(theme.fonts) <resume-fonts>`. `FontSet::resolve` answers per role from the font book alone (family presence; Typst falls back to the closest variant of a family it has), and the CLI prints it in the build summary, for example `fonts: body Calibri (system) · headings Georgia (system) · labels TeX Gyre Pagella (fallback for Book Antiqua)`.
 4. **Fallback diagnostics:**
    - `font-fallback-metric` (note): a metric-compatible fallback was used. Layout is identical, only the glyph shapes differ.

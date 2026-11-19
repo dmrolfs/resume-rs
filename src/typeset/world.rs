@@ -125,7 +125,7 @@ fn require_project_file(id: FileId) -> FileResult<()> {
 ///
 /// Typst warns `unknown font family` for every missing name in a `text(font: (..))` list and cannot
 /// be told not to, so a style builds its list from this instead (the `font-stack` helper).
-fn installed_families(fonts: &FontSet) -> Array {
+pub(crate) fn installed_families(fonts: &FontSet) -> Array {
     fonts
         .families()
         .into_iter()

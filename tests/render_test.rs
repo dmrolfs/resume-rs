@@ -423,6 +423,17 @@ fn bundled_mode_typesetter() -> Typesetter {
 }
 
 #[test]
+fn a_style_sees_the_installed_families_as_a_lowercased_array_and_the_helper_behaves() {
+    // The assertions live in the fixture; a failing one is a compile error shown by assert_ok.
+    let compiled = assert_ok!(bundled_mode_typesetter().compile(
+        &full_resume(),
+        &style("font-stack-input"),
+        RenderOptions::default()
+    ));
+    assert!(compiled.warnings().is_empty(), "{:?}", compiled.warnings());
+}
+
+#[test]
 fn font_stack_keeps_only_installed_families_and_renders_without_warnings() {
     let compiled = assert_ok!(bundled_mode_typesetter().compile(
         &full_resume(),
@@ -437,7 +448,7 @@ fn font_stack_keeps_only_installed_families_and_renders_without_warnings() {
 }
 
 #[test]
-fn bundled_mode_embeds_only_bundled_families_even_on_a_machine_that_has_calibri() {
+fn bundled_mode_embeds_the_bundled_fallback_and_never_an_installed_calibri() {
     let compiled = assert_ok!(bundled_mode_typesetter().compile(
         &full_resume(),
         &style("font-stack-helper"),

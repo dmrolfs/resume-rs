@@ -7,20 +7,24 @@ These fonts are compiled into the binary (`src/typeset/fonts.rs`, `FALLBACK_FACE
 the same on every machine. Each stands in for a proprietary font that the style templates prefer and
 that is **never** bundled: Carlito for Calibri, Gelasio for Georgia, Arimo for Arial. A style uses the
 original when it is installed (or given with `--font-path`), and the stand-in otherwise. The stand-ins
-have the same character widths, so line breaks do not change.
+have the same character widths on the characters a resume uses, so line breaks match. Line positions also depend on the style setting explicit text edges, which the pragmatic theme does.
 
 Every file is the unmodified upstream file: nothing is subset, instanced, converted, or renamed.
 Carlito's license names a Reserved Font Name, and embedding the whole file keeps clear of it.
 
-Typst itself also ships Libertinus Serif, New Computer Modern, and DejaVu Sans Mono through the
-`typst-assets` crate (OFL-1.1, GUST Font License, and the Bitstream Vera license). They are linked in
-through `typst-kit` and covered by that crate's own notice.
+Typst itself also ships fonts through the `typst-assets` crate, linked in through `typst-kit`, so they are in the
+binary too. Per that crate's `NOTICE`: Libertinus Serif is OFL-1.1 (Reserved Font Names "Linux Libertine",
+"Biolinum", "STIX Fonts"); New Computer Modern is under the GUST Font License v1.0, except `NewCM10-Regular`,
+which is GPL-3.0-or-later with the Font Exception and the Distribution Exception; DejaVu Sans Mono is under
+the Bitstream Vera license (DejaVu's own changes are public domain). Their full texts are in that crate's
+`NOTICE` and are not yet part of `bundled_font_notices()`: whether the two GPL exceptions cover shipping the
+font inside a program is for the owner to confirm (rsm-141.13).
 
 This is a summary of the obligations of each license, not legal advice.
 
 ## Carlito 1.104 (stands in for Calibri)
 
-- Source: <https://github.com/google/fonts> `ofl/carlito` at commit `605c9f29dd5770762bd7ee8ea8ac4ae7664b2b7b`
+- Source: <https://github.com/google/fonts/tree/605c9f29dd5770762bd7ee8ea8ac4ae7664b2b7b/ofl/carlito>
 - License: SIL Open Font License 1.1 (`OFL-1.1`), text in [`carlito/OFL.txt`](carlito/OFL.txt)
 - Copyright: Copyright 2013 The Carlito Project Authors (https://github.com/googlefonts/carlito), with Reserved Font Name "Carlito"
 - Files, SHA-256:
@@ -31,7 +35,7 @@ This is a summary of the obligations of each license, not legal advice.
 
 ## Gelasio 1.008 (stands in for Georgia)
 
-- Source: <https://github.com/SorkinType/Gelasio> `fonts/ttf` at commit `7ab20e7e5c42791e603b9ee3201a0b49849cfdb2` (the Google Fonts copy is variable-only; these are the static files from the project)
+- Source: <https://github.com/SorkinType/Gelasio/tree/7ab20e7e5c42791e603b9ee3201a0b49849cfdb2/fonts/ttf> (the Google Fonts copy is variable-only; these are the static files from the project)
 - License: SIL Open Font License 1.1 (`OFL-1.1`), text in [`gelasio/OFL.txt`](gelasio/OFL.txt)
 - Copyright: Copyright 2022 The Gelasio Project Authors (https://github.com/SorkinType/Gelasio)
 - Files, SHA-256:
@@ -42,7 +46,7 @@ This is a summary of the obligations of each license, not legal advice.
 
 ## Arimo 1.33 (stands in for Arial)
 
-- Source: <https://github.com/googlefonts/arimo> `fonts/ttf` at commit `22e482e2ce0ebb2e6f88ba49d029d60f558d5d67` (the Google Fonts copy is variable-only)
+- Source: <https://github.com/googlefonts/arimo/tree/22e482e2ce0ebb2e6f88ba49d029d60f558d5d67/fonts/ttf> (the Google Fonts copy is variable-only)
 - License: SIL Open Font License 1.1 (`OFL-1.1`), text in [`arimo/OFL.txt`](arimo/OFL.txt)
 - Copyright: Copyright 2020 The Arimo Project Authors (https://github.com/googlefonts/arimo) (the font files' own notice; the repository's `OFL.txt` header says 2026)
 - Files, SHA-256:
@@ -56,6 +60,10 @@ This is a summary of the obligations of each license, not legal advice.
 - Keep each family's copyright notice and license text with the fonts. They are in this directory.
 - Do not sell the fonts by themselves. They are part of a program.
 - Do not use a Reserved Font Name (Carlito) for a modified version. These files are not modified.
+- Do not use the names of the copyright holders or authors to promote the product without their permission.
+- Typst subsets fonts when it embeds them in a PDF. That is about the generated documents; the files in this
+  repository and in the binary are whole and unmodified. The OFL does not apply to documents made with the
+  fonts, which is the common reading of its preamble; this is not legal advice.
 
 ## How the stand-ins were checked
 

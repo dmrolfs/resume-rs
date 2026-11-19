@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.92"
 authors = ["Damon Rolfs <drolfs@gmail.com>"]
 description = "Typesets Markdown resumes into print-quality PDFs with embedded Typst and book-recommended styles."
-license = "MIT"
+license = "MIT AND OFL-1.1"
 repository = "https://github.com/dmrolfs/resume-rs"
 readme = "README.md"
 keywords = ["resume", "cv", "typst", "pdf", "markdown"]
@@ -65,4 +65,5 @@ predicates = "3"
 pretty_assertions = "1.4.1"
 proptest = { version = "1.12.0", default-features = false, features = ["std"] }
 rayon = "1"
+sha2 = "0.11"
 tempfile = "3"

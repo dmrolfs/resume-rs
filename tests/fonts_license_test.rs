@@ -56,3 +56,36 @@ fn every_font_family_directory_keeps_its_license_text_beside_the_fonts() {
         assert!(has_license, "{relative} has no license text beside it");
     }
 }
+
+fn sha256_hex(path: &std::path::Path) -> String {
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(path).expect("a font file is readable");
+    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[test]
+fn every_font_file_is_the_unmodified_file_listed_in_licenses_md() {
+    // "Unmodified" is the Reserved Font Name obligation for Carlito, so the bytes are tied to the table.
+    let licenses = std::fs::read_to_string(fonts_dir().join("LICENSES.md")).expect("fonts/LICENSES.md exists");
+    for (_, relative) in font_files() {
+        let digest = sha256_hex(&fonts_dir().join(&relative));
+        let listed = licenses.contains(&format!("`{relative}` `{digest}`"));
+        assert!(
+            listed,
+            "{relative} does not match the SHA-256 in fonts/LICENSES.md (now {digest})"
+        );
+    }
+}
+
+#[test]
+fn every_license_text_is_the_real_ofl() {
+    for (dir, relative) in font_files() {
+        let text = std::fs::read_to_string(dir.join("OFL.txt")).expect("OFL.txt is readable");
+        assert!(
+            text.contains("SIL OPEN FONT LICENSE Version 1.1"),
+            "{relative}: OFL.txt is not the OFL"
+        );
+        assert!(text.contains("Copyright"), "{relative}: OFL.txt has no copyright line");
+        assert!(text.len() > 3_000, "{relative}: OFL.txt is truncated");
+    }
+}

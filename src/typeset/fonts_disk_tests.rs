@@ -28,6 +28,11 @@ fn bytes_of(family: &str) -> Vec<u8> {
     embedded(family).0.data().as_slice().to_vec()
 }
 
+/// The first bundled face of `family`, whether typst-kit's or one of ours.
+fn shipped(family: &str) -> (Font, FontInfo) {
+    assert_some!(bundled_faces().into_iter().find(|(_, info)| info.family == family))
+}
+
 /// A builder that sees only what the test gives it: Auto mode, but no system or Office fonts.
 fn hermetic() -> FontSetBuilder {
     FontSet::builder().application_dirs(vec![]).system_source(Vec::new)
@@ -435,7 +440,12 @@ fn bundled_and_hermetic_auto_pdfs_are_byte_identical() {
     };
     let bundled = render(assert_ok!(FontSet::builder().mode(FontsMode::Bundled).build()));
     let hermetic_auto = render(assert_ok!(hermetic().build()));
-    assert!(bundled == hermetic_auto, "Bundled and hermetic Auto differ");
+    assert_eq!(
+        bundled.len(),
+        hermetic_auto.len(),
+        "Bundled and hermetic Auto differ in size"
+    );
+    assert!(bundled == hermetic_auto, "Bundled and hermetic Auto differ in content");
 }
 
 /// Sample text for width comparisons: printable ASCII plus the punctuation a resume uses.
@@ -498,4 +508,61 @@ fn fallback_widths_match_the_originals() {
             );
         }
     }
+}
+
+// ---- what styles can see, and what Bundled mode keeps out --------------------------------------
+
+/// The PDF of the `font-stack-installed` style (preferred Libertinus Serif, fallback Carlito) over `set`.
+fn font_stack_installed_pdf(set: FontSet) -> Vec<u8> {
+    let style = assert_ok!(StyleSource::directory(
+        crate_path("tests/fixtures/styles"),
+        assert_ok!(StyleName::try_new("font-stack-installed"))
+    ));
+    let compiled =
+        assert_ok!(Typesetter::new(Arc::new(set)).compile(&resume(), &style, RenderOptions::new(Paper::Letter)));
+    assert!(compiled.warnings().is_empty(), "{:?}", compiled.warnings());
+    assert_ok!(compiled.export_pdf("fixture"))
+}
+
+#[test]
+fn a_font_found_on_a_font_path_reaches_the_style_and_is_used() {
+    // Carlito is the only bundled face; Libertinus Serif exists only in the directory.
+    let dir = dir_with(&[("libertinus.otf", bytes_of("Libertinus Serif"))]);
+    let set = assert_ok!(
+        hermetic()
+            .bundled(vec![shipped("Carlito")])
+            .font_path(dir.path())
+            .build()
+    );
+    assert!(
+        crate::typeset::world::installed_families(&set).iter().any(|v| v
+            .clone()
+            .cast::<typst::foundations::Str>()
+            .is_ok_and(|s| s.as_str() == "libertinus serif")),
+        "a --font-path family must reach sys.inputs.fonts, lowercased"
+    );
+    let pdf = font_stack_installed_pdf(set);
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(
+        text.contains("+LibertinusSerif") && !text.contains("+Carlito"),
+        "the installed preferred family was not used"
+    );
+}
+
+#[test]
+fn bundled_mode_keeps_a_font_path_family_out_of_the_style_and_the_pdf() {
+    let dir = dir_with(&[("libertinus.otf", bytes_of("Libertinus Serif"))]);
+    let set = assert_ok!(
+        FontSet::builder()
+            .mode(FontsMode::Bundled)
+            .bundled(vec![shipped("Carlito")])
+            .font_path(dir.path())
+            .build()
+    );
+    let pdf = font_stack_installed_pdf(set);
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(
+        text.contains("+Carlito") && !text.contains("LibertinusSerif"),
+        "a font path leaked into a bundled-mode PDF"
+    );
 }

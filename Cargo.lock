@@ -2361,6 +2361,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "sha2",
  "snafu",
  "strum 0.28.0",
  "tempfile",

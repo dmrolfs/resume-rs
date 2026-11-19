@@ -56,8 +56,8 @@ impl FontSet {
         FontSetBuilder::default()
     }
 
-    /// Only the bundled fonts: for now those embedded in typst-kit (Libertinus Serif, New Computer
-    /// Modern, and DejaVu Sans Mono). The same as a [`FontsMode::Bundled`] build, without the builder.
+    /// Only the bundled fonts: typst-kit's (Libertinus Serif, New Computer Modern, DejaVu Sans Mono) and the
+    /// Carlito, Gelasio, and Arimo fallbacks. The same as a [`FontsMode::Bundled`] build, without the builder.
     #[must_use]
     pub fn bundled() -> Self {
         Self::assemble(bundled_faces(), Vec::new())
@@ -151,33 +151,73 @@ impl FontSet {
     }
 }
 
+/// One bundled family: its faces and the license text that must travel with them.
+struct FallbackFamily {
+    name: &'static str,
+    /// The family's `OFL.txt`, which every copy of the fonts must carry (OFL condition 2).
+    license: &'static str,
+    faces: &'static [&'static [u8]],
+}
+
 /// The free, metric-compatible stand-ins for the template fonts, embedded unmodified.
 ///
 /// Carlito stands in for Calibri, Gelasio for Georgia, and Arimo for Arial. They are static files, not
 /// variable fonts: a later variable face would win a tie against an earlier static one of the same
 /// family, and statics need no weight handling. They are never subset or instanced (Carlito has a
-/// Reserved Font Name). Licenses and sources are in `fonts/LICENSES.md`. TeX Gyre Pagella joins them
-/// in rsm-141.9, where it is first used.
-const FALLBACK_FACES: &[&[u8]] = &[
-    include_bytes!("../../fonts/carlito/Carlito-Regular.ttf"),
-    include_bytes!("../../fonts/carlito/Carlito-Bold.ttf"),
-    include_bytes!("../../fonts/carlito/Carlito-Italic.ttf"),
-    include_bytes!("../../fonts/carlito/Carlito-BoldItalic.ttf"),
-    include_bytes!("../../fonts/gelasio/Gelasio-Regular.ttf"),
-    include_bytes!("../../fonts/gelasio/Gelasio-Bold.ttf"),
-    include_bytes!("../../fonts/gelasio/Gelasio-Italic.ttf"),
-    include_bytes!("../../fonts/gelasio/Gelasio-BoldItalic.ttf"),
-    include_bytes!("../../fonts/arimo/Arimo-Regular.ttf"),
-    include_bytes!("../../fonts/arimo/Arimo-Bold.ttf"),
-    include_bytes!("../../fonts/arimo/Arimo-Italic.ttf"),
-    include_bytes!("../../fonts/arimo/Arimo-BoldItalic.ttf"),
+/// Reserved Font Name). Sources, pins, and checksums are in `fonts/LICENSES.md`. TeX Gyre Pagella joins
+/// them in rsm-141.9, where it is first used, as one more entry here.
+const FALLBACK_FAMILIES: &[FallbackFamily] = &[
+    FallbackFamily {
+        name: "Carlito",
+        license: include_str!("../../fonts/carlito/OFL.txt"),
+        faces: &[
+            include_bytes!("../../fonts/carlito/Carlito-Regular.ttf"),
+            include_bytes!("../../fonts/carlito/Carlito-Bold.ttf"),
+            include_bytes!("../../fonts/carlito/Carlito-Italic.ttf"),
+            include_bytes!("../../fonts/carlito/Carlito-BoldItalic.ttf"),
+        ],
+    },
+    FallbackFamily {
+        name: "Gelasio",
+        license: include_str!("../../fonts/gelasio/OFL.txt"),
+        faces: &[
+            include_bytes!("../../fonts/gelasio/Gelasio-Regular.ttf"),
+            include_bytes!("../../fonts/gelasio/Gelasio-Bold.ttf"),
+            include_bytes!("../../fonts/gelasio/Gelasio-Italic.ttf"),
+            include_bytes!("../../fonts/gelasio/Gelasio-BoldItalic.ttf"),
+        ],
+    },
+    FallbackFamily {
+        name: "Arimo",
+        license: include_str!("../../fonts/arimo/OFL.txt"),
+        faces: &[
+            include_bytes!("../../fonts/arimo/Arimo-Regular.ttf"),
+            include_bytes!("../../fonts/arimo/Arimo-Bold.ttf"),
+            include_bytes!("../../fonts/arimo/Arimo-Italic.ttf"),
+            include_bytes!("../../fonts/arimo/Arimo-BoldItalic.ttf"),
+        ],
+    },
 ];
+
+/// The license notices for the bundled fallback fonts: the overview in `fonts/LICENSES.md` followed by
+/// each family's license text.
+///
+/// A binary that embeds the fonts must carry these notices, so the CLI prints them (rsm-141.10).
+#[must_use]
+pub fn bundled_font_notices() -> String {
+    let mut notices = include_str!("../../fonts/LICENSES.md").to_string();
+    for family in FALLBACK_FAMILIES {
+        notices.push_str(&format!("\n\n---\n\n{} license\n\n{}", family.name, family.license));
+    }
+    notices
+}
 
 /// The fonts shipped in the binary, in a fixed order: typst-kit's (Typst's own defaults, `raw`, and
 /// math need them, and their indexes must not move), then the fallbacks.
 fn bundled_faces() -> Vec<(Font, FontInfo)> {
-    let fallbacks = FALLBACK_FACES
+    let fallbacks = FALLBACK_FAMILIES
         .iter()
+        .flat_map(|family| family.faces)
         .flat_map(|bytes| Font::iter(Bytes::new(*bytes)))
         .map(|font| {
             let info = font.info().clone();
@@ -668,6 +708,40 @@ mod tests {
         assert_eq!(set.origins().len(), 17 + 12, "a face was added or removed");
         assert!(set.origins().iter().all(|o| *o == FontOrigin::Bundled));
         assert_eq!(set.mode(), FontsMode::Bundled);
+    }
+
+    #[test]
+    fn every_font_file_under_fonts_is_embedded() {
+        let on_disk = std::fs::read_dir(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fonts"))
+            .map(|dirs| {
+                dirs.flatten()
+                    .filter(|d| d.path().is_dir())
+                    .flat_map(|d| std::fs::read_dir(d.path()).into_iter().flatten().flatten())
+                    .filter(|f| matches!(f.path().extension().and_then(|e| e.to_str()), Some("ttf" | "otf")))
+                    .count()
+            })
+            .unwrap_or_default();
+        let embedded: usize = FALLBACK_FAMILIES.iter().map(|f| f.faces.len()).sum();
+        assert_eq!(
+            on_disk, embedded,
+            "a font file is on disk but not embedded, or the reverse"
+        );
+    }
+
+    #[test]
+    fn font_notices_carry_the_overview_and_each_familys_license_text() {
+        let notices = bundled_font_notices();
+        assert!(
+            notices.contains("# Bundled fonts"),
+            "the LICENSES.md overview is missing"
+        );
+        for family in FALLBACK_FAMILIES {
+            assert!(notices.contains(family.name), "{} is missing", family.name);
+        }
+        assert_eq!(
+            notices.matches("SIL OPEN FONT LICENSE Version 1.1").count(),
+            FALLBACK_FAMILIES.len()
+        );
     }
 
     #[test]
