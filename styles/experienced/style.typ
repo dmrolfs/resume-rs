@@ -31,9 +31,11 @@
 // The text edges are lengths taken from the size of the first line beside the label (`line-size`), not from the
 // label's own size, so the label and that line share a baseline.
 //
-// A word wider than the label cell cannot break (hyphenation is off) and would run over the content, so the label
-// is set smaller until its widest word fits, down to `size.label-min`. Titles are in capitals and the longest
-// ordinary ones, such as ACCOMPLISHMENTS, take a little under 10pt in place of 12pt.
+// A word wider than the label cell cannot break (hyphenation is off) and would run over the content. So the label
+// is set smaller until its widest word fits, down to `size.label-min`; titles are in capitals and the longest
+// ordinary ones, such as ACCOMPLISHMENTS, take a little under 10pt in place of 12pt. A word that is still too wide
+// at the smallest size is allowed to break between any two letters (a zero-width space is a break opportunity and
+// draws nothing, so the text is unchanged), which keeps the label inside the gutter for any title.
 #let section-label(theme, title, line-size) = context {
   let cell = theme.gutter.width - 2 * theme.gutter.inset
   let label-text(size, body) = text(
@@ -48,7 +50,11 @@
   let words = upper(title).split()
   let widest = calc.max(0pt, ..words.map(word => measure(label-text(theme.size.label, word)).width))
   let size = if widest > cell { calc.max(theme.size.label * (cell / widest), theme.size.label-min) } else { theme.size.label }
-  pad(left: theme.gutter.inset, right: theme.gutter.inset, heading(level: 1, label-text(size, upper(title))))
+  // A word that fits after shrinking is left whole. The tolerance covers the rounding of a width that was scaled to
+  // the cell exactly, so a word that was shrunk to fit is never broken as well.
+  let fit(word) = if measure(label-text(size, word)).width > cell + 0.5pt { word.clusters().join("\u{200B}") } else { word }
+  let body = words.map(fit).join(" ")
+  pad(left: theme.gutter.inset, right: theme.gutter.inset, heading(level: 1, label-text(size, body)))
 }
 
 // The role line: Company, Title in bold, with the period on the right in bold at the body size.

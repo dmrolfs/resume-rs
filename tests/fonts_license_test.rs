@@ -47,13 +47,20 @@ fn every_embedded_font_file_is_listed_in_licenses_md() {
     }
 }
 
+/// The license text each family directory must keep beside its fonts.
+fn expected_license(family_dir: &str) -> &'static str {
+    match family_dir {
+        "pagella" => "GUST-FONT-LICENSE.txt",
+        _ => "OFL.txt",
+    }
+}
+
 #[test]
-fn every_font_family_directory_keeps_its_license_text_beside_the_fonts() {
+fn every_font_family_directory_keeps_its_own_license_text_beside_the_fonts() {
     for (dir, relative) in font_files() {
-        let has_license = ["OFL.txt", "GUST-FONT-LICENSE.txt"]
-            .iter()
-            .any(|name| dir.join(name).is_file());
-        assert!(has_license, "{relative} has no license text beside it");
+        let family = relative.split('/').next().expect("family/file");
+        let name = expected_license(family);
+        assert!(dir.join(name).is_file(), "{relative} has no {name} beside it");
     }
 }
 
@@ -135,6 +142,23 @@ fn licenses_md_states_the_three_lppl_conditions_for_pagella() {
         "pagella/GUST-FONT-LICENSE.txt",
     ] {
         assert!(entry.contains(needle), "the Pagella entry lacks `{needle}`");
+    }
+}
+
+#[test]
+fn the_pagella_notice_files_are_whole_and_listed_with_their_checksums() {
+    // A truncated README or MANIFEST would still say `Version: 2.501`; the checksum notices that it is not the file.
+    let licenses = std::fs::read_to_string(fonts_dir().join("LICENSES.md")).expect("fonts/LICENSES.md exists");
+    for name in [
+        "GUST-FONT-LICENSE.txt",
+        "README-TeX-Gyre-Pagella.txt",
+        "MANIFEST-TeX-Gyre-Pagella.txt",
+    ] {
+        let digest = sha256_hex(&fonts_dir().join("pagella").join(name));
+        assert!(
+            licenses.contains(&format!("`pagella/{name}` `{digest}`")),
+            "pagella/{name} does not match the SHA-256 in fonts/LICENSES.md (now {digest})"
+        );
     }
 }
 

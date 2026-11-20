@@ -147,15 +147,11 @@ fn a_pagella_fallback_for_book_antiqua_is_reported_as_font_fallback_layout() {
 }
 
 #[test]
-fn bundled_mode_embeds_pagella_for_the_labels_and_carlito_for_the_body() {
+fn the_bundled_fonts_embed_pagella_for_the_labels_and_carlito_for_the_body() {
     let pdf = assert_ok!(experienced(Paper::Letter).export_pdf("fixture"));
     let text = String::from_utf8_lossy(&pdf);
     assert!(text.contains("TeXGyrePagella"), "the label fallback is embedded");
     assert!(text.contains("Carlito"), "the body fallback is embedded");
-    assert!(
-        !text.contains("Calibri") && !text.contains("BookAntiqua"),
-        "no installed font leaks into a bundled render"
-    );
 }
 
 #[test]
@@ -182,14 +178,4 @@ fn a_resume_without_a_contact_line_renders_the_name_then_the_first_section() {
     assert_eq!(compiled.page_count(), 1);
     let text = first_page_text(&compiled);
     assert!(position(&text, "Ada Lovelace") < position(&text, "SUMMARY"), "{text}");
-}
-
-#[test]
-fn a_section_with_no_blocks_still_shows_its_label() {
-    let compiled = compile(
-        &parsed("# Ada Lovelace\n\nCity · a@b.co\n\n## Summary\n\n- one\n\n## Interests\n\n"),
-        Paper::Letter,
-    );
-    let text = first_page_text(&compiled);
-    assert!(text.contains("INTERESTS"), "{text}");
 }

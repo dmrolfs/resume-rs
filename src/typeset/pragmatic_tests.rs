@@ -40,6 +40,8 @@ struct Run {
     bold: bool,
     /// The font family of the run's face, such as `Carlito`.
     family: String,
+    /// The font size in points.
+    size: f64,
     /// Width of the run, in points.
     width: f64,
     /// The fill as hex, such as `#000000`; `None` for a gradient or pattern.
@@ -76,6 +78,7 @@ fn collect_runs(frame: &Frame, origin: Point, out: &mut Vec<Run>) {
                 text: run.text.to_string(),
                 bold: run.font.info().variant.weight.to_number() >= 600,
                 family: run.font.info().family.clone(),
+                size: run.size.to_pt(),
                 width: run.width().to_pt(),
                 size: run.size.to_pt(),
                 family: run.font.info().family.clone(),
@@ -1298,24 +1301,24 @@ fn the_experienced_style_sets_each_kind_of_text_in_its_own_font_weight_and_color
     // The full fixture, bundled fonts: Pagella for the name and the labels, Carlito for the rest.
     let compiled = compile(&experienced(), &full_fixture_text());
     let runs = page_runs(&compiled, 0);
-    let check = |needle: &str, family: &str, bold: bool, fill: &str| {
+    let check = |needle: &str, family: &str, bold: bool, fill: &str, size: f64| {
         let run = run_containing(&runs, needle);
         assert_eq!(
-            (run.family.as_str(), run.bold, run.fill.as_deref()),
-            (family, bold, Some(fill)),
+            (run.family.as_str(), run.bold, run.fill.as_deref(), run.size),
+            (family, bold, Some(fill), size),
             "`{needle}`: {run:?}"
         );
     };
-    check("Lovelace", "TeX Gyre Pagella", false, "#000000"); // the name, regular weight
-    check("SUMMARY", "TeX Gyre Pagella", true, "#000000"); // a section label, black
-    check("Languages:", "Carlito", false, "#000000"); // a skills label is regular weight
-    check("Rust, Java", "Carlito", false, "#000000"); // a skills value
-    check("Cloud and infrastructure:", "Carlito", false, "#000000");
-    check("Analytical Engines Ltd", "Carlito", true, "#000000"); // the company and title are bold
-    check("Aug 2017", "Carlito", true, "#000000"); // and so is the period
-    check("Programming languages", "Carlito", false, "#000000"); // an era name is italic, not bold
-    check("Notes", "Carlito", false, "#cc0000"); // a link is red
-    check("Page 1 of", "Carlito", false, "#595959"); // the footer is muted
+    check("Lovelace", "TeX Gyre Pagella", false, "#000000", 24.0); // the name, regular weight
+    check("SUMMARY", "TeX Gyre Pagella", true, "#000000", 12.0); // a section label, black
+    check("Languages:", "Carlito", false, "#000000", 11.0); // a skills label is regular weight
+    check("Rust, Java", "Carlito", false, "#000000", 11.0); // a skills value
+    check("Cloud and infrastructure:", "Carlito", false, "#000000", 11.0);
+    check("Analytical Engines Ltd", "Carlito", true, "#000000", 12.0); // the company and title are bold
+    check("Aug 2017", "Carlito", true, "#000000", 11.0); // and so is the period
+    check("Programming languages", "Carlito", false, "#000000", 11.0); // an era name is italic, not bold
+    check("Notes", "Carlito", false, "#cc0000", 11.0); // a link is red
+    check("Page 1 of", "Carlito", false, "#595959", 8.5); // the footer is muted
     // The accent is only on links: no label, role line or value is red.
     let red: Vec<_> = runs.iter().filter(|r| r.fill.as_deref() == Some("#cc0000")).collect();
     assert!(
@@ -1366,7 +1369,7 @@ fn a_skill_row_never_splits_across_a_page_break() {
     // of its words, and the `end1` that closes it must all be on one page, which only holds if the row is
     // unbreakable. A short row would never reach the foot of the page mid-row.
     let long = "word ".repeat(400);
-    let mut split_without_the_rule = 0;
+    let mut reached_a_page_break = 0;
     for spacers in 0..8 {
         let spacer: String = (0..spacers * 3).map(|i| format!("Spacer {i}.\n\n")).collect();
         let md = format!(
@@ -1387,10 +1390,10 @@ fn a_skill_row_never_splits_across_a_page_break() {
             pages["Long:"], pages["end1"],
             "with {spacers} spacer paragraphs the long row splits: {pages:?}"
         );
-        split_without_the_rule += usize::from(compiled.page_count() > 1);
+        reached_a_page_break += usize::from(compiled.page_count() > 1);
     }
     assert!(
-        split_without_the_rule >= 2,
+        reached_a_page_break >= 2,
         "the spacers never pushed the long row to a page break"
     );
 }
@@ -1401,26 +1404,72 @@ fn a_section_label_wider_than_the_gutter_is_set_smaller_and_stays_inside_it() {
         let md = format!("# A B\n\nCity · a@b.co\n\n## {title}\n\nA paragraph of text beside it.\n");
         let compiled = compile(&experienced(), &md);
         let runs = page_runs(&compiled, 0);
+        // The word stays whole: one run holds all of it.
         let label = run_containing(&runs, &title.to_uppercase());
         let text = run_containing(&runs, "A paragraph");
         assert!(
-            label.x + label.width <= text.x,
-            "{title}: the label ends at {} but the text starts at {}",
+            label.x + label.width <= text.x && label.size < 12.0 && label.size >= 8.0,
+            "{title}: set at {}pt, ends at {} but the text starts at {}",
+            label.size,
             label.x + label.width,
             text.x
         );
     }
-    // A label that fits is not shrunk: 12pt, same as the others.
+    // A label that fits is not shrunk.
     let compiled = compile(&experienced(), "# A B\n\nCity · a@b.co\n\n## Summary\n\nText.\n");
-    let label = run_containing(&page_runs(&compiled, 0), "SUMMARY");
-    assert!((label.width - 12.0 / 11.0 * 66.7).abs() < 20.0 && label.width > 60.0);
+    assert_eq!(run_containing(&page_runs(&compiled, 0), "SUMMARY").size, 12.0);
+}
+
+#[test]
+fn a_word_too_wide_even_at_the_smallest_size_breaks_inside_the_gutter() {
+    // Sixty capital W, the widest title the parser accepts, is about 480pt at 8pt in a 101pt cell. It breaks between
+    // letters, none are lost, and no part reaches the text column.
+    let title = "W".repeat(60);
+    let md = format!("# A B\n\nCity · a@b.co\n\n## {title}\n\nA paragraph of text beside it.\n");
+    let compiled = compile(&experienced(), &md);
+    let runs = page_runs(&compiled, 0);
+    let text = run_containing(&runs, "A paragraph");
+    let parts: Vec<_> = runs.iter().filter(|r| r.text.starts_with('W')).collect();
+    assert!(parts.len() >= 2, "the word broke over several lines: {parts:?}");
+    assert!(
+        parts.iter().all(|r| r.size == 8.0),
+        "set at the smallest size: {parts:?}"
+    );
+    assert!(
+        parts.iter().all(|r| r.x + r.width <= text.x),
+        "a part of the label reaches the text column at {}: {parts:?}",
+        text.x
+    );
+    let letters: usize = parts.iter().map(|r| r.text.chars().filter(|c| *c == 'W').count()).sum();
+    assert_eq!(letters, 60, "no letter is lost: {parts:?}");
+}
+
+/// A resume with `spacers` paragraphs, then an empty section between two others, then `ZNEXT`.
+fn empty_section_between(spacers: usize) -> String {
+    let spacer: String = (0..spacers).map(|i| format!("Spacer {i}.\n\n")).collect();
+    format!("# A B\n\nCity · a@b.co\n\n## Summary\n\n{spacer}## Interests\n\n## Education\n\nZNEXT a paragraph.\n")
+}
+
+/// True when some page of the sweep ends with the empty section's label, so it is left alone at a page foot.
+fn empty_label_ends_a_page(style: &StyleSource) -> bool {
+    (0..60).any(|spacers| {
+        let lines = body_lines(&compile(style, &empty_section_between(spacers)));
+        lines
+            .iter()
+            .filter_map(|page| page.last())
+            .any(|(_, last)| last == "INTERESTS")
+    })
 }
 
 #[test]
 fn an_empty_section_keeps_its_label_with_the_section_after_it() {
-    let md = "# A B\n\nCity · a@b.co\n\n## Summary\n\n- one\n\n## Interests\n\n";
-    let compiled = compile(&experienced(), md);
-    assert!(text_of(&compiled).contains("INTERESTS"), "{}", text_of(&compiled));
+    assert!(!empty_label_ends_a_page(&experienced()));
+    // The same sweep sees it once the row is not sticky, so the check can fail.
+    let (_dir, weakened) = weakened_in("experienced", "row([], sticky: true)", "row([], sticky: false)");
+    assert!(
+        empty_label_ends_a_page(&weakened),
+        "the sweep never put the empty label at a page foot, so it proves nothing"
+    );
 }
 
 #[test]
@@ -1440,4 +1489,56 @@ fn roles_and_eras_come_in_document_order_with_each_era_after_its_role() {
         }
     }
     assert_eq!(roles, [0, 1, 2, 3]);
+}
+
+#[test]
+fn the_experienced_spacing_follows_the_theme() {
+    // Positions come from the theme: bullets 18pt and 36pt in from the text column (0.25in indent, 12.5pt gap),
+    // 2pt between skill rows, and a section gap above a label.
+    let md = "# A B\n\nCity · a@b.co\n\n## Summary\n\n- one bullet\n\n## Skills\n\n- **A:** x\n- **B:** y\n";
+    let compiled = compile(&experienced(), md);
+    let runs = page_runs(&compiled, 0);
+    let text = run_containing(&runs, "one bullet");
+    // The list marker is the `•` on the bullet's own line; the header has one between its items too.
+    let marker = assert_some!(runs.iter().find(|r| r.text == "•" && (r.y - text.y).abs() < 0.3)).clone();
+    let column = lefts(&compiled, &["SUMMARY"])[0] - 5.9 + 113.15 + 5.95; // the text column's left edge
+    assert!(
+        (marker.x - (column + 18.0)).abs() < 0.2,
+        "marker at {}, column at {column}",
+        marker.x
+    );
+    assert!(
+        (text.x - (column + 36.0)).abs() < 0.3,
+        "text at {}, column at {column}",
+        text.x
+    );
+    let (a, b) = (run_containing(&runs, "A:"), run_containing(&runs, "B:"));
+    // A single-line row is the distance between the text edges of 11pt text (0.952em above the baseline and 0.269em
+    // below it, 1.221em) plus the 2pt `skill-row` gap; rows of a table carry no extra leading.
+    assert!(
+        (b.y - a.y - (11.0 * 1.221 + 2.0)).abs() < 0.05,
+        "skill rows are {}pt apart",
+        b.y - a.y
+    );
+    // From the bullet's baseline to the next label's: the section gap (14pt) and one line of 11pt text.
+    let skills = run_containing(&runs, "SKILLS");
+    assert!(
+        (skills.y - text.y - (14.0 + 11.0 * 1.221)).abs() < 0.3,
+        "SKILLS is {}pt below the bullet",
+        skills.y - text.y
+    );
+}
+
+#[test]
+fn the_pragmatic_footer_still_starts_at_its_own_left_margin() {
+    // `footer-bleed` defaults to 0pt for every style that does not set it; a stray default would shift this footer.
+    let compiled = compile(&builtin(), &full_fixture_text());
+    let runs = page_runs(&compiled, 0);
+    let footer = assert_some!(runs.iter().rfind(|r| r.text == "Ada Lovelace")).clone();
+    assert!(footer.y > 700.0, "that is the footer: {footer:?}");
+    assert!(
+        (footer.x - 0.6 * 72.0).abs() < 0.05,
+        "the footer starts at {}",
+        footer.x
+    );
 }

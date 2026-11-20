@@ -80,8 +80,9 @@ To customize, run `resume export-style experienced <dir>` and edit `theme.typ` i
 - One unlabeled bullet in a block of labeled ones makes the whole block a list, not a table; nothing warns.
 - A label wider than the gutter wraps over several lines (`Languages and Technologies` takes three); the row
   grows to hold it. A single word wider than the label cell (`ACCOMPLISHMENTS` is 130pt against 101pt) cannot
-  wrap, so the label is set smaller until it fits, down to `size.label-min` (8pt); below that the word would run
-  into the content, so shorten the title or widen the gutter.
+  wrap, so the label is set smaller until it fits, down to `size.label-min` (8pt). A word that is still too wide at
+  8pt is broken between letters (with zero-width spaces, which draw nothing), so a label never runs into the
+  content, whatever the title or the gutter width.
 - The Experienced template is optimized for two pages. Nothing here limits the length; `resume build` reports a
   longer one. The principal architect baseline is five pages in this style, which comes from its content: no
   theme setting tried (line pitch, bullet gap, indents) brings it under five.

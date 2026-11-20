@@ -276,10 +276,35 @@ fn write_determinism_pdf() {
     assert_ok!(std::fs::write(&out, pdf));
 }
 
+/// Writes the experienced style's reference PDF that CI compares across operating systems, like the pragmatic one.
+///
+/// The experienced style measures its skills column, sizes its labels to the gutter, and falls back to TeX Gyre
+/// Pagella (which is not metric-compatible with the font it prefers), so it is where a platform difference in
+/// text measuring would show first.
 #[test]
-fn the_experienced_reference_pdf_embeds_only_bundled_fonts_and_uses_both_fallbacks() {
-    // The experienced style measures its skills column and sizes its labels, which is where a platform
-    // difference would show first; its labels also use the Pagella fallback, so both families must be present.
+#[ignore = "writes the cross-OS reference PDF; run by CI with RESUME_DETERMINISM_EXPERIENCED_OUT set"]
+fn write_experienced_determinism_pdf() {
+    let out = PathBuf::from(
+        std::env::var("RESUME_DETERMINISM_EXPERIENCED_OUT")
+            .expect("set RESUME_DETERMINISM_EXPERIENCED_OUT to the output path"),
+    );
+    let pdf = render_builtin(BuiltinStyle::Experienced, FontsMode::Bundled, "determinism-experienced");
+    let fonts = embedded_fonts(&pdf);
+    assert!(
+        only_bundled(&fonts),
+        "the reference PDF embeds a font --fonts bundled does not ship: {fonts:?}"
+    );
+    println!("embedded fonts: {}", fonts.join(", "));
+    if let Some(parent) = out.parent() {
+        assert_ok!(std::fs::create_dir_all(parent));
+    }
+    assert_ok!(std::fs::write(&out, pdf));
+}
+
+#[test]
+fn an_experienced_render_embeds_only_bundled_fonts_and_uses_both_fallbacks() {
+    // Its labels use the Pagella fallback and its body the Carlito one, so both families must be present.
+    // The cross-OS comparison of this PDF is `write_experienced_determinism_pdf` and the CI `determinism` job.
     let fonts = embedded_fonts(&render_builtin(
         BuiltinStyle::Experienced,
         FontsMode::Bundled,

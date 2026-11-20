@@ -70,15 +70,19 @@ This is a summary of the obligations of each license, not legal advice.
   - `pagella/texgyrepagella-bold.otf` `dd4f9b69f0b24f1fb9be8634abf1fce2009e5c68a30842a3e9f5d6e535900abd`
   - `pagella/texgyrepagella-italic.otf` `069bb27f48eb98a741715227fc6e4b7baf3639c29fc13925f70d1ed8884ac29a`
   - `pagella/texgyrepagella-bolditalic.otf` `556fd64655a92bd9f5485ae2c03f7b9cdaf745a27a91d7edb3c3abde997206d2`
+- Notice files kept beside the fonts, SHA-256 (so a truncated copy is noticed):
+  - `pagella/GUST-FONT-LICENSE.txt` `9372accba7de09e11b7e1d0a6a27d6703c5e329a60218032805e0accca1b8eeb`
+  - `pagella/README-TeX-Gyre-Pagella.txt` `6fc4c72a8754f7e04ffbbec99167a568c0a3d21e231318ed624b58ddfeb1f896`
+  - `pagella/MANIFEST-TeX-Gyre-Pagella.txt` `6ac4bc1448a1d71a3a7ad5fd13566f00855b37ca4db5b20451c88806ac3f5242`
 
 ## What the GUST Font License and the LPPL ask of a distribution that embeds Pagella
 
-Shipping four of the Work's files counts as distributing part of the Work (LPPL 1.3c, clauses 2 and 6).
-The conditions that apply:
+Shipping four of the Work's files counts as distributing part of the Work, and the LPPL (version 1.3c, clause 2) treats that as modifying the Work, even though the four files themselves are unchanged.
+So the conditions of clause 6 for distributing a Derived Work apply, and this program meets them as follows:
 
-- No change was made. The four files are the unmodified upstream files (the checksums above tie them to the table), so the request in the GUST license to rename modified fonts does not arise.
-- No endorsement by the authors is implied. The authors of TeX Gyre Pagella have not reviewed or endorsed this program.
-- The information needed to obtain the complete unmodified Work: the GUST page <https://www.gust.org.pl/projects/e-foundry/tex-gyre/pagella>, and CTAN, <https://ctan.org/pkg/tex-gyre> (files under <https://mirrors.ctan.org/fonts/tex-gyre/>).
+- No change was made. The four files are the unmodified upstream files (the checksums above tie them to the table), so there is no changed component to identify (6a) or to describe in a change notice (6b), and the request in the GUST license to rename modified fonts does not arise. The request is a request, not a legal requirement.
+- No endorsement by the authors is implied, and no support from them is implied (6c). The authors of TeX Gyre Pagella have not reviewed or endorsed this program and do not offer support for it.
+- The information needed to obtain the complete unmodified Work is given (6d): the GUST page <https://www.gust.org.pl/projects/e-foundry/tex-gyre/pagella>, and CTAN, <https://ctan.org/pkg/tex-gyre> (files under <https://mirrors.ctan.org/fonts/tex-gyre/>). The GUST license, the README, and the MANIFEST travel with the fonts.
 
 Embedding the fonts in a program that has other, unrelated parts is aggregation (LPPL clause 11).
 
