@@ -118,6 +118,13 @@ pub fn subject_matches(code: DiagnosticCode, source: &str) -> bool {
         HeadingMarkerSpacing => !source.is_empty() && source.chars().all(|c| c == '#'),
         MidSentenceBold => is_pair("**") || is_pair("__"),
         UnsupportedHtml => source.starts_with('<'),
+        AnnotationMisplaced
+        | AnnotationDuplicate
+        | AnnotationDetached
+        | AnnotationWithoutTarget
+        | AlternateNotAllowed => source.starts_with("<!--") && source.ends_with("-->"),
+        AnnotationUnknownKeyword => source.starts_with('@') && !source.contains(char::is_whitespace),
+        AnnotationMalformed | AnnotationConflict => !source.is_empty() && !source.contains(char::is_whitespace),
         InvalidLink | UnsupportedLink => source.starts_with(['[', '<']),
         NestedList => source.starts_with(['-', '*', '+']) || source.starts_with(|c: char| c.is_ascii_digit()),
         _ => true,

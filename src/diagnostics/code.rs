@@ -55,6 +55,19 @@ pub enum DiagnosticCode {
     InputLimit,
     HeadingMarkerSpacing,
     PlaceholderUnresolved,
+    AnnotationUnknownKeyword,
+    AnnotationMalformed,
+    AnnotationConflict,
+    AnnotationDuplicate,
+    AnnotationWithoutTarget,
+    AnnotationDetached,
+    AnnotationMisplaced,
+    AlternateNotAllowed,
+    AlternateMissingDefault,
+    AlternateNotAdjacent,
+    AlternateGroupReused,
+    AlternateVariantRepeated,
+    AlternatePriorityConflict,
     // Content (doctor)
     LongBullet,
     UnquantifiedBullet,
@@ -64,6 +77,7 @@ pub enum DiagnosticCode {
     LongSummary,
     EducationNotLast,
     OldRoleDetail,
+    AlternateFactsDiffer,
     // Layout (render)
     PageLimitExceeded,
     HeadingNearPageBottom,
@@ -115,9 +129,22 @@ impl DiagnosticCode {
             | EmptyHeading
             | InputLimit
             | HeadingMarkerSpacing
-            | PlaceholderUnresolved => Category::Format,
+            | PlaceholderUnresolved
+            | AnnotationUnknownKeyword
+            | AnnotationMalformed
+            | AnnotationConflict
+            | AnnotationDuplicate
+            | AnnotationWithoutTarget
+            | AnnotationDetached
+            | AnnotationMisplaced
+            | AlternateNotAllowed
+            | AlternateMissingDefault
+            | AlternateNotAdjacent
+            | AlternateGroupReused
+            | AlternateVariantRepeated
+            | AlternatePriorityConflict => Category::Format,
             LongBullet | UnquantifiedBullet | WeakOpener | FirstPerson | SloppyPhrase | LongSummary
-            | EducationNotLast | OldRoleDetail => Category::Content,
+            | EducationNotLast | OldRoleDetail | AlternateFactsDiffer => Category::Content,
             PageLimitExceeded
             | HeadingNearPageBottom
             | SparseLastPage
@@ -156,7 +183,20 @@ impl DiagnosticCode {
             | TextTooLong
             | EmptyHeading
             | InputLimit
-            | PlaceholderUnresolved => Severity::Error,
+            | PlaceholderUnresolved
+            | AnnotationUnknownKeyword
+            | AnnotationMalformed
+            | AnnotationConflict
+            | AnnotationDuplicate
+            | AnnotationWithoutTarget
+            | AnnotationDetached
+            | AnnotationMisplaced
+            | AlternateNotAllowed
+            | AlternateMissingDefault
+            | AlternateNotAdjacent
+            | AlternateGroupReused
+            | AlternateVariantRepeated
+            | AlternatePriorityConflict => Severity::Error,
             PeriodHyphen
             | PeriodPresentSpelling
             | NestedList
@@ -168,7 +208,7 @@ impl DiagnosticCode {
             | HardBreak
             | HeadingMarkerSpacing => Severity::Warning,
             LongBullet | UnquantifiedBullet | WeakOpener | FirstPerson | SloppyPhrase | LongSummary
-            | EducationNotLast | OldRoleDetail => Severity::Warning,
+            | EducationNotLast | OldRoleDetail | AlternateFactsDiffer => Severity::Warning,
             PageLimitExceeded | ContentOverflowsPage | FontMissing => Severity::Error,
             HeadingNearPageBottom | SparseLastPage | FontFallbackLayout => Severity::Warning,
             FontFallbackMetric => Severity::Note,

@@ -311,6 +311,117 @@ impl DiagnosticCode {
                 fix: "Cut the old role to one or two bullets, or fold it into a short line.",
                 example: None,
             },
+            AnnotationUnknownKeyword => &Advice {
+                summary: "An `@` word in an annotation is not one the tool knows.",
+                why: "Project convention: `@` words are a closed set (`@core`, `@extra`, `@draft`, `@verify`), so a typo is an error, not a silent new keyword.",
+                fix: "Use one of `@core`, `@extra`, `@draft`, `@verify`, or write a topic tag with `#`.",
+                example: Some(("- Led the gateway. <!-- @cor -->", "- Led the gateway. <!-- @core -->")),
+            },
+            AnnotationMalformed => &Advice {
+                summary: "An annotation token is not `@word`, `#tag`, or `=group.variant` with valid names.",
+                why: "Project convention: tag, group, and variant names are lowercase ASCII letters and digits, starting with a letter, with single hyphens, at most 40 characters, so a position spec written months later still matches them exactly.",
+                fix: "Fix the name, or, if the comment is a note and not an annotation, start it with a word instead of `@`, `#`, or `=`.",
+                example: Some((
+                    "- Led the gateway. <!-- #AI_Platform -->",
+                    "- Led the gateway. <!-- #ai-platform -->",
+                )),
+            },
+            AnnotationConflict => &Advice {
+                summary: "One annotation gives two priorities, two statuses, or two alternates.",
+                why: "Project convention: an item has at most one priority, one status, and one alternate; two would make selection guess.",
+                fix: "Keep the one you mean and delete the other.",
+                example: Some((
+                    "- Led the gateway. <!-- @core @extra -->",
+                    "- Led the gateway. <!-- @core -->",
+                )),
+            },
+            AnnotationDuplicate => &Advice {
+                summary: "An item has two annotations.",
+                why: "Project convention: an item takes one annotation, either at the end of its line or on the line above it. Two are never merged, because a merge would guess which one you meant.",
+                fix: "Merge them into one comment, on the line above or at the end of the line.",
+                example: Some((
+                    "<!-- #ai -->\n- Led the gateway. <!-- @core -->",
+                    "- Led the gateway. <!-- @core #ai -->",
+                )),
+            },
+            AnnotationWithoutTarget => &Advice {
+                summary: "An annotation on its own line has nothing after it to annotate.",
+                why: "Project convention: a comment alone on a line annotates the line directly below it, in the same list or section; at the end of a section, file, or bullet there is nothing to annotate.",
+                fix: "Move the comment to the line directly above the item, starting where the item starts, or delete it.",
+                example: Some((
+                    "- Led the gateway.\n  <!-- #ai -->\n- Built the agent harness.",
+                    "- Led the gateway.\n<!-- #ai -->\n- Built the agent harness.",
+                )),
+            },
+            AnnotationDetached => &Advice {
+                summary: "A blank line or another comment separates an annotation from the item below it.",
+                why: "Project convention: a comment alone on a line annotates only the line directly below it, so a gap leaves it unclear what it marks.",
+                fix: "Remove the blank line or the comment between the annotation and the item.",
+                example: Some(("<!-- @extra -->\n\n## Patents", "<!-- @extra -->\n## Patents")),
+            },
+            AnnotationMisplaced => &Advice {
+                summary: "An annotation is where no annotation is allowed.",
+                why: "Project convention: annotations mark sections, roles, eras, blurbs, bullets, and paragraphs, and an inline one must end its line; on the name, the contact line, a page break, or in the middle of text it marks nothing clearly.",
+                fix: "Move it to the end of the line it marks, or onto its own line directly above it.",
+                example: Some(("- Led <!-- #ai --> the gateway.", "- Led the gateway. <!-- #ai -->")),
+            },
+            AlternateNotAllowed => &Advice {
+                summary: "An alternate wording is on a section heading, role line, or era line.",
+                why: "Project convention: headings, titles, and periods have one wording, so the resume always names a role the same way; alternates belong to blurbs, bullets, and paragraphs.",
+                fix: "Remove the `=group.variant`; keep any priority, status, or tags.",
+                example: Some((
+                    "### Acme · Architect · 2019 – 2023 <!-- =acme.short #ai -->",
+                    "### Acme · Architect · 2019 – 2023 <!-- #ai -->",
+                )),
+            },
+            AlternateMissingDefault => &Advice {
+                summary: "A group of alternate wordings has no `default` variant.",
+                why: "Project convention: a build that prefers no wording renders each group's `default`, so the baseline still reads as one resume; without one that build is undefined.",
+                fix: "Name one variant `default`.",
+                example: Some((
+                    "- Led the gateway. <!-- =gateway.long -->\n- Built the gateway. <!-- =gateway.short -->",
+                    "- Led the gateway. <!-- =gateway.default -->\n- Built the gateway. <!-- =gateway.short -->",
+                )),
+            },
+            AlternateNotAdjacent => &Advice {
+                summary: "The variants of one group are apart, in different places, or of different kinds.",
+                why: "Project convention: a group is one item worded several ways and renders where its first variant is, so its variants sit together in one section, role, era, or parent bullet, and are all bullets or all paragraphs; anything else would move or reshape text.",
+                fix: "Put the variants of the group next to each other, as the same kind of item.",
+                example: None,
+            },
+            AlternateGroupReused => &Advice {
+                summary: "Two separate groups of alternates use the same group name.",
+                why: "Project convention: a position spec picks a wording by group name alone (`pick = { gateway = \"short\" }`), so a group name must be unique in the document.",
+                fix: "Rename one of the groups.",
+                example: None,
+            },
+            AlternateVariantRepeated => &Advice {
+                summary: "A group has two variants with the same name.",
+                why: "Project convention: a variant name picks exactly one wording; two with one name leave the pick ambiguous.",
+                fix: "Rename one of the variants.",
+                example: Some((
+                    "- Led the gateway. <!-- =gateway.default -->\n- Built it. <!-- =gateway.default -->",
+                    "- Led the gateway. <!-- =gateway.default -->\n- Built it. <!-- =gateway.short -->",
+                )),
+            },
+            AlternatePriorityConflict => &Advice {
+                summary: "The variants of one group give different priorities.",
+                why: "Project convention: the variants are one item worded several ways, so they share one priority; two would make selection depend on the wording chosen.",
+                fix: "Give every variant of the group the same priority, or put it on one variant only.",
+                example: Some((
+                    "- Led the gateway. <!-- =gateway.default @core -->\n- Built it. <!-- =gateway.short @extra -->",
+                    "- Led the gateway. <!-- =gateway.default @core -->\n- Built it. <!-- =gateway.short -->",
+                )),
+            },
+            AlternateFactsDiffer => &Advice {
+                summary: "The numbers in the variants of one group differ.",
+                why: "Project convention: alternate wordings say the same facts in different words; a number that differs between them (`5,000+` and `5,000`) usually means one was edited and the other was not.",
+                fix: "Make the numbers agree, or reword so each variant states the same figures.",
+                example: Some((
+                    "- Served 5,000+ users. <!-- =reach.default -->\n- Reached 5,000 users. <!-- =reach.short -->",
+                    "- Served 5,000+ users. <!-- =reach.default -->\n- Reached 5,000+ users. <!-- =reach.short -->",
+                )),
+            },
             UnknownStyle => &Advice {
                 summary: "No style of this name exists in --styles-dir or among the built-in styles.",
                 why: "Project convention: `--style` looks in `--styles-dir` first and then among the built-in styles; a name that is in neither cannot be rendered.",

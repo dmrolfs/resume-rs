@@ -1,0 +1,190 @@
+---
+source: tests/parse_test.rs
+expression: "views(&text, parsed.diagnostics())"
+---
+[
+  {
+    "code": "alternate-not-allowed",
+    "severity": "error",
+    "range": [
+      270,
+      298
+    ],
+    "source": "<!-- =experience.default -->",
+    "message": "a section heading has one wording, so it takes no `=group.variant`",
+    "hints": [
+      "remove the `=group.variant`; keep the priority, status, and tags"
+    ],
+    "fix": null
+  },
+  {
+    "code": "annotation-unknown-keyword",
+    "severity": "error",
+    "range": [
+      364,
+      368
+    ],
+    "source": "@cor",
+    "message": "`@cor` is not an annotation keyword",
+    "hints": [
+      "did you mean `@core`?",
+      "the keywords are `@core`, `@extra`, `@draft`, and `@verify`; a topic is a `#tag`"
+    ],
+    "fix": null
+  },
+  {
+    "code": "annotation-malformed",
+    "severity": "error",
+    "range": [
+      399,
+      402
+    ],
+    "source": "#AI",
+    "message": "`AI` is not a valid tag name",
+    "hints": [
+      "names are lowercase letters and digits, starting with a letter, with single hyphens, at most 40 characters"
+    ],
+    "fix": null
+  },
+  {
+    "code": "annotation-conflict",
+    "severity": "error",
+    "range": [
+      432,
+      438
+    ],
+    "source": "@extra",
+    "message": "a second priority in one annotation",
+    "hints": [
+      "an item has at most one priority; keep the one you mean"
+    ],
+    "fix": null
+  },
+  {
+    "code": "annotation-misplaced",
+    "severity": "error",
+    "range": [
+      449,
+      461
+    ],
+    "source": "<!-- #ai -->",
+    "message": "an annotation must be the last thing on the line it marks",
+    "hints": [
+      "put the annotation at the end of the line it marks, or alone on the line directly above it"
+    ],
+    "fix": null
+  },
+  {
+    "code": "annotation-duplicate",
+    "severity": "error",
+    "range": [
+      473,
+      485
+    ],
+    "source": "<!-- #ai -->",
+    "message": "a second annotation for the same item",
+    "hints": [
+      "an item takes one annotation; merge them into one comment",
+      "merge the two annotation lines into one comment"
+    ],
+    "fix": null
+  },
+  {
+    "code": "annotation-detached",
+    "severity": "error",
+    "range": [
+      538,
+      552
+    ],
+    "source": "<!-- #data -->",
+    "message": "a blank line separates the annotation from the line below it",
+    "hints": [
+      "a comment alone on a line marks only the line directly below it; remove what is in between"
+    ],
+    "fix": null
+  },
+  {
+    "code": "annotation-without-target",
+    "severity": "error",
+    "range": [
+      619,
+      637
+    ],
+    "source": "<!-- #indented -->",
+    "message": "an annotation on its own line has nothing after it to annotate",
+    "hints": [
+      "to mark the next bullet, start the comment where that bullet's `-` starts"
+    ],
+    "fix": null
+  },
+  {
+    "code": "alternate-missing-default",
+    "severity": "error",
+    "range": [
+      667,
+      687
+    ],
+    "source": "<!-- =first.long -->",
+    "message": "the group `first` has no `default` variant",
+    "hints": [
+      "name one variant `first.default`; a build that prefers nothing renders it"
+    ],
+    "fix": null
+  },
+  {
+    "code": "alternate-variant-repeated",
+    "severity": "error",
+    "range": [
+      796,
+      819
+    ],
+    "source": "<!-- =twice.default -->",
+    "message": "`twice` has two variants named `default`",
+    "hints": [
+      "rename one of the variants"
+    ],
+    "fix": null
+  },
+  {
+    "code": "alternate-priority-conflict",
+    "severity": "error",
+    "range": [
+      882,
+      909
+    ],
+    "source": "<!-- =prio.short @extra -->",
+    "message": "this variant of `prio` has `@extra`, but the first has `@core`",
+    "hints": [
+      "the variants are one item, so they share one priority: state it on every variant, or on none"
+    ],
+    "fix": null
+  },
+  {
+    "code": "alternate-not-adjacent",
+    "severity": "error",
+    "range": [
+      982,
+      1003
+    ],
+    "source": "<!-- =apart.short -->",
+    "message": "this variant of `apart` is apart from the others",
+    "hints": [
+      "put the variants of a group next to each other, in the same section, role, era, or parent bullet"
+    ],
+    "fix": null
+  },
+  {
+    "code": "alternate-group-reused",
+    "severity": "error",
+    "range": [
+      1126,
+      1150
+    ],
+    "source": "<!-- =reused.default -->",
+    "message": "a second group is named `reused`",
+    "hints": [
+      "a position spec picks a wording by group name, so each group needs its own name; rename one"
+    ],
+    "fix": null
+  }
+]

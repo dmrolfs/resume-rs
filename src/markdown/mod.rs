@@ -7,6 +7,9 @@
 //! reports every convention violation with its source range, a hint, and an [`Edit`] when the fix is
 //! mechanical.
 
+mod annotation;
+#[cfg(test)]
+mod annotation_tests;
 mod blocks;
 mod edit_safety;
 mod inline;
@@ -524,6 +527,19 @@ mod tests {
             EmptyHeading,
             InputLimit,
             PlaceholderUnresolved,
+            AnnotationUnknownKeyword,
+            AnnotationMalformed,
+            AnnotationConflict,
+            AnnotationDuplicate,
+            AnnotationWithoutTarget,
+            AnnotationDetached,
+            AnnotationMisplaced,
+            AlternateNotAllowed,
+            AlternateMissingDefault,
+            AlternateNotAdjacent,
+            AlternateGroupReused,
+            AlternateVariantRepeated,
+            AlternatePriorityConflict,
         ];
         let warnings = [
             PeriodHyphen,

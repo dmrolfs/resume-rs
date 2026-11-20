@@ -321,7 +321,7 @@ The parser uses `pulldown-cmark` 0.13 with `into_offset_iter()`, so every event 
 
 Options: smart punctuation, tables, and footnotes. Tables and footnotes are on only so they can be diagnosed. Math, strikethrough, YAML metadata blocks, heading attributes, task lists, and definition lists stay off: a resume writes `$39K` and `~5`, and a `---` line is not front matter. Every span and Edit is checked at the one public exit, `parse`: it is in bounds and on UTF-8 character boundaries, so a consumer that slices the source with it can never panic. A violation panics in debug builds, which is how the test suite finds one, and is snapped to the nearest boundaries in release builds. A UTF-8 BOM is skipped, and a lone `\r` is treated as a line ending (offsets are unchanged, because the replacement is byte for byte). All spans index the original text, for LF, CRLF, and mixed line endings. A list's span starts at its first marker: the parser's own range for a list inside another one starts where the parent item's content column ends, so it includes any indentation past that column, the unspent part of a tab, and, after a blank line, the blank line's line ending; `tree.rs` moves the start past them. A block quote, fenced code block, heading, HTML block, or footnote does not have this problem. An indented code block's range starts after its four columns of indent, so it can begin with further indentation, which is code content and is left alone.
 
-HTML comments are skipped, and the exact page-break marker becomes a page break. Any other raw HTML is an error. A comment that never closes, text after `-->` on the same line, and a page-break marker followed by a non-blank line each hide content, so each is an `unsupported-html` error. So is a `<!--` inside a paragraph that never closes, whose text would print. `<!-->` and `<!--->` are complete comments, as in CommonMark 0.31.
+HTML comments are skipped unless they are annotations (see Annotations below), and the exact page-break marker becomes a page break. Any other raw HTML is an error. A comment that never closes, text after `-->` on the same line, and a page-break marker followed by a non-blank line each hide content, so each is an `unsupported-html` error. So is a `<!--` inside a paragraph that never closes, whose text would print. `<!-->` and `<!--->` are complete comments, as in CommonMark 0.31.
 
 | Convention | Rule | Diagnostic when violated |
 |---|---|---|
@@ -352,6 +352,47 @@ Format lints run during parsing. They are warnings about how the Markdown is wri
 - More than four contact items, counted over `·`, `|`, and `•` separators, never inside link text.
 
 Content advice (bullet length, quantification, weak openers, and so on) belongs to `doctor`. See the Doctor section.
+
+#### Annotations (`annotation.rs`, `model/annotation.rs`; rsm-141.22.1)
+
+A baseline holds every item and every wording; annotations in Markdown comments say how each item may be tailored, and a position spec (rsm-141.23) chooses tags and wordings for one application.
+A comment is an annotation when the first word of its body is `@`, `#`, or `=` followed by an ASCII letter (`annotation::is_annotation`, the one predicate resumes and letters share). The letter keeps a commented-out `## Section`, a `<!-- ===== -->` banner, and `<!-- #1 ... -->` ordinary, while `#AI` or `@Draft` is still a located typo.
+Any other comment is ordinary and dropped as before.
+
+| Token | Meaning |
+|---|---|
+| `@core`, `@extra` | Priority: at most one. |
+| `@draft`, `@verify` | Status: at most one. |
+| `#tag` | A topic tag; zero to many, duplicates collapse. |
+| `=group.variant` | One wording of a group; at most one. |
+
+Tag, group, and variant names are lowercase ASCII letters and digits, starting with a letter, with single hyphens, at most 40 characters (`Tag`, `GroupName`, `VariantName`). There is no case folding, so a spec written months earlier still matches.
+
+Two placements, both supported:
+- Inline, as the last thing on the content line, annotating that same line: `- Led the gateway. <!-- =gateway.default @core #ai -->`. An ordinary comment after it is allowed.
+- Alone on its own line, annotating the content on the line directly below it, in the same container: the document root or the same list item. Above a list it marks the first bullet; at a bullet's own indentation between bullets it marks the next bullet.
+
+The tree cannot tell a blank line from none, so the full-line rule is checked on source lines (`annotation::leading`, a pre-pass per block sequence). A column-0 comment between bullets ends the list in CommonMark; the walker joins the halves back, so annotating a bullet never changes the model.
+
+Positions: section headings, role lines, era lines, blurbs, bullets, and paragraphs. Alternates are allowed on blurbs, bullets, and paragraphs only. Annotations are `#[serde(skip)]` fields on `Section`, `Role` (and `blurb_annotations`), the era, `Bullet`, and both paragraph kinds, so JSON schema 1 is unchanged and `doctor --fix`'s whole-model comparison sees them.
+
+Ambiguity is an error, never a silent drop:
+
+| Code | When |
+|---|---|
+| `annotation-unknown-keyword` | An `@` word outside the four, with a did-you-mean hint. |
+| `annotation-malformed` | A bad name, a token without a sigil, or prose mixed into the comment. |
+| `annotation-conflict` | Two priorities, two statuses, or two alternates in one comment. |
+| `annotation-duplicate` | Two annotations for one item (two lines above it, one above and one inline, or two on one line); never merged. |
+| `annotation-without-target` | A full-line annotation with nothing after it in its container, including one indented under the bullet above. |
+| `annotation-detached` | A blank line or an ordinary comment between a full-line annotation and its target. |
+| `annotation-misplaced` | In the middle of a line, on or above the name or contact line, above a page break or unsupported block, on a line that shows nothing (an image only), a bullet that is only an annotation, a line that would otherwise continue the text above it, or a comment line between bullets that is not at their column (it would turn a nested bullet into a sibling). |
+| `alternate-not-allowed` | An alternate on a section heading, role line, or era line; its other tokens are kept. |
+| `alternate-missing-default`, `alternate-variant-repeated`, `alternate-priority-conflict` | A group without `default`, with a variant name twice, or whose variants do not all state the same priority (stating it on none is fine). |
+| `alternate-not-adjacent` | Variants of one group apart from each other, in different containers (section body, role, era, parent bullet), across a role line, era line, or page break, or of different kinds (bullets and paragraphs mixed). |
+| `alternate-group-reused` | A second group with the same name anywhere in the document; a spec picks by group name alone. |
+
+A group is a run of consecutive items of one kind in one container (a section body, role, era, or parent bullet; a blurb and the paragraphs after it are one kind) that share a group name (`annotation::group`, over a flat list of `GroupItem<T>` with caller-numbered containers and a caller payload, so letters reuse it). A comment line between bullets rejoins the list only when it is at their column and the markers match, as CommonMark would without it. The outline keeps each valid group's variant texts for doctor's `alternate-facts-differ` warning.
 
 ### Diagnostics (`src/diagnostics/`)
 
@@ -721,6 +762,7 @@ The text the tool prints itself is ASCII (`p1-2`, `;`), like the rest of the CLI
 | `sloppy-phrase` | "etc.", "and so on", "and so forth", "and the like", "various", "stuff", whole words, never inside code, in any bullet, summary, or role text. The book: sloppy phrases. |
 | `long-summary` | A Summary section (title has the word `summary` or `profile`, or is exactly `About` or `About me`) of more than 120 words, prose and bullets together. The book: keep the summary short and specific. |
 | `education-not-last` | An Education section (title has the word `education`) followed by a section that is not Education, certifications, licenses, awards, honors, publications, patents, interests, or references. The book: move Education to the end. |
+| `alternate-facts-differ` | The variants of one alternate group state different numbers (compared as a sorted list, keeping `,`, `.`, `%`, `+`, so `5,000+` and `5,000` differ). Project convention: alternates say the same facts in different words. |
 | `old-role-detail` | A role outside Education that ended 15 or more years before the latest year in the resume, with at least 2 bullets and more than the most recent role has. The latest year is the largest year in any role or era period, and the most recent role is the one with the latest end (`Present` last): neither reads the clock, so a run gives the same findings in any year. The book: older roles take proportionally less space. |
 
 The thresholds (320 characters, 120 words, 15 years, 2 bullets) and the word lists beyond the book's own examples are this project's reading of the book, and the advice for those codes says so. A section's class is decided from its title by whole word, so an unrecognized title gets fewer lints, never more.
@@ -895,3 +937,4 @@ Total: about 11.5 working days.
 - 2026-11-19 (rsm-141.8 review): independent code and test reviews of the first version (history/rsm-141.8_code-review.md, history/rsm-141.8_test-review.md) and of the version that follows the template (history/rsm-141.8_code-review-2.md, history/rsm-141.8_test-review-2.md) led to: `role-grid` and `render-sections` shared in components.typ (mono had copied their bodies); the section title reusing `section-heading-content`; contact items unbreakable, so a long line wraps between items and never inside an address or link; the stale Mono row in the reference-template table corrected; and tests that pin each decision measured against the template: the size, weight, and face of the name, contact line, section titles, role line, body, and code; the black 1 pt rule under each section title and its extent; the 17 pt gap under the name (also under a name that wraps) and centering on Letter and A4; the order of the contact items and that none is dropped; a role without a title; capitals; black everywhere except blue underlined links; a negative control for the heading guarantees on mono; and a check that mono's copy of the values approved for pragmatic (margins, spacing, line pitch, rule, bullets, footer color) stays equal to pragmatic's. Every mutation the second test review found surviving is now killed (twenty-one tried). Not used by mono: the Arimo fallback. Documented, not changed: uppercase is real text in the PDF, `ß` capitalizes to `SS`, contact items are split only at ` · `, a wrapped contact line ends with its separator, and the inline-code size is 0.8 x 0.92 em because Typst applies 0.8em to raw text itself.
 - 2026-11-18 (rsm-141.20, rsm-141.21): a nested list's span could start before its marker: with a tab after a blank line it began with the line ending and the tab (`nested-list quotes "\n\t1. "`), and with three spaces of indent it began with the extra space. Found by the `spans_are_in_bounds` property, which made `just check` fail at random. Root cause: the parser's range for a list inside another one starts where the parent item's content column ends. Of the constructs probed (block quotes, HTML, fenced code, tables, images, rules, and headings) only lists have it, and a top-level indented list had it too. The fix is one function in `tree.rs` that moves a list's start to its marker, so every finding that uses the list's range is repaired: `nested-list`, the numbered-list `unsupported-markdown`, `content-before-section` for a list, and the depth-cap `input-limit`.
 - 2026-11-19 (rsm-141.9): the `experienced` style and TeX Gyre Pagella (2.501, GUST Font License) bundled, as the fourth fallback family (8 families, 33 faces; fonts/LICENSES.md states the three LPPL conditions). The gutter is part of the left page margin (`margin.left = 0.5in + gutter + gap`), so every block starts in the text column with no per-block indent, and the name, the contact lines and the footer reach back over it (`gutter-reach`, derived in the style from `gutter` and `page-margin` and read by `resume-document` with a default of 0pt, so the other styles are unchanged). The section label shares one grid row with the first unit of its section (a block, or for a role its heading and blurb), which keeps it at that line's height and off the foot of a page; the row is sticky when a role's heading has something after it, because a grid cell is one block and the heading's own stickiness does not reach out of it. `role-head` and `role-body` were split out of `render-role` for that. A resume that only parses to a labeled-bullet block gets the skills table; one unlabeled bullet in the block makes it a list. A Pagella fallback for Book Antiqua is `font-fallback-layout` (a warning), by the theme's `metric-compatible: false`.
+- 2026-11-20 (rsm-141.22.1, oracle design in history/rsm-141.22.1_oracle-q1-design.md): tailoring annotations. The usage model is spec-driven: one baseline with annotations, one position spec per application, no clone-and-edit. Both placements (inline marks its own line; a comment alone on a line marks the line below), ambiguity as located errors (13 Format codes, one Content warning), document-unique group names, names shared with spec TOML, `#[serde(skip)]` fields on the model, and one shared `markdown::annotation` module that the letter parser reuses (rsm-5q1.2, rsm-vqr.1).
