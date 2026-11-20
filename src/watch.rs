@@ -11,7 +11,7 @@ use notify::event::{AccessKind, AccessMode, EventKind};
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use snafu::ResultExt;
 
-use crate::error::{Error, ReadInputSnafu, WatchSnafu};
+use crate::error::{Error, ReadInputSnafu, WatchInputSnafu, WatchSnafu};
 
 /// How many unprocessed signals may wait. A full channel already means a rebuild is pending, so a signal that
 /// does not fit is dropped and nothing is lost; memory stays bounded however slow a build is.
@@ -47,27 +47,35 @@ impl Watched {
     ///
     /// # Errors
     /// - `Error::ReadInput` - `input` does not exist or cannot be resolved
+    /// - `Error::WatchInput` - `input` resolves to a file system root, which has no directory beside it to watch
     /// - `Error::StyleRoot` - `styles_dir` cannot be resolved
     pub fn resolve(input: &Path, styles_dir: Option<&Path>, out_dir: &Path, cwd: &Path) -> Result<Self, Error> {
         let canonical = std::fs::canonicalize(input).context(ReadInputSnafu { path: input })?;
         let styles_dir = styles_dir
             .map(|dir| std::fs::canonicalize(dir).context(crate::error::StyleRootSnafu { path: dir }))
             .transpose()?;
-        Ok(Self::from_parts(
+        let (Some(input_dir), Some(input_name)) = (
+            canonical.parent().map(Path::to_path_buf),
+            canonical.file_name().map(OsString::from),
+        ) else {
+            return WatchInputSnafu { path: canonical }.fail();
+        };
+        Ok(Self::new(
             canonical,
+            input_dir,
+            input_name,
             styles_dir,
             canonical_if_possible(&cwd.join(out_dir)),
         ))
     }
 
-    /// The same from paths already made canonical, for tests.
-    ///
-    /// # Panics
-    /// `input` has no parent or no file name.
-    #[must_use]
-    pub fn from_parts(input: PathBuf, styles_dir: Option<PathBuf>, out_dir: PathBuf) -> Self {
-        let input_dir = input.parent().expect("a canonical input has a parent").to_path_buf();
-        let input_name = input.file_name().expect("a canonical input has a name").to_os_string();
+    fn new(
+        input: PathBuf,
+        input_dir: PathBuf,
+        input_name: OsString,
+        styles_dir: Option<PathBuf>,
+        out_dir: PathBuf,
+    ) -> Self {
         Self {
             input_dir,
             input_name,
@@ -302,6 +310,21 @@ fn relay(watched: &Watched, sender: &SyncSender<Signal>, event: notify::Result<E
 }
 
 #[cfg(test)]
+impl Watched {
+    /// The same from paths already made canonical, for tests elsewhere in the crate.
+    pub(crate) fn from_parts_for_test(input: PathBuf, styles_dir: Option<PathBuf>, out_dir: PathBuf) -> Self {
+        Self::from_parts(input, styles_dir, out_dir)
+    }
+
+    /// The same from paths already made canonical, so a test need not touch the file system.
+    fn from_parts(input: PathBuf, styles_dir: Option<PathBuf>, out_dir: PathBuf) -> Self {
+        let input_dir = input.parent().expect("a test input has a parent").to_path_buf();
+        let input_name = input.file_name().expect("a test input has a name").to_os_string();
+        Self::new(input, input_dir, input_name, styles_dir, out_dir)
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use notify::event::{CreateKind, DataChange, Flag, MetadataKind, ModifyKind, RemoveKind, RenameMode};
@@ -519,6 +542,15 @@ mod tests {
     }
 
     #[test]
+    fn a_file_system_root_is_an_error_and_not_a_panic() {
+        let cwd = std::env::current_dir().expect("cwd");
+        let root = cwd.ancestors().last().expect("a root").to_path_buf();
+        let error = Watched::resolve(&root, None, Path::new("out"), &cwd).expect_err("a root cannot be watched");
+        assert!(matches!(error, Error::WatchInput { .. }), "{error:?}");
+        assert!(error.to_string().contains("not a file that can be watched"), "{error}");
+    }
+
+    #[test]
     fn resolve_fails_for_a_missing_input_and_a_missing_styles_directory() {
         let dir = tempfile::tempdir().expect("tempdir");
         let real = std::fs::canonicalize(dir.path()).expect("canonical");
@@ -656,7 +688,9 @@ mod tests {
         sender_thread.join().expect("join");
         assert_eq!(next, Next::Changed(Vec::new()));
         assert!(waited >= Duration::from_millis(900), "{waited:?}");
-        assert!(waited < Duration::from_secs(5), "{waited:?}");
+        // The ceiling (1s) plus at most one more debounce (250ms) and slack; a wait that ignored the ceiling and
+        // went on for a debounce after the last signal would end when the sender stopped, long after this.
+        assert!(waited < Duration::from_millis(2500), "{waited:?}");
     }
 
     #[test]

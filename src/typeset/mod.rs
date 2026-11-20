@@ -69,7 +69,8 @@ impl Typesetter {
     /// Evicts memoized results not used in the last `max_age` compiles.
     ///
     /// Typst memoizes layout work in a process-wide cache that never shrinks on its own, so a
-    /// long-running caller such as `watch` should call this after each build.
+    /// long-running caller such as `watch` should call this after each build. The cache is shared by every
+    /// `Typesetter` in the process, so this trims all of them; that only costs speed, never results.
     pub fn evict_cache(max_age: usize) {
         typst::comemo::evict(max_age);
     }

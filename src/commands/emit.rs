@@ -58,9 +58,12 @@ impl<'a, 'io> Reporter<'a, 'io> {
     /// Sends what has been written so far, for a command that runs for a long time: the real streams are
     /// buffered and flushed when the process ends, so a loop that does not call this shows nothing until then.
     /// A closed pipe is the reader's choice; a failure has nowhere to be reported, as for the other lines.
-    pub(super) fn flush(&mut self) {
+    ///
+    /// Returns `false` when stderr's reader has gone (a closed pipe), so a command that would otherwise run
+    /// unseen can stop. Any other failure has nowhere to be reported, and the command goes on.
+    pub(super) fn flush(&mut self) -> bool {
         let _ = self.io.stdout.flush();
-        let _ = self.io.stderr.flush();
+        !matches!(self.io.stderr.flush(), Err(error) if error.kind() == io::ErrorKind::BrokenPipe)
     }
 
     /// One line of progress or result, on stderr like the summary lines.

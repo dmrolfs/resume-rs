@@ -1,10 +1,10 @@
 //! ABOUTME: `resume watch`: builds the PDF, then again whenever the resume or a style file changes.
-//! ABOUTME: A build that fails is printed and the watch goes on; only a watcher that cannot start ends it.
+//! ABOUTME: A build that fails is printed and the watch goes on; a watcher that cannot start or dies, or a closed stderr, ends it.
 
 use std::path::Path;
 use std::sync::mpsc::Receiver;
 
-use super::build::{Built1, Job};
+use super::build::{BuiltFile, Job};
 use super::emit::Reporter;
 use super::{Env, Io, Outcome};
 use crate::cli::{Cli, WatchArgs};
@@ -18,7 +18,8 @@ const KEEP_BUILDS: usize = 10;
 /// Opens a file with the program the system chooses for it.
 type Opener<'a> = &'a mut dyn FnMut(&Path) -> std::io::Result<()>;
 
-/// Runs until the process is stopped; an error here is a watch that could not start.
+/// Runs until the process is stopped. An error here is a watch that could not start; a watcher that dies later, or a
+/// stderr nobody reads any more, ends it from inside the loop.
 pub(super) fn run(cli: &Cli, args: &WatchArgs, env: &Env, io: &mut Io<'_>) -> Outcome {
     let mut out = Reporter::new(cli.format, &env.cwd, io);
     let mut never = || false;
@@ -72,8 +73,12 @@ fn serve(
         let built = job.build_one(&args.file, out);
         Typesetter::evict_cache(KEEP_BUILDS);
         open_once(&mut opened, &built, open, out);
-        // The process's streams are buffered until it exits, which a watch never does.
-        out.flush();
+        // The process's streams are buffered until it exits, which a watch never does. Nobody is reading a closed
+        // stderr, so a watch that went on would rebuild unseen for as long as it lived: end it, as a reader that
+        // closed the pipe (`| head`) asked, the way `product` treats a closed stdout.
+        if !out.flush() {
+            return Outcome::Success;
+        }
         match next_change(signals, args.debounce, ceiling, stop) {
             Next::Changed(notes) => notes.iter().for_each(|note| out.line(&format!("warning: {note}"))),
             Next::Stopped => return Outcome::Success,
@@ -88,7 +93,7 @@ fn serve(
 
 /// Opens the PDF the first time one has been written, even one with layout errors in it, which is when the
 /// author most wants to see it. Failing to open it is a warning.
-fn open_once(opened: &mut Option<bool>, built: &Built1, open: Opener<'_>, out: &mut Reporter<'_, '_>) {
+fn open_once(opened: &mut Option<bool>, built: &BuiltFile, open: Opener<'_>, out: &mut Reporter<'_, '_>) {
     let (Some(false), Some(pdf)) = (*opened, built.wrote.as_deref()) else {
         return;
     };
@@ -483,15 +488,19 @@ mod tests {
             RESUME,
             "\n### Beta · Lead · 2010 – 2014\n\n- Grew 3 teams.\n".repeat(30)
         );
-        let (file, text) = (broken.clone(), long);
+        let (file, text, seen_so_far) = (broken.clone(), long, stderr.clone());
         let mut round = 0;
         let mut stop = || {
             round += 1;
-            // Round 1 is the wait after the broken first build: write a resume that is too long for one page.
-            if round == 1 {
-                std::fs::write(&file, &text).expect("write");
+            // From the first wait after the broken build, save a resume too long for one page, the way an editor
+            // does, and again every two seconds until the second build has happened: an event right after a watch
+            // is armed can be late or lost on macOS.
+            if (round == 1 || round % 20 == 0) && seen_so_far.builds() < 2 {
+                let sibling = file.with_file_name(".Resume.md.swp");
+                assert_ok!(std::fs::write(&sibling, &text));
+                assert_ok!(std::fs::rename(&sibling, &file));
             }
-            round >= 60
+            seen_so_far.builds() >= 2 || round >= 200
         };
         let mut open = |path: &Path| {
             opened.push(path.to_path_buf());
@@ -506,6 +515,7 @@ mod tests {
             .lines()
             .filter(|l| l.starts_with("ok ") || l.starts_with("error "))
             .collect();
+        assert!(summaries.len() >= 2, "{seen}");
         assert!(
             summaries[0].starts_with("error ") && summaries[0].contains("no PDF written"),
             "{seen}"
@@ -658,16 +668,23 @@ mod tests {
             .wait_for("the first build, with the built-in style", |t| t.contains("built in "));
         // A style called `pragmatic` appears in the styles directory with the files of `mono`.
         write_style(&styles, "mono", "pragmatic");
-        wait_for_pdf(&pdf, &pdf_of_style(&styles, "pragmatic"), &run.stderr);
+        let before = pdf_of_style(&styles, "pragmatic");
+        wait_for_pdf(&pdf, &before, &run.stderr);
         // Then one of its files is edited, which is what a style author does all day.
         let theme = styles.join("pragmatic/theme.typ");
-        let edited = format!(
-            "{}\n// an edit that changes the style's bytes\n",
-            assert_ok!(std::fs::read_to_string(&theme))
-        )
-        .replacen("size: (body: 10pt", "size: (body: 13pt", 1);
+        let original = assert_ok!(std::fs::read_to_string(&theme));
+        let edited = original.replacen("size: (body: 11pt", "size: (body: 13pt", 1);
+        assert_ne!(
+            original, edited,
+            "the edit must find the text it changes, or the test proves nothing"
+        );
         assert_ok!(std::fs::write(&theme, edited));
-        wait_for_pdf(&pdf, &pdf_of_style(&styles, "pragmatic"), &run.stderr);
+        let wanted = pdf_of_style(&styles, "pragmatic");
+        assert_ne!(
+            before, wanted,
+            "the edit must change the PDF, or the wait below passes at once"
+        );
+        wait_for_pdf(&pdf, &wanted, &run.stderr);
         assert_ok!(run.finish());
     }
 
@@ -770,6 +787,54 @@ mod tests {
         (outcome, stderr.text())
     }
 
+    /// A stderr whose reader has gone: writes are taken and a flush finds the pipe closed.
+    struct ClosedPipe(Shared);
+
+    impl Write for ClosedPipe {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.write(bytes)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::ErrorKind::BrokenPipe.into())
+        }
+    }
+
+    #[test]
+    fn a_closed_stderr_ends_the_watch_after_the_first_build_instead_of_running_unseen() {
+        let dir = assert_ok!(tempfile::tempdir());
+        let real = assert_ok!(std::fs::canonicalize(dir.path()));
+        assert_ok!(std::fs::write(real.join("Resume.md"), RESUME));
+        let cli = assert_ok!(Cli::try_parse_validated(watch_args(
+            &real,
+            &["--out", &real.join("out").display().to_string()]
+        )));
+        let Command::Watch(args) = &cli.command else {
+            panic!("watch")
+        };
+        let env = Env {
+            cwd: real.clone(),
+            resume_font_path: None,
+        };
+        let seen = Shared::default();
+        let mut stdout = Vec::new();
+        let mut sink = NoColor::new(ClosedPipe(seen.clone()));
+        let mut io = Io {
+            stdout: &mut stdout,
+            stderr: &mut sink,
+        };
+        let mut out = Reporter::new(cli.format, &env.cwd, &mut io);
+        let started = Instant::now();
+        // `stop` would end it only after the deadline; the closed pipe has to end it first.
+        let mut stop = || started.elapsed() > Duration::from_secs(5);
+        let outcome = assert_ok!(watch(&cli, args, &env, &mut out, &mut stop, &mut |_| Ok(())));
+        assert_eq!(outcome, Outcome::Success);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the watch waited for a reader that is gone"
+        );
+        assert_eq!(seen.builds(), 1, "{}", seen.text());
+    }
+
     #[test]
     fn a_watcher_that_is_gone_ends_the_watch_with_failure_and_says_why() {
         let (outcome, text) = serve_with(Vec::new(), false);
@@ -796,6 +861,130 @@ mod tests {
         );
         assert!(text.contains("warning: events were lost"), "{text}");
         assert_eq!(text.lines().filter(|l| l.starts_with("ok ")).count(), 2, "{text}");
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // what a build reports, and failures that end or do not end the watch
+    // ------------------------------------------------------------------------------------------
+
+    fn job_in(real: &Path, extra: &[&str]) -> (Cli, Env) {
+        let mut args = watch_args(real, &["--out", &real.join("out").display().to_string()]);
+        args.extend(extra.iter().map(|a| (*a).to_string()));
+        (
+            assert_ok!(Cli::try_parse_validated(args)),
+            Env {
+                cwd: real.to_path_buf(),
+                resume_font_path: None,
+            },
+        )
+    }
+
+    fn build_once(real: &Path, extra: &[&str]) -> (BuiltFile, String) {
+        let (cli, env) = job_in(real, extra);
+        let Command::Watch(args) = &cli.command else {
+            panic!("watch")
+        };
+        let job = assert_ok!(Job::open(&cli, &args.out, &args.render, &env));
+        let stderr = Shared::default();
+        let mut stdout = Vec::new();
+        let mut sink = NoColor::new(stderr.clone());
+        let mut io = Io {
+            stdout: &mut stdout,
+            stderr: &mut sink,
+        };
+        let mut out = Reporter::new(cli.format, &env.cwd, &mut io);
+        let built = job.build_one(&args.file, &mut out);
+        (built, stderr.text())
+    }
+
+    #[test]
+    fn a_pdf_that_was_written_is_reported_and_one_that_was_not_is_not() {
+        let dir = assert_ok!(tempfile::tempdir());
+        let real = assert_ok!(std::fs::canonicalize(dir.path()));
+        // Written.
+        assert_ok!(std::fs::write(real.join("Resume.md"), RESUME));
+        let (built, text) = build_once(&real, &[]);
+        assert_eq!(built.wrote, Some(real.join("out/Resume.pdf")), "{text}");
+        assert_eq!(built.outcome, Outcome::Success);
+        // Written, with a layout error: the outcome is a failure and the PDF is still there to open.
+        let long = format!(
+            "{RESUME}{}",
+            "\n### Beta · Lead · 2010 – 2014\n\n- Grew 3 teams.\n".repeat(30)
+        );
+        assert_ok!(std::fs::write(real.join("Resume.md"), long));
+        let (built, text) = build_once(&real, &["--max-pages", "1"]);
+        assert_eq!(
+            (built.outcome, built.wrote),
+            (Outcome::Failure, Some(real.join("out/Resume.pdf"))),
+            "{text}"
+        );
+        // Format errors: nothing is written.
+        assert_ok!(std::fs::write(real.join("Resume.md"), "## Experience\n\n- no name\n"));
+        let (built, text) = build_once(&real, &[]);
+        assert_eq!((built.outcome, built.wrote), (Outcome::Failure, None), "{text}");
+        // An input that cannot be read.
+        assert_ok!(std::fs::remove_file(real.join("Resume.md")));
+        let (built, text) = build_once(&real, &[]);
+        assert_eq!((built.outcome, built.wrote), (Outcome::Failure, None), "{text}");
+        assert!(text.contains("cannot read"), "{text}");
+    }
+
+    #[test]
+    fn a_pdf_that_could_not_be_written_is_not_reported_so_open_never_shows_a_stale_one() {
+        let dir = assert_ok!(tempfile::tempdir());
+        let real = assert_ok!(std::fs::canonicalize(dir.path()));
+        assert_ok!(std::fs::write(real.join("Resume.md"), RESUME));
+        // `out` is a file, so the PDF cannot go there on any system.
+        assert_ok!(std::fs::write(real.join("out"), "in the way"));
+        let (built, text) = build_once(&real, &[]);
+        assert_eq!((built.outcome, built.wrote), (Outcome::Failure, None), "{text}");
+        assert!(text.contains("no PDF written"), "{text}");
+    }
+
+    #[test]
+    fn a_watcher_that_cannot_start_is_an_error_that_names_the_directory_and_ends_the_watch() {
+        let dir = assert_ok!(tempfile::tempdir());
+        let real = assert_ok!(std::fs::canonicalize(dir.path()));
+        let gone = Watched::from_parts_for_test(real.join("gone/Resume.md"), None, real.join("out"));
+        let Err(error) = Watching::start(&gone) else {
+            panic!("a directory that is not there cannot be watched")
+        };
+        assert!(matches!(error, Error::Watch { .. }), "{error:?}");
+        let text = error.to_string();
+        assert!(text.starts_with("cannot watch ") && text.contains("gone"), "{text}");
+    }
+
+    #[test]
+    fn a_style_that_goes_away_while_watching_is_reported_and_the_watch_builds_again_when_it_returns() {
+        let dir = assert_ok!(tempfile::tempdir());
+        let real = assert_ok!(std::fs::canonicalize(dir.path()));
+        let styles = real.join("styles");
+        // `mine` has no built-in twin, so removing it is a real failure and not a fall back to a built-in.
+        write_style(&styles, "mono", "mine");
+        let run = Running::start_in(
+            dir,
+            &["--styles-dir", &styles.display().to_string(), "--style", "mine"],
+            &real.join("out"),
+        );
+        run.stderr.wait_for("the first build", |t| t.contains("built in "));
+        assert_ok!(std::fs::remove_dir_all(styles.join("mine")));
+        run.save_until_builds(2, &|n| resume_named(&format!("Ada Gone{n}")));
+        // The style cannot be found again, so that is said; the style kept from before reads its files from the
+        // directory that is gone, so the build fails too. Neither ends the watch.
+        run.stderr.wait_for("both errors", |t| {
+            t.contains("error: unknown style `mine`") && t.contains("file not found (searched at mine/style.typ)")
+        });
+        // The style comes back, and the next save builds with it.
+        write_style(&styles, "mono", "mine");
+        let before = run.stderr.builds();
+        run.save_until_builds(before + 1, &|n| resume_named(&format!("Ada Back{n}")));
+        run.stderr.wait_for("a good build after the style returned", |t| {
+            t.lines()
+                .rfind(|l| l.starts_with("ok ") || l.starts_with("error "))
+                .is_some_and(|l| l.starts_with("ok "))
+                && pdf_names(&run.path("out/Resume.pdf"), "Ada Back")
+        });
+        assert_ok!(run.finish());
     }
 
     #[cfg(windows)]

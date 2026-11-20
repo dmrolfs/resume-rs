@@ -10,7 +10,8 @@ use typst::foundations::Bytes;
 use typst::syntax::VirtualPath;
 
 use crate::error::{
-    Error, StyleFileSnafu, StyleMissingMainSnafu, StyleOutsideRootSnafu, StyleRootSnafu, UnknownStyleSnafu,
+    Error, StyleDirectorySnafu, StyleFileSnafu, StyleMissingMainSnafu, StyleOutsideRootSnafu, StyleRootSnafu,
+    UnknownStyleSnafu,
 };
 use crate::model::StyleName;
 use crate::model::options::BuiltinStyle;
@@ -393,16 +394,18 @@ fn walk_directory(root: &Path, relative: &Path, files: &mut Vec<(PathBuf, Vec<u8
     let entries = match std::fs::read_dir(&here) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(source) => return Err(Error::StyleRoot { path: here, source }),
+        Err(source) => return Err(source).context(StyleDirectorySnafu { path: here }),
     };
     for entry in entries {
-        let entry = entry.context(StyleRootSnafu { path: &here })?;
+        let entry = entry.context(StyleDirectorySnafu { path: &here })?;
         let name = entry.file_name();
         if name.to_string_lossy().starts_with('.') {
             continue;
         }
         let child = relative.join(&name);
-        let kind = entry.file_type().context(StyleRootSnafu { path: here.join(&name) })?;
+        let kind = entry
+            .file_type()
+            .context(StyleDirectorySnafu { path: here.join(&name) })?;
         if kind.is_dir() {
             walk_directory(root, &child, files)?;
         } else {

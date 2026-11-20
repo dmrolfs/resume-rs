@@ -55,6 +55,9 @@ pub enum Error {
     #[snafu(display("cannot open styles directory {}: {source}", path.display()))]
     StyleRoot { path: PathBuf, source: std::io::Error },
 
+    #[snafu(display("cannot list the style directory {}: {source}", path.display()))]
+    StyleDirectory { path: PathBuf, source: std::io::Error },
+
     #[snafu(display("cannot read the style file {}: {source}", path.display()))]
     StyleFile {
         path: PathBuf,
@@ -108,6 +111,10 @@ pub enum Error {
     /// The operating system would not report changes to a path, so `watch` cannot see edits there.
     #[snafu(display("cannot watch {} for changes: {source}", path.display()))]
     Watch { path: PathBuf, source: notify::Error },
+
+    /// The path to watch is a file system root or otherwise has no directory to watch beside it.
+    #[snafu(display("{} is not a file that can be watched: it has no directory or no name", path.display()))]
+    WatchInput { path: PathBuf },
 
     #[snafu(display("the style failed to compile ({} errors)", errors_in(diagnostics)))]
     Compile {

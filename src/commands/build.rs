@@ -48,7 +48,7 @@ pub(super) struct Job<'a> {
 
 /// What building one file came to.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct Built1 {
+pub(super) struct BuiltFile {
     /// How the file's build ended, by its findings.
     pub outcome: Outcome,
     /// The PDF that was written; `None` when none was, including in a dry run. A layout error still writes
@@ -86,7 +86,7 @@ fn summary_with_error(findings: &[&Diagnostic], error: Option<&Error>) -> Summar
     }
 }
 
-impl Built1 {
+impl BuiltFile {
     fn unwritten(outcome: Outcome) -> Self {
         Self { outcome, wrote: None }
     }
@@ -117,11 +117,11 @@ impl<'a> Job<'a> {
         })
     }
 
-    pub(super) fn build_one(&self, file: &Path, out: &mut Reporter<'_, '_>) -> Built1 {
+    pub(super) fn build_one(&self, file: &Path, out: &mut Reporter<'_, '_>) -> BuiltFile {
         let started = Instant::now();
         match self.attempt(file, started, out) {
             Ok(built) => built,
-            Err(error) => Built1::unwritten(self.present(
+            Err(error) => BuiltFile::unwritten(self.present(
                 BuildResult::failed(self.shown(file), &error),
                 started,
                 &[],
@@ -132,7 +132,7 @@ impl<'a> Job<'a> {
         }
     }
 
-    fn attempt(&self, file: &Path, started: Instant, out: &mut Reporter<'_, '_>) -> Result<Built1, Error> {
+    fn attempt(&self, file: &Path, started: Instant, out: &mut Reporter<'_, '_>) -> Result<BuiltFile, Error> {
         let text = fs::read_to_string(file).context(ReadInputSnafu { path: file })?;
         let assessment = self.session.assess(file, &text, self.render);
         let mut sources = out.sources();
@@ -140,7 +140,7 @@ impl<'a> Job<'a> {
         let parsed = &assessment.parsed;
         let (compiled, layout) = match &assessment.rendered {
             Rendered::Skipped(Skip::FormatErrors) => {
-                return Ok(Built1::unwritten(
+                return Ok(BuiltFile::unwritten(
                     self.without_pdf(file, parsed, &sources, started, out),
                 ));
             }
@@ -148,7 +148,7 @@ impl<'a> Job<'a> {
             Rendered::Skipped(Skip::Setup) => unreachable!("build requires a ready session before any file"),
             Rendered::Failed(error) => {
                 let findings: Vec<&Diagnostic> = parsed.diagnostics().iter().collect();
-                return Ok(Built1::unwritten(self.present(
+                return Ok(BuiltFile::unwritten(self.present(
                     BuildResult::failed(self.shown(file), error),
                     started,
                     &findings,
@@ -162,7 +162,7 @@ impl<'a> Job<'a> {
                     sources.insert(&style_file.path, &style_file.text);
                 }
                 let findings: Vec<&Diagnostic> = parsed.diagnostics().iter().chain(compiled.warnings()).collect();
-                return Ok(Built1::unwritten(self.present(
+                return Ok(BuiltFile::unwritten(self.present(
                     BuildResult::failed(self.shown(file), error),
                     started,
                     &findings,
@@ -190,7 +190,7 @@ impl<'a> Job<'a> {
         let written = match written {
             Ok(written) => written,
             Err(error) => {
-                return Ok(Built1::unwritten(self.present(
+                return Ok(BuiltFile::unwritten(self.present(
                     BuildResult::failed(self.shown(file), &error),
                     started,
                     &findings,
@@ -224,7 +224,7 @@ impl<'a> Job<'a> {
             &sources,
             out,
         );
-        Ok(Built1 {
+        Ok(BuiltFile {
             outcome,
             wrote: (self.writer.mode() == WriteMode::Write).then_some(target),
         })

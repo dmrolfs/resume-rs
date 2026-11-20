@@ -717,10 +717,15 @@ mod tests {
                 reads
             })
         };
+        let mut written = 0;
         for round in 1..=40 {
             // On Windows a write can fail while the reader has the file open; a build tells the user and goes on.
-            let _ = write(&target, &whole(round));
+            written += usize::from(write(&target, &whole(round)).is_ok());
         }
+        assert!(
+            written > 0,
+            "no write got through, so nothing was replaced and the reader proved nothing"
+        );
         done.store(true, Ordering::SeqCst);
         assert!(reader.join().expect("the reader saw only whole files") > 0);
         assert_eq!(
