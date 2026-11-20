@@ -34,7 +34,8 @@ fn export(cli: &Cli, args: &ExportStyleArgs, env: &Env, out: &mut Reporter<'_, '
         .collect();
 
     // Every target is looked at before any is written, so one existing file stops the whole export and a
-    // style is never left half copied. The same check runs in a dry run.
+    // refusal writes nothing. A failure while writing (a full disk) stops at the first file that fails, after
+    // the `created` lines of the ones written. The same check runs in a dry run.
     let check = Writer::new(WriteMode::DryRun);
     let refused: Vec<Error> = targets
         .iter()

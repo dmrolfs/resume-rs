@@ -27,6 +27,8 @@ use crate::model::Resume;
 
 /// Largest accepted input; larger inputs yield one `input-limit` error and no model.
 pub const MAX_INPUT_BYTES: usize = 1 << 20;
+#[cfg(test)]
+pub(crate) use self::blocks::PAGE_BREAK;
 /// Deepest nesting of emphasis, strong, and links kept; deeper runs are flattened.
 pub(crate) const MAX_INLINE_DEPTH: usize = 8;
 /// Deepest nesting of lists kept; deeper lists are skipped.

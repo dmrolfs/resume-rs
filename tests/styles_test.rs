@@ -61,6 +61,15 @@ fn styles_lists_every_embedded_builtin() {
         .filter_map(|line| line.split_whitespace().next())
         .collect();
     assert!(names.contains(&"pragmatic"), "{}", run.stdout);
+    // What is listed is exactly what is embedded: every directory under styles/ except the shared lib.
+    let mut embedded: Vec<String> = assert_ok!(fs::read_dir(repo_styles()))
+        .map(|entry| assert_ok!(entry).path())
+        .filter(|path| path.is_dir())
+        .filter_map(|path| path.file_name().map(|name| name.to_string_lossy().into_owned()))
+        .filter(|name| name != "lib" && !name.starts_with('.'))
+        .collect();
+    embedded.sort();
+    assert_eq!(names, embedded, "{}", run.stdout);
     for name in &names {
         assert!(
             name.parse::<BuiltinStyle>().is_ok(),
@@ -68,6 +77,17 @@ fn styles_lists_every_embedded_builtin() {
         );
     }
     assert!(run.stdout.contains("built-in"), "{}", run.stdout);
+}
+
+#[test]
+fn format_json_does_not_change_the_text_commands() {
+    let work = Workspace::new();
+    for command in ["styles", "licenses"] {
+        let human = work.run(&args(&[command]));
+        let json = work.run(&args(&["--format", "json", command]));
+        assert_eq!(json.outcome, Outcome::Success, "{}", json.stderr);
+        assert_eq!(json.stdout, human.stdout, "{command}");
+    }
 }
 
 #[test]
@@ -245,6 +265,19 @@ fn export_style_refuses_to_overwrite_without_force() {
     assert!(run.stderr.contains("already exists"), "{}", run.stderr);
     assert!(run.stderr.contains("--force"), "{}", run.stderr);
     assert!(run.stderr.contains("theme.typ"), "{}", run.stderr);
+}
+
+#[test]
+fn a_dry_run_refuses_an_existing_export_like_a_real_run_and_touches_nothing() {
+    let work = Workspace::new();
+    assert_eq!(export(&work, &[]).outcome, Outcome::Success);
+    let edited = work.path().join("mine").join("pragmatic").join("theme.typ");
+    assert_ok!(fs::write(&edited, "my edits"));
+    let run = export(&work, &["--dry-run"]);
+    assert_eq!(run.outcome, Outcome::Failure, "{}", run.stderr);
+    assert!(run.stderr.contains("already exists"), "{}", run.stderr);
+    assert!(run.stderr.contains("--force"), "{}", run.stderr);
+    assert_eq!(assert_ok!(fs::read_to_string(&edited)), "my edits");
 }
 
 #[test]

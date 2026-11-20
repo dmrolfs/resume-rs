@@ -15,7 +15,7 @@ use crate::model::text::{NameError, SectionTitleError};
 use crate::model::{Block, Bullet, Inline, Name, Resume, Role, RoleBlock, Section, SectionTitle};
 
 /// The one HTML construct allowed besides comments: a forced page break.
-const PAGE_BREAK: &str = r#"<div class="page-break"></div>"#;
+pub(crate) const PAGE_BREAK: &str = r#"<div class="page-break"></div>"#;
 
 /// Interprets the document; `None` only when no valid name heading exists.
 pub(crate) fn interpret(doc: &Document, src: &Source<'_>, sink: &mut Sink<'_>) -> Option<Resume> {

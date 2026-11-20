@@ -77,18 +77,15 @@ impl Writer {
     /// # Errors
     /// - `Error::OutputIsDirectory`, `Error::OutputReadOnly`, `Error::OutputExists` - the target cannot be
     ///   replaced; a dry run reports these too
-    /// - `Error::CreateOutputDir` - the directory could not be created
+    /// - `Error::CreateOutputDir` - the directory could not be created; a dry run also reports a parent that
+    ///   is not a directory (a file, or a dangling link), which a write could not create either
     /// - `Error::OutputLocked` - another program holds the target open (Windows)
     /// - `Error::WriteOutput` - any other failure writing the file
     pub fn commit(&self, planned: Planned<'_>) -> Result<Written, Error> {
         let replaces = preflight(planned.target, planned.overwrite)?;
+        let creates_dir = missing_directory(directory_of(planned.target))?;
         match self.mode {
-            WriteMode::DryRun => Ok(Written::WouldWrite {
-                replaces,
-                creates_dir: Some(directory_of(planned.target))
-                    .filter(|dir| !dir.exists())
-                    .map(Path::to_path_buf),
-            }),
+            WriteMode::DryRun => Ok(Written::WouldWrite { replaces, creates_dir }),
             WriteMode::Write => {
                 write_atomic(planned.target, planned.bytes, planned.overwrite)?;
                 Ok(Written::Wrote { replaced: replaces })
@@ -103,6 +100,34 @@ fn directory_of(target: &Path) -> &Path {
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or(Path::new("."))
+}
+
+/// The topmost directory a write would have to create, or `None` when `dir` exists.
+///
+/// Walks up to the nearest existing ancestor and refuses, in a write and in a dry run alike, when that is not
+/// a directory: `create_dir_all` would fail on it, so a dry run must not say "new file". Permissions and free
+/// space are not checked; only attempting the write can tell.
+fn missing_directory(dir: &Path) -> Result<Option<PathBuf>, Error> {
+    let mut missing = None;
+    for ancestor in dir.ancestors().filter(|ancestor| !ancestor.as_os_str().is_empty()) {
+        match fs::metadata(ancestor) {
+            Ok(meta) if meta.is_dir() => return Ok(missing.map(Path::to_path_buf)),
+            Ok(_) => {
+                let source = io::Error::new(
+                    io::ErrorKind::NotADirectory,
+                    "a parent of the output is not a directory",
+                );
+                return Err(source).context(CreateOutputDirSnafu { path: ancestor });
+            }
+            // `metadata` follows links, so a dangling symlink looks missing, but `create_dir_all` cannot create
+            // a directory where the link is: refuse it like any other non-directory.
+            Err(source) if source.kind() == io::ErrorKind::NotFound && fs::symlink_metadata(ancestor).is_err() => {
+                missing = Some(ancestor);
+            }
+            Err(source) => return Err(source).context(CreateOutputDirSnafu { path: ancestor }),
+        }
+    }
+    Ok(missing.map(Path::to_path_buf))
 }
 
 /// Checks, in a write and in a dry run alike, that the target can be replaced, and returns whether it exists.
@@ -436,6 +461,105 @@ mod tests {
         assert_ok!(fs::write(&file, b"x"));
         let err = assert_err!(write(&file.join("out.pdf"), b"new"));
         assert!(matches!(err, Error::WriteOutput { .. }), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_target_is_replaced_and_the_file_it_pointed_to_is_kept() {
+        let dir = dir();
+        let real = dir.path().join("real.pdf");
+        let link = dir.path().join("out.pdf");
+        assert_ok!(fs::write(&real, b"keep"));
+        assert_ok!(std::os::unix::fs::symlink(&real, &link));
+        assert_eq!(assert_ok!(write(&link, b"new")), Written::Wrote { replaced: true });
+        assert!(!assert_ok!(fs::symlink_metadata(&link)).file_type().is_symlink());
+        assert_eq!(read(&link), b"new");
+        assert_eq!(read(&real), b"keep");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_symlink_exists_for_refuse_and_is_replaced_by_replace() {
+        let dir = dir();
+        let link = dir.path().join("out.pdf");
+        assert_ok!(std::os::unix::fs::symlink(dir.path().join("missing"), &link));
+        let err = assert_err!(with(WriteMode::Write, Overwrite::Refuse, &link, b"x"));
+        assert!(matches!(err, Error::OutputExists { .. }), "{err}");
+        assert_eq!(assert_ok!(write(&link, b"new")), Written::Wrote { replaced: true });
+        assert_eq!(read(&link), b"new");
+    }
+
+    #[test]
+    fn a_dry_run_refuses_a_read_only_target_like_a_write() {
+        let dir = dir();
+        let target = dir.path().join("out.pdf");
+        assert_ok!(fs::write(&target, b"old"));
+        let mut permissions = assert_ok!(fs::metadata(&target)).permissions();
+        permissions.set_readonly(true);
+        assert_ok!(fs::set_permissions(&target, permissions));
+        let _writable = Writable(&target);
+        for mode in [WriteMode::DryRun, WriteMode::Write] {
+            let err = assert_err!(with(mode, Overwrite::Replace, &target, b"new"));
+            assert!(matches!(err, Error::OutputReadOnly { .. }), "{err}");
+        }
+    }
+
+    #[test]
+    fn missing_directory_refuses_a_file_in_the_chain_directly() {
+        let dir = dir();
+        let file = dir.path().join("file");
+        assert_ok!(fs::write(&file, b"x"));
+        for below in [file.clone(), file.join("a"), file.join("a").join("b")] {
+            let err = assert_err!(missing_directory(&below));
+            assert!(matches!(err, Error::CreateOutputDir { .. }), "{err}");
+        }
+        assert_eq!(assert_ok!(missing_directory(dir.path())), None);
+        assert_eq!(
+            assert_ok!(missing_directory(&dir.path().join("a").join("b"))),
+            Some(dir.path().join("a"))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_symlink_as_the_output_directory_is_refused_in_both_modes() {
+        let dir = dir();
+        let link = dir.path().join("out");
+        assert_ok!(std::os::unix::fs::symlink(dir.path().join("missing"), &link));
+        for mode in [WriteMode::DryRun, WriteMode::Write] {
+            let err = assert_err!(with(mode, Overwrite::Replace, &link.join("x.pdf"), b"new"));
+            assert!(matches!(err, Error::CreateOutputDir { .. }), "{err}");
+        }
+    }
+
+    #[test]
+    fn dry_run_and_write_refuse_a_missing_directory_below_a_file_alike() {
+        let dir = dir();
+        let file = dir.path().join("file");
+        assert_ok!(fs::write(&file, b"x"));
+        let target = file.join("missing").join("out.pdf");
+        for mode in [WriteMode::DryRun, WriteMode::Write] {
+            let err = assert_err!(with(mode, Overwrite::Replace, &target, b"new"));
+            assert!(
+                matches!(err, Error::CreateOutputDir { .. } | Error::WriteOutput { .. }),
+                "{err}"
+            );
+        }
+        assert_eq!(read(&file), b"x");
+    }
+
+    #[test]
+    fn a_dry_run_names_the_topmost_directory_it_would_create() {
+        let dir = dir();
+        let target = dir.path().join("a").join("b").join("out.pdf");
+        assert_eq!(
+            assert_ok!(with(WriteMode::DryRun, Overwrite::Replace, &target, b"x")),
+            Written::WouldWrite {
+                replaces: false,
+                creates_dir: Some(dir.path().join("a")),
+            }
+        );
+        assert!(!dir.path().join("a").exists());
     }
 
     // ========================================================================

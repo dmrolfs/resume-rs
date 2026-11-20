@@ -203,3 +203,51 @@ fn content_moved_below_the_page_is_measured_where_it_lands() {
     assert!(content > 900.0, "the move was not applied: {page:?}");
     assert!(page.body_top > 25.0 && page.body_top < 50.0, "{page:?}");
 }
+
+#[test]
+fn the_body_top_is_the_smallest_over_the_document_not_each_pages_own() {
+    let pages = compile_fixture("geometry-two-tops").geometry();
+    assert_eq!(pages.len(), 2, "{pages:?}");
+    // Page 1's own first item sits about 200 pt lower than page 2's, so a per-page or first-page top differs.
+    let content = assert_some!(pages[0].content_bottom, "{pages:?}");
+    assert!(content > 200.0, "the first page does not start lower: {pages:?}");
+    assert!(pages[0].body_top < 50.0 && pages[1].body_top < 50.0, "{pages:?}");
+    assert_eq!(pages[0].body_top, pages[1].body_top);
+}
+
+#[test]
+fn a_page_without_a_footer_has_its_body_measured_to_the_page_edge() {
+    // A documented limit: with no footer the body bottom is the page height, so the bottom margin counts as
+    // body.
+    let page = only_page("geometry-no-footer");
+    assert_eq!(page.body_bottom, page.height, "{page:?}");
+}
+
+#[test]
+fn a_background_is_an_artifact_and_not_body_content() {
+    let page = only_page("geometry-background");
+    assert!(page.body_top > 25.0 && page.body_top < 50.0, "{page:?}");
+    assert!(assert_some!(page.content_bottom, "{page:?}") < 100.0, "{page:?}");
+    assert!(page.body_bottom < page.height - 5.0, "{page:?}");
+}
+
+#[test]
+fn a_footer_holding_a_nested_artifact_does_not_leak_into_the_body() {
+    // A terms list in a plain-text footer holds an artifact of its own (its separator). The footer must still
+    // be bounded as a footer, and no page may look like it overflows.
+    let compiled = compile_fixture("geometry-nested-footer");
+    let page = only_page("geometry-nested-footer");
+    assert!(page.body_bottom < page.height - 5.0, "{page:?}");
+    assert!(assert_some!(page.content_bottom, "{page:?}") < 100.0, "{page:?}");
+    let report = assert_ok!(LayoutReport::of(&compiled, &fonts(), None));
+    assert_eq!(with_code(&report, DiagnosticCode::ContentOverflowsPage).len(), 0);
+}
+
+#[test]
+fn clipped_content_is_measured_at_its_full_size() {
+    // A documented limit: a clipped block hides what is taller than it, but the hidden text is still counted,
+    // so it can be reported as an overflow.
+    let page = only_page("geometry-clipped");
+    let content = assert_some!(page.content_bottom, "{page:?}");
+    assert!(content > 900.0, "{page:?}");
+}

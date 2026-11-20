@@ -45,6 +45,7 @@ fn summary_lists_resolved_fonts() {
     let work = Workspace::new();
     let input = work.file("Resume.md", &fixture("full.md"));
     let run = work.build(&[&input], &[]);
+    assert_eq!(run.outcome, Outcome::Success, "{}", run.stderr);
     assert!(run.stderr.contains("fonts: body "), "{}", run.stderr);
     assert!(run.stderr.contains("(fallback for "), "{}", run.stderr);
 }
@@ -90,10 +91,7 @@ fn build_dry_run_writes_nothing_and_reports_target() {
         summary.starts_with(&format!("ok would write {} (", shown(&["out", "Resume.pdf"]))),
         "{summary}"
     );
-    assert!(
-        summary.contains("creates out") || summary.contains("creates "),
-        "{summary}"
-    );
+    assert!(summary.contains(&format!("creates {})", shown(&["out"]))), "{summary}");
     assert!(summary.contains("checked in "), "{summary}");
 }
 
@@ -104,6 +102,7 @@ fn a_dry_run_says_when_it_would_overwrite() {
     assert_eq!(work.build(&[&input], &[]).outcome, Outcome::Success);
     let before = assert_ok!(fs::read(work.out().join("Resume.pdf")));
     let run = work.build(&[&input], &["--dry-run"]);
+    assert_eq!(run.outcome, Outcome::Success, "{}", run.stderr);
     assert!(run.stderr.contains("overwrites existing"), "{}", run.stderr);
     assert_eq!(assert_ok!(fs::read(work.out().join("Resume.pdf"))), before);
 }
@@ -172,6 +171,36 @@ fn an_error_in_one_file_keeps_the_output_of_the_others() {
 }
 
 #[test]
+fn a_failure_before_a_good_file_still_builds_it_and_fails_the_run() {
+    let work = Workspace::new();
+    let bad = work.file("errors-role.md", &fixture("errors-role.md"));
+    let good = work.file("Resume.md", &fixture("full.md"));
+    let run = work.build(&[&bad, &good], &[]);
+    assert_eq!(run.outcome, Outcome::Failure, "{}", run.stderr);
+    assert!(work.out().join("Resume.pdf").is_file());
+    let bad_at = assert_some!(run.stderr.find("errors-role.md  "));
+    let good_at = assert_some!(run.stderr.find("Resume.pdf"));
+    assert!(bad_at < good_at, "summaries follow the order given: {}", run.stderr);
+}
+
+#[test]
+fn operational_errors_under_json_go_to_stderr_and_stdout_stays_empty() {
+    // The JSON contract: stdout holds diagnostics only, so an operational failure (an unknown style, an
+    // unreadable input) is a human line on stderr plus exit 1, and stdout stays empty.
+    let work = Workspace::new();
+    let input = work.file("Resume.md", &fixture("full.md"));
+    let unknown = work.build(&[&input], &["--format", "json", "--style", "nope"]);
+    assert_eq!(unknown.outcome, Outcome::Failure);
+    assert_eq!(unknown.stdout, "");
+    assert!(unknown.stderr.contains("unknown style `nope`"), "{}", unknown.stderr);
+    let missing = work.path().join("nothing.md");
+    let unreadable = work.build(&[&missing], &["--format", "json"]);
+    assert_eq!(unreadable.outcome, Outcome::Failure);
+    assert_eq!(unreadable.stdout, "");
+    assert!(unreadable.stderr.contains("cannot read"), "{}", unreadable.stderr);
+}
+
+#[test]
 fn an_input_that_cannot_be_read_exits_1_and_says_why() {
     let work = Workspace::new();
     let missing = work.path().join("nothing.md");
@@ -201,7 +230,7 @@ fn an_output_directory_that_is_a_file_exits_1_and_says_why() {
         "{}",
         run.stderr
     );
-    assert!(run.stderr.contains("out"), "{}", run.stderr);
+    assert!(run.stderr.contains(&work.out().display().to_string()), "{}", run.stderr);
     assert!(!run.stderr.contains("panicked"), "{}", run.stderr);
 }
 
@@ -324,7 +353,7 @@ fn fallback_font_reports_note_or_warning_by_metric_compatibility() {
     // line already says "fallback for") and which JSON keeps.
     let human = work.build(&[&input], &[]);
     assert!(!human.stderr.contains("same character widths"), "{}", human.stderr);
-    assert!(!human.stderr.contains("note"), "{}", human.stderr);
+    assert!(!human.stderr.contains("font-fallback-metric"), "{}", human.stderr);
     let json = work.build(&[&input], &["--format", "json"]);
     assert!(json.stdout.contains("font-fallback-metric"), "{}", json.stdout);
 

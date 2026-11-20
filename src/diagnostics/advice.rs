@@ -244,8 +244,8 @@ impl DiagnosticCode {
             }),
             ContentOverflowsPage => Some(&Advice {
                 summary: "A block of content is taller than a page and runs off it.",
-                why: "Project convention: a bullet cannot be split across pages, so one taller than the page body runs past its bottom, and Typst gives no warning. The overflowing text is cut from the PDF.",
-                fix: "Split the bullet into several shorter bullets, or shorten it until it fits on one page, then rebuild.",
+                why: "Project convention: a bullet or a role description cannot be split across pages, so one taller than the page body runs into the footer and past the page edge, and Typst gives no warning. The text past the page edge is cut from the PDF.",
+                fix: "Split the block into several shorter ones, or shorten it until it fits on one page, then rebuild.",
                 example: None,
             }),
             // Content (doctor) and Setup: written by the tasks that own them.
@@ -346,6 +346,19 @@ mod tests {
                 advice.fix
             );
         }
+    }
+
+    #[test]
+    fn page_advice_names_the_marker_the_parser_accepts_and_the_sparse_threshold_the_check_uses() {
+        let advice = |code: DiagnosticCode| assert_some!(code.advice());
+        assert!(
+            advice(DiagnosticCode::HeadingNearPageBottom)
+                .fix
+                .contains(crate::markdown::PAGE_BREAK)
+        );
+        assert!(advice(DiagnosticCode::PageLimitExceeded).fix.contains("--max-pages"));
+        let sparse = format!("{:.0}%", crate::layout::SPARSE_FILL * 100.0);
+        assert!(advice(DiagnosticCode::SparseLastPage).summary.contains(&sparse));
     }
 
     #[test]

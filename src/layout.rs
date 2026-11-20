@@ -17,8 +17,9 @@ pub const HEADING_ZONE: f64 = 0.08;
 /// A last page with less than 15% of the body filled is reported as sparse.
 pub const SPARSE_FILL: f64 = 0.15;
 
-/// Content may pass the body bottom by this much before it counts as an overflow, in points: the gap
-/// between the body and the footer absorbs a baseline that sits a hair below the body edge.
+/// Content may pass the body bottom by this much before it counts as an overflow, in points. The body bottom
+/// is the footer's top, which sits below the body proper (about 18 pt in the shipped style), so the real slack
+/// is that gap plus this: a line that lands in the gap does not touch the footer text and is not reported.
 const OVERFLOW_TOLERANCE_PT: f64 = 0.5;
 
 /// Where one role starts and ends.
@@ -145,8 +146,10 @@ fn page_limit(pages: usize, limit: Option<PageLimit>) -> Option<Diagnostic> {
 }
 
 /// `content-overflows-page`: one error per page whose content runs past the body, naming the role placed
-/// most recently before it. Bullets cannot break across pages, so a bullet taller than a page overflows
-/// silently, and the text past the bottom is cut from the PDF.
+/// most recently before it. A block that cannot break across pages (a bullet, a role's description) and is
+/// taller than a page overflows silently: it prints over the footer, and the text past the page edge is cut
+/// from the PDF. The role named is the last one placed on or before the page, which may not own the block when
+/// it sits in a section after the last role.
 fn overflows(pages: &[PageGeometry], probes: &[Probe]) -> Vec<Diagnostic> {
     pages
         .iter()
@@ -166,9 +169,9 @@ fn overflow(page: usize, over: f64, probes: &[Probe]) -> Diagnostic {
         .find_map(role_company);
     let hint = match role {
         Some(company) => {
-            format!("split the bullet under \"{company}\" into shorter bullets; a bullet must fit on one page")
+            format!("shorten or split the long block near \"{company}\" (a bullet or the role's description); a block that cannot break must fit on one page")
         }
-        None => "split the long bullet into shorter bullets; a bullet must fit on one page".to_string(),
+        None => "shorten or split the long block (a bullet or a description); a block that cannot break must fit on one page".to_string(),
     };
     finding(
         Severity::Error,
@@ -274,7 +277,7 @@ mod tests {
     use super::*;
     use crate::typeset::fonts::Metrics;
     use claims::{assert_none, assert_ok, assert_some};
-    use pretty_assertions::assert_eq;
+    use pretty_assertions::{assert_eq, assert_ne};
 
     /// A Letter page as the pragmatic style lays it out: 36 pt above the body, the footer from 759.24 pt.
     fn page(content_bottom: Option<f64>) -> PageGeometry {
@@ -409,6 +412,35 @@ mod tests {
     }
 
     #[test]
+    fn a_last_page_exactly_15_percent_full_is_not_sparse_and_just_under_is() {
+        let body = |content: f64| PageGeometry {
+            height: 1100.0,
+            body_top: 0.0,
+            body_bottom: 1000.0,
+            content_bottom: Some(content),
+        };
+        let full = body(900.0);
+        let at_line = report(&[full, body(1000.0 * SPARSE_FILL)], &[]);
+        assert_eq!(with_code(&at_line, DiagnosticCode::SparseLastPage).len(), 0);
+        let under = report(&[full, body(149.0)], &[]);
+        assert_eq!(with_code(&under, DiagnosticCode::SparseLastPage).len(), 1);
+    }
+
+    #[test]
+    fn a_zero_height_body_with_content_is_not_called_sparse() {
+        let flat = PageGeometry {
+            height: 792.0,
+            body_top: 36.0,
+            body_bottom: 36.0,
+            content_bottom: Some(36.0),
+        };
+        assert_eq!(
+            with_code(&report(&[full_page(), flat], &[]), DiagnosticCode::SparseLastPage).len(),
+            0
+        );
+    }
+
+    #[test]
     fn a_one_page_resume_is_never_sparse() {
         let report = report(&[page(Some(60.0))], &[]);
         assert_eq!(with_code(&report, DiagnosticCode::SparseLastPage).len(), 0);
@@ -434,11 +466,26 @@ mod tests {
         let found = with_code(&report, DiagnosticCode::HeadingNearPageBottom);
         assert_eq!(found.len(), 1, "{:?}", report.diagnostics);
         assert_eq!(found[0].severity, Severity::Warning);
-        assert!(
-            found[0].message.contains("Acme") && found[0].message.contains("page 1"),
-            "{}",
-            found[0].message
+        assert_eq!(found[0].message, "Acme starts in the bottom 8% of page 1");
+        assert_eq!(
+            found[0].hints,
+            ["add a page break before it, or tighten the text above so it moves up"]
         );
+    }
+
+    #[test]
+    fn a_heading_exactly_at_the_line_is_not_stranded_and_just_past_it_is() {
+        // A body 1000 pt tall from 0: the line is at 920 pt, the same expression the check uses.
+        let body = PageGeometry {
+            height: 1100.0,
+            body_top: 0.0,
+            body_bottom: 1000.0,
+            content_bottom: Some(900.0),
+        };
+        let at_line = report(&[body, body], &[role(0, "Acme", 1, 1000.0 * (1.0 - HEADING_ZONE))]);
+        assert_eq!(with_code(&at_line, DiagnosticCode::HeadingNearPageBottom).len(), 0);
+        let past = report(&[body, body], &[role(0, "Acme", 1, 920.5)]);
+        assert_eq!(with_code(&past, DiagnosticCode::HeadingNearPageBottom).len(), 1);
     }
 
     #[test]
@@ -507,10 +554,36 @@ mod tests {
             found[0].message,
             "content on page 2 runs 504pt past the bottom of the page body"
         );
-        assert!(
-            found[0].hints.iter().any(|h| h.contains("Acme")),
-            "{:?}",
-            found[0].hints
+        assert_eq!(
+            found[0].hints,
+            [
+                "shorten or split the long block near \"Acme\" (a bullet or the role's description); a block that cannot break must fit on one page"
+            ]
+        );
+    }
+
+    #[test]
+    fn two_overflowing_pages_give_two_errors_and_an_era_does_not_hide_the_role() {
+        let pages = [page(Some(759.24 + 200.0)), page(Some(759.24 + 300.0))];
+        let probes = [role(0, "Acme", 1, 100.0), era(0, "Skills", 1, 400.0)];
+        let report = report(&pages, &probes);
+        let found = with_code(&report, DiagnosticCode::ContentOverflowsPage);
+        assert_eq!(found.len(), 2, "{:?}", report.diagnostics);
+        assert!(found[0].message.contains("page 1") && found[1].message.contains("page 2"));
+        for finding in found {
+            assert!(finding.hints[0].contains("\"Acme\""), "{:?}", finding.hints);
+        }
+    }
+
+    #[test]
+    fn an_overflow_with_no_role_before_it_still_says_what_to_do() {
+        let report = report(&[page(Some(759.24 + 100.0))], &[]);
+        let found = with_code(&report, DiagnosticCode::ContentOverflowsPage);
+        assert_eq!(
+            found[0].hints,
+            [
+                "shorten or split the long block (a bullet or a description); a block that cannot break must fit on one page"
+            ]
         );
     }
 
@@ -637,6 +710,40 @@ mod tests {
             max_pages: None,
         });
         assert_eq!(report.fonts, fonts);
+    }
+
+    #[test]
+    fn the_fonts_mode_reaches_the_font_hints() {
+        let fonts = [fallback("body", Metrics::Different)];
+        let hints = |mode| {
+            LayoutReport::from_input(&LayoutInput {
+                pages: &[],
+                probes: &[],
+                fonts: &fonts,
+                fonts_mode: mode,
+                max_pages: None,
+            })
+            .diagnostics[0]
+                .hints
+                .clone()
+        };
+        assert_eq!(
+            hints(FontsMode::Auto),
+            assert_some!(fonts[0].diagnostic(FontsMode::Auto)).hints
+        );
+        assert_eq!(
+            hints(FontsMode::Bundled),
+            assert_some!(fonts[0].diagnostic(FontsMode::Bundled)).hints
+        );
+        assert_ne!(hints(FontsMode::Auto), hints(FontsMode::Bundled));
+    }
+
+    #[test]
+    fn a_page_limit_with_fewer_pages_gives_no_finding() {
+        assert_eq!(
+            with_code(&limited(&[full_page()], 3), DiagnosticCode::PageLimitExceeded).len(),
+            0
+        );
     }
 
     #[test]

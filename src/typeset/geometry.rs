@@ -15,7 +15,9 @@ pub struct PageGeometry {
     pub height: f64,
     /// The top of the page body: the smallest top of any body item in the whole document.
     pub body_top: f64,
-    /// The top of the bottom artifact (the footer), or the page height when the page has none.
+    /// The top of the bottom artifact (the footer), or the page height when the page has none. The footer's
+    /// top sits a little below the body proper (about 18 pt in the shipped style), and that gap is slack in
+    /// every check that compares against it.
     pub body_bottom: f64,
     /// The lowest body text baseline, shape, or image on the page; `None` when the page has no body content.
     pub content_bottom: Option<f64>,
@@ -43,9 +45,17 @@ struct Measured {
 /// over the whole document, because content always starts at the region top on some page (weak spacing is
 /// dropped at the start of a region).
 ///
-/// Limits: a group's transform is ignored, so rotated, scaled, or skewed content is measured by its unrotated
-/// position (`move` shifts the frame's position, not its transform, and is honored); a style that sets `page(foreground: ..)` has its foreground counted as body, because
-/// Typst does not mark the foreground as an artifact; an inlined footer is bounded by its first baseline.
+/// Limits:
+/// - A group's transform is ignored, so rotated, scaled, or skewed content is measured by its unrotated
+///   position (`move` shifts the frame's position, not its transform, and is honored).
+/// - A group's clip is ignored, so content hidden by a clipped block is still measured at its full size and
+///   can be reported as an overflow.
+/// - A style that sets `page(foreground: ..)` has its foreground counted as body, because Typst does not mark
+///   the foreground as an artifact.
+/// - An inlined footer is bounded by its first baseline.
+/// - A page with no footer has its body bottom at the page edge, so the bottom margin counts as body: a
+///   heading just above the margin is not reported as near the bottom, and content that runs into the margin
+///   but not off the page is not reported as an overflow. A style that wants these checks needs a footer.
 pub(crate) fn page_geometry(document: &PagedDocument) -> Vec<PageGeometry> {
     let measured: Vec<Measured> = document.pages().iter().map(|page| measure(&page.frame)).collect();
     let body_top = measured.iter().filter_map(|m| m.top).reduce(f64::min).unwrap_or(0.0);
