@@ -611,6 +611,20 @@ mod tests {
     // The catalog, the built-in files, and the list of styles an error offers
     // ========================================================================
 
+    /// The names of the built-in styles, read from the directories under `styles/` (except the shared `lib`), so
+    /// a new built-in style does not break a test that only means "the built-in ones".
+    fn built_in_names() -> Vec<String> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("styles");
+        let mut names: Vec<String> = assert_ok!(std::fs::read_dir(root))
+            .map(|entry| assert_ok!(entry).path())
+            .filter(|path| path.is_dir())
+            .filter_map(|path| path.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .filter(|name| name != "lib" && !name.starts_with('.'))
+            .collect();
+        names.sort();
+        names
+    }
+
     /// A styles directory holding every kind of entry the catalog has to tell apart.
     fn varied_styles_dir() -> tempfile::TempDir {
         let dir = assert_ok!(tempfile::tempdir());
@@ -632,9 +646,12 @@ mod tests {
     fn the_catalog_lists_the_embedded_styles_and_not_the_shared_lib() {
         let entries = assert_ok!(catalog(None));
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
-        assert_eq!(names, ["pragmatic"]);
-        assert_eq!(entries[0].location, StyleLocation::BuiltIn);
-        assert_eq!(entries[0].note, None);
+        assert_eq!(names, built_in_names());
+        assert!(
+            entries
+                .iter()
+                .all(|e| e.location == StyleLocation::BuiltIn && e.note.is_none())
+        );
     }
 
     #[test]
@@ -642,17 +659,21 @@ mod tests {
         let dir = varied_styles_dir();
         let entries = assert_ok!(catalog(Some(dir.path())));
         let summary: Vec<(&str, Option<&str>)> = entries.iter().map(|e| (e.name.as_str(), e.note.as_deref())).collect();
+        // The built-in styles come first; the directory's entries follow, with its `pragmatic` overriding.
+        let built_in = built_in_names();
+        let mut expected: Vec<(&str, Option<&str>)> = built_in.iter().map(|name| (name.as_str(), None)).collect();
+        expected.extend([
+            ("Bad Name", Some("invalid: not a valid style name")),
+            ("half", Some("invalid: no style.typ")),
+            ("mine", None),
+            ("pragmatic", Some("overrides the built-in")),
+        ]);
+        assert_eq!(summary, expected);
+        let mine = built_in.len() + 2;
         assert_eq!(
-            summary,
-            [
-                ("pragmatic", None),
-                ("Bad Name", Some("invalid: not a valid style name")),
-                ("half", Some("invalid: no style.typ")),
-                ("mine", None),
-                ("pragmatic", Some("overrides the built-in")),
-            ]
+            entries[mine].location,
+            StyleLocation::Directory(dir.path().join("mine"))
         );
-        assert_eq!(entries[3].location, StyleLocation::Directory(dir.path().join("mine")));
     }
 
     #[test]
@@ -706,7 +727,10 @@ mod tests {
             panic!("expected UnknownStyle, got {found}")
         };
         let names: Vec<&str> = available.iter().map(AsRef::as_ref).collect();
-        assert_eq!(names, ["mine", "pragmatic"]);
+        let mut expected = built_in_names();
+        expected.push("mine".to_string());
+        expected.sort();
+        assert_eq!(names, expected);
     }
 
     #[test]

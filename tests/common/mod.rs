@@ -204,3 +204,22 @@ pub fn page_texts(pdf: &[u8]) -> Vec<String> {
 pub fn position(haystack: &str, needle: &str) -> usize {
     claims::assert_some!(haystack.find(needle), "`{needle}` not in {haystack:?}")
 }
+
+/// The names of the built-in styles, from the directories under `styles/` (except the shared `lib`). Another
+/// style must not break a test that only means "the built-in ones", so tests ask here instead of naming them.
+pub fn built_in_style_names() -> Vec<String> {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("styles");
+    let mut names: Vec<String> = claims::assert_ok!(std::fs::read_dir(root))
+        .map(|entry| claims::assert_ok!(entry).path())
+        .filter(|path| path.is_dir())
+        .filter_map(|path| path.file_name().map(|name| name.to_string_lossy().into_owned()))
+        .filter(|name| name != "lib" && !name.starts_with('.'))
+        .collect();
+    names.sort();
+    names
+}
+
+/// The text `resume` prints after an unknown style: `available styles: mono, pragmatic`.
+pub fn available_styles_message() -> String {
+    format!("available styles: {}", built_in_style_names().join(", "))
+}

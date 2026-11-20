@@ -1,6 +1,8 @@
 //! ABOUTME: End-to-end tests of the `resume` binary's command-line interface.
 //! ABOUTME: Uses assert_cmd to run the built binary and check exit codes and output.
 
+mod common;
+
 use std::fs;
 use std::path::Path;
 
@@ -244,7 +246,7 @@ fn an_unknown_style_exits_1_and_names_the_styles_there_are() {
         .assert()
         .code(1)
         .stderr(contains("unknown style `nope`"))
-        .stderr(contains("available styles: pragmatic"));
+        .stderr(contains(common::available_styles_message()));
 }
 
 // An unconnected datagram socket is a valid stdout descriptor but cannot deliver bytes.

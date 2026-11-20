@@ -10,6 +10,7 @@ use pretty_assertions::assert_eq;
 use resume::commands::Outcome;
 use resume::model::options::BuiltinStyle;
 
+mod common;
 #[path = "common/workspace.rs"]
 mod workspace;
 use workspace::{FailingStdout, Run, Workspace, fixture};
@@ -175,7 +176,11 @@ fn unknown_style_exits_1_listing_styles() {
     let run = work.build(&[&input], &["--style", "nothing-like-it"]);
     assert_eq!(run.outcome, Outcome::Failure, "{}", run.stderr);
     assert!(run.stderr.contains("unknown style `nothing-like-it`"), "{}", run.stderr);
-    assert!(run.stderr.contains("available styles: pragmatic"), "{}", run.stderr);
+    assert!(
+        run.stderr.contains(&common::available_styles_message()),
+        "{}",
+        run.stderr
+    );
     assert!(!work.out().exists(), "nothing is built for an unknown style");
 }
 
@@ -318,7 +323,7 @@ fn export_style_of_an_unknown_style_exits_1_listing_styles() {
         let run = work.run(&args(&["export-style", name, &dest]));
         assert_eq!(run.outcome, Outcome::Failure, "{name}: {}", run.stderr);
         assert!(
-            run.stderr.contains("available styles: pragmatic"),
+            run.stderr.contains(&common::available_styles_message()),
             "{name}: {}",
             run.stderr
         );
