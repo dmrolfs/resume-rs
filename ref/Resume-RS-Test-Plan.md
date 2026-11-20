@@ -79,7 +79,7 @@ Cross-OS PDF byte comparison and the Windows-only behavior tests are owned by th
 | Build with `RAYON_NUM_THREADS` 1, 2, and 8, same bytes; deep-nesting fixtures in child processes | rsm-141.6 (done: `determinism_test.rs`, `nesting_test.rs`) |
 | CRLF input produces the same PDF as LF input | rsm-141.10 |
 | `fix_preserves_crlf_line_endings` | rsm-141.11 |
-| `watch_continues_after_output_locked` (`cfg(windows)`) | rsm-141.12 |
+| `watch_continues_after_output_locked` (`cfg(windows)`, runs only on `windows-latest`) | rsm-141.12 |
 
 ### rsm-141.3: Model, newtypes, periods, diagnostic types
 - [ ] `role_with_era_json_snapshot`: verifies the documented JSON contract.
@@ -236,11 +236,18 @@ In-crate (`src/typeset/pragmatic_tests.rs`, reads frames) and through the public
 - [x] Content findings never reach `build` (`the_full_fixture_has_content_advice_while_its_parse_has_none`, and `build` is unchanged: its 900 tests passed before and after the shared pipeline)
 
 ### rsm-141.12: watch and export
-- [ ] `export_writes_resume_json_matching_model`, `export_dry_run_lists_files`
-- [ ] `watch_rejects_dry_run`, `debounce_parses_humantime_values`
-- [ ] `exported_dir_compiles_with_world`
-- [ ] `watch_rebuilds_after_file_change` (bounded to 10 s)
-- [ ] `watch_replaces_pdf_atomically`: a reader never sees a partially written file.
+- [x] `export_writes_resume_json_matching_model` (equals `to_value(model)`, ends with a newline, no CR), `export_dry_run_lists_files` (nothing created, hint shown), the file set, a re-export that refreshes `resume.json` and keeps an edited style file, `--force`, `would keep`, a resume with errors, a warning, unknown style, directory target, JSON format, the preview hint
+- [x] `exported_dir_compiles_with_world`: the exported style directory builds the same PDF bytes as the built-in style (the World serves `/resume.json` from memory, so the data file is proved by the test above, not this one)
+- [x] `StyleSource::files`: sorted, built-in and directory styles, dot-files and other styles left out, no lib, a link out of the root fails, a linked directory is not entered
+- [x] `watch_rejects_dry_run` (before and after the command, and through the binary: exit 2), `debounce_parses_humantime_values`, a bad debounce shows an example
+- [x] The event filter (`src/watch.rs`, synthetic events, no watcher): saves count in every shape, reads do not (the Linux loop that macOS and Windows CI cannot see), other files, case, rename pairs, rescan, styles at any depth, dot-files, the output directory, the roots
+- [x] Debounce (`next_change`): a burst is one change, quiet is measured from the last signal, the ceiling, stop, watcher gone, a signal left from the last build, watcher complaints once each, zero debounce; a full queue drops signals and does not block
+- [x] `watch_rebuilds_after_file_change` (in process, an editor-style rename save, repeated until it is seen, 20 s deadline) and through the real binary (`tests/watch_test.rs`)
+- [x] The watch does not rebuild for its own reads and writes; a save during the first build is not lost; a failing build then a good one; a deleted and re-created resume; a style made after the watch started
+- [x] `--open`: once, after the first PDF written (a layout error counts, a format error does not), a failure to open is a warning
+- [x] Loop over plain signals (`serve`): a dead watcher is `Failure` with an `error:` line, a stop is `Success`, a watcher complaint prints as a warning and the build still runs; `--out` inside `--styles-dir` does not start builds of its own; paths typed in a non-canonical form (`/var` on macOS) are watched; a style made and then edited while watching is the style the next builds use (the PDF equals the one the typesetter makes from that style)
+- [x] `watch_replaces_pdf_atomically` is a Writer test (`src/output.rs`): a reader sees only whole files while 40 rewrites happen, and no temp file is left
+- [x] `watch_continues_after_output_locked` (`cfg(windows)`, `src/commands/watch.rs`): open the PDF with `share_mode(0)`, save, expect the lock error and hint, release, save, expect the new PDF
 
 ### rsm-141.13: README and migration
 - [ ] `baselines_build_in_all_styles` (ignored, needs `RESUME_BASELINES`)

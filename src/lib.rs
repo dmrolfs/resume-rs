@@ -20,3 +20,4 @@ pub mod output;
 pub mod pipeline;
 pub mod style;
 pub mod typeset;
+pub mod watch;

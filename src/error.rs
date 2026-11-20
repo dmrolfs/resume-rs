@@ -55,6 +55,12 @@ pub enum Error {
     #[snafu(display("cannot open styles directory {}: {source}", path.display()))]
     StyleRoot { path: PathBuf, source: std::io::Error },
 
+    #[snafu(display("cannot read the style file {}: {source}", path.display()))]
+    StyleFile {
+        path: PathBuf,
+        source: typst::diag::FileError,
+    },
+
     #[snafu(display("cannot serialize the resume for the style: {source}"))]
     SerializeResume { source: serde_json::Error },
 
@@ -98,6 +104,10 @@ pub enum Error {
     /// A file being edited no longer holds what was read from it.
     #[snafu(display("{} changed while it was being fixed", path.display()))]
     InputChanged { path: PathBuf },
+
+    /// The operating system would not report changes to a path, so `watch` cannot see edits there.
+    #[snafu(display("cannot watch {} for changes: {source}", path.display()))]
+    Watch { path: PathBuf, source: notify::Error },
 
     #[snafu(display("the style failed to compile ({} errors)", errors_in(diagnostics)))]
     Compile {

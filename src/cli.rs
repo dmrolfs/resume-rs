@@ -52,8 +52,67 @@ pub enum Command {
     Styles(StylesArgs),
     /// Copy a built-in style to a directory, to edit it.
     ExportStyle(ExportStyleArgs),
+    /// Write the resume as JSON with a style, to preview the style in tinymist or `typst watch`.
+    Export(ExportArgs),
+    /// Rebuild the PDF whenever the resume or a style file changes.
+    Watch(WatchArgs),
     /// Print the license notices of the fonts built into this program.
     Licenses,
+}
+
+/// Arguments of `resume export`.
+#[derive(Debug, Args)]
+pub struct ExportArgs {
+    /// The Markdown resume to export.
+    #[arg(value_name = "FILE")]
+    pub file: PathBuf,
+
+    /// Where to write `resume.json`, the style (`<DIR>/<NAME>/`), and what styles share (`<DIR>/lib/`).
+    #[arg(value_name = "DIR")]
+    pub dir: PathBuf,
+
+    /// The style to export.
+    #[arg(short, long, default_value = "pragmatic", value_name = "NAME")]
+    pub style: StyleName,
+
+    /// A directory of styles to use besides the built-in ones; a style here wins over a built-in of the same name.
+    #[arg(long, value_name = "DIR")]
+    pub styles_dir: Option<PathBuf>,
+
+    /// Replace the style files that already exist; without it they are kept, so a style being edited is not
+    /// overwritten. `resume.json` is always replaced.
+    #[arg(long)]
+    pub force: bool,
+}
+
+/// Arguments of `resume watch`.
+#[derive(Debug, Args)]
+pub struct WatchArgs {
+    /// The Markdown resume to watch and build.
+    #[arg(value_name = "FILE")]
+    pub file: PathBuf,
+
+    /// The directory the PDF is written to; it is created if it does not exist.
+    #[arg(short, long, default_value = "out", value_name = "DIR")]
+    pub out: PathBuf,
+
+    #[command(flatten)]
+    pub render: RenderArgs,
+
+    /// How long to wait after the last change before rebuilding, such as `150ms` or `1s`.
+    #[arg(long, default_value = "150ms", value_name = "DURATION", value_parser = parse_debounce)]
+    pub debounce: std::time::Duration,
+
+    /// Open the PDF once, after the first build that writes it.
+    #[arg(long)]
+    pub open: bool,
+}
+
+/// Reads a `--debounce` value with `humantime`: `150ms`, `2s`, `1m`.
+fn parse_debounce(text: &str) -> Result<std::time::Duration, String> {
+    text.parse::<humantime::Duration>()
+        .map(Into::into)
+        .map_err(|error| format!("{error}; write a duration such as `150ms` or `2s`"))
 }
 
 /// Arguments of `resume styles`.
@@ -227,7 +286,8 @@ impl Cli {
                 doctor.validate_fix_inputs()
             }
             Command::Check(check) => check.assess.render.validate(),
-            Command::Styles(_) | Command::ExportStyle(_) | Command::Licenses => Ok(()),
+            Command::Watch(watch) => watch.validate(self.dry_run),
+            Command::Styles(_) | Command::ExportStyle(_) | Command::Export(_) | Command::Licenses => Ok(()),
         }
     }
 }
@@ -247,6 +307,19 @@ impl RenderArgs {
             ));
         }
         Ok(())
+    }
+}
+
+impl WatchArgs {
+    /// Watching without writing has no purpose, so `--dry-run` is a usage error; checked here because the flag is
+    /// global and clap cannot reject a global flag for one command.
+    fn validate(&self, dry_run: bool) -> Result<(), clap::Error> {
+        if dry_run {
+            return Err(usage_error(
+                "--dry-run cannot be used with `watch`, which exists to write the PDF; use `build --dry-run`",
+            ));
+        }
+        self.render.validate()
     }
 }
 
@@ -576,6 +649,129 @@ mod tests {
             panic!("expected `styles`")
         };
         assert_eq!(with_dir.styles_dir, Some(PathBuf::from("mine")));
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // watch and export
+    // ------------------------------------------------------------------------------------------
+
+    fn watch_args(args: &[&str]) -> WatchArgs {
+        let Command::Watch(watch) = cli(&[&["watch"], args].concat()).command else {
+            panic!("expected `watch`")
+        };
+        watch
+    }
+
+    #[test]
+    fn watch_defaults_to_150ms_and_does_not_open() {
+        let watch = watch_args(&["Resume.md"]);
+        assert_eq!(watch.debounce, std::time::Duration::from_millis(150));
+        assert!(!watch.open);
+        assert_eq!(watch.out, PathBuf::from("out"));
+    }
+
+    #[test]
+    fn debounce_parses_humantime_values() {
+        for (text, wanted) in [
+            ("150ms", std::time::Duration::from_millis(150)),
+            ("2s", std::time::Duration::from_secs(2)),
+            ("1s 500ms", std::time::Duration::from_millis(1500)),
+            ("0ms", std::time::Duration::ZERO),
+        ] {
+            assert_eq!(
+                watch_args(&["Resume.md", "--debounce", text]).debounce,
+                wanted,
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn watch_takes_max_pages_like_build() {
+        assert_eq!(
+            watch_args(&["r.md", "--max-pages", "2"])
+                .render
+                .max_pages
+                .map(PageLimit::into_inner),
+            Some(2)
+        );
+        assert!(Cli::try_parse_validated(["resume", "watch", "r.md", "--max-pages", "0"]).is_err());
+    }
+
+    #[test]
+    fn a_bad_debounce_is_a_usage_error_that_shows_an_example() {
+        for text in ["fast", "150", "1 parsec", ""] {
+            let error = assert_err!(Cli::try_parse_validated([
+                "resume",
+                "watch",
+                "r.md",
+                "--debounce",
+                text
+            ]));
+            assert_eq!(error.exit_code(), 2, "{text}");
+            assert!(error.to_string().contains("`150ms`"), "{text}: {error}");
+        }
+    }
+
+    #[test]
+    fn watch_rejects_dry_run_before_or_after_the_command() {
+        for args in [
+            &["resume", "--dry-run", "watch", "r.md"][..],
+            &["resume", "watch", "r.md", "--dry-run"][..],
+        ] {
+            let error = assert_err!(Cli::try_parse_validated(args));
+            assert_eq!(error.exit_code(), 2);
+            assert!(
+                error.to_string().contains("--dry-run cannot be used with `watch`"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn watch_takes_one_file_and_the_render_options() {
+        let watch = watch_args(&["r.md", "-s", "mono", "--paper", "a4", "--fonts", "bundled", "--open"]);
+        assert_eq!(watch.file, PathBuf::from("r.md"));
+        assert_eq!(watch.render.style.as_ref() as &str, "mono");
+        assert!(watch.open);
+        assert!(Cli::try_parse_validated(["resume", "watch"]).is_err());
+        assert!(Cli::try_parse_validated(["resume", "watch", "a.md", "b.md"]).is_err());
+        let error = assert_err!(Cli::try_parse_validated([
+            "resume",
+            "watch",
+            "a.md",
+            "--fonts",
+            "bundled",
+            "--font-path",
+            "f"
+        ]));
+        assert_eq!(error.exit_code(), 2);
+    }
+
+    #[test]
+    fn export_takes_a_file_a_directory_a_style_and_force() {
+        let Command::Export(plain) = cli(&["export", "r.md", "preview"]).command else {
+            panic!("expected `export`")
+        };
+        assert_eq!(plain.file, PathBuf::from("r.md"));
+        assert_eq!(plain.dir, PathBuf::from("preview"));
+        assert_eq!(plain.style.as_ref() as &str, "pragmatic");
+        assert!(!plain.force);
+        let Command::Export(more) = cli(&["export", "r.md", "d", "-s", "mono", "--styles-dir", "s", "--force"]).command
+        else {
+            panic!("expected `export`")
+        };
+        assert_eq!(more.style.as_ref() as &str, "mono");
+        assert_eq!(more.styles_dir, Some(PathBuf::from("s")));
+        assert!(more.force);
+        for args in [
+            &["export"][..],
+            &["export", "r.md"][..],
+            &["export", "a.md", "b.md", "d"][..],
+        ] {
+            let all: Vec<&str> = std::iter::once("resume").chain(args.iter().copied()).collect();
+            assert_eq!(assert_err!(Cli::try_parse_validated(all)).exit_code(), 2, "{args:?}");
+        }
     }
 
     #[test]

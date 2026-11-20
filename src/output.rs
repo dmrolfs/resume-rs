@@ -676,6 +676,60 @@ mod tests {
         assert_eq!(mode, 0o600, "a private resume must not become readable by others");
     }
 
+    #[test]
+    fn watch_replaces_pdf_atomically() {
+        // `watch` rewrites the same PDF again and again while a viewer reads it. A reader must see the old file or
+        // the new one, never a mix or a part, because the write is a temp file renamed into place.
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let dir = dir();
+        let target = dir.path().join("out.pdf");
+        let whole = |round: usize| -> Vec<u8> {
+            let mut bytes = b"%PDF-1.7\n".to_vec();
+            bytes.extend(std::iter::repeat_n(
+                b'a' + u8::try_from(round % 26).expect("small"),
+                200_000,
+            ));
+            bytes.extend_from_slice(b"\n%%EOF\n");
+            bytes
+        };
+        assert_ok!(write(&target, &whole(0)));
+        let done = Arc::new(AtomicBool::new(false));
+        let reader = {
+            let (done, target) = (Arc::clone(&done), target.clone());
+            std::thread::spawn(move || {
+                let mut reads = 0;
+                while !done.load(Ordering::SeqCst) {
+                    // Windows refuses a rename onto a file that is open, so a reader that holds it only briefly
+                    // may make a write fail; what it must never do is see a partial file.
+                    if let Ok(bytes) = fs::read(&target) {
+                        assert!(
+                            bytes.starts_with(b"%PDF-1.7\n") && bytes.ends_with(b"\n%%EOF\n"),
+                            "a partial file"
+                        );
+                        assert_eq!(bytes.len(), 200_000 + 9 + 7, "a partial file");
+                        let letters: std::collections::HashSet<u8> =
+                            bytes[9..bytes.len() - 7].iter().copied().collect();
+                        assert_eq!(letters.len(), 1, "a mix of two files");
+                        reads += 1;
+                    }
+                }
+                reads
+            })
+        };
+        for round in 1..=40 {
+            // On Windows a write can fail while the reader has the file open; a build tells the user and goes on.
+            let _ = write(&target, &whole(round));
+        }
+        done.store(true, Ordering::SeqCst);
+        assert!(reader.join().expect("the reader saw only whole files") > 0);
+        assert_eq!(
+            leftovers(dir.path()),
+            Vec::<String>::new(),
+            "no temp file is left behind"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn the_temp_of_a_source_edit_is_private_until_it_takes_the_files_permissions() {

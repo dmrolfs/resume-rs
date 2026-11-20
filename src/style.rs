@@ -9,7 +9,9 @@ use typst::diag::{FileError, FileResult};
 use typst::foundations::Bytes;
 use typst::syntax::VirtualPath;
 
-use crate::error::{Error, StyleMissingMainSnafu, StyleOutsideRootSnafu, StyleRootSnafu, UnknownStyleSnafu};
+use crate::error::{
+    Error, StyleFileSnafu, StyleMissingMainSnafu, StyleOutsideRootSnafu, StyleRootSnafu, UnknownStyleSnafu,
+};
 use crate::model::StyleName;
 use crate::model::options::BuiltinStyle;
 
@@ -202,6 +204,16 @@ fn available_styles(styles_dir: Option<&Path>) -> Vec<StyleName> {
 /// - `Error::StyleMissingMain` - the style's directory has no `style.typ`
 /// - `Error::UnknownStyle` - neither the directory nor the built-in set has the style
 pub fn resolve(name: &StyleName, styles_dir: Option<&Path>) -> Result<StyleSource, Error> {
+    // `lib` holds what the styles share and is not a style: it is not listed, and as a style it would have its
+    // files counted twice.
+    if name.as_ref() as &str == SHARED_DIR {
+        return UnknownStyleSnafu {
+            name: name.clone(),
+            searched: styles_dir.map_or_else(|| PathBuf::from(BUILT_IN), Path::to_path_buf),
+            available: available_styles(styles_dir),
+        }
+        .fail();
+    }
     if let Some(root) = styles_dir {
         match StyleSource::directory(root, name.clone()) {
             // The directory has no such style: the built-in set may.
@@ -326,6 +338,39 @@ impl StyleSource {
         }
     }
 
+    /// Every file of this style and of the `lib/` it shares, as paths relative to the styles directory
+    /// (`pragmatic/style.typ`, `lib/components.typ`) with their bytes, sorted by path.
+    ///
+    /// A directory style is walked: only real directories are entered, dot-files and dot-directories are left out
+    /// (an editor's swap file, `.DS_Store`), and every file is read through the same sandboxed `read` that
+    /// compiling uses, so a link that leaves the styles directory is refused. One file that cannot be read fails
+    /// the whole call, because a silent skip would give a copy that breaks later with a less clear message. A
+    /// style that imports a file outside its own directory and `lib/` is legal for `build` and is not followed.
+    ///
+    /// # Errors
+    /// - `Error::StyleRoot` - a directory of the style cannot be listed
+    /// - `Error::StyleFile` - a file cannot be read, or resolves outside the styles directory
+    pub fn files(&self) -> Result<Vec<(PathBuf, Vec<u8>)>, Error> {
+        let style_dir: &str = self.name.as_ref();
+        let mut files = Vec::new();
+        match &self.files {
+            StyleFiles::Embedded(dir) => {
+                let mut found = Vec::new();
+                for part in [dir.get_dir(style_dir), dir.get_dir(SHARED_DIR)].into_iter().flatten() {
+                    collect_files(part, &mut found);
+                }
+                files.extend(found.into_iter().map(|(path, bytes)| (path, bytes.to_vec())));
+            }
+            StyleFiles::Directory { canonical_root, .. } => {
+                for part in [style_dir, SHARED_DIR] {
+                    walk_directory(canonical_root, Path::new(part), &mut files)?;
+                }
+            }
+        }
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(files)
+    }
+
     /// The path to show users for a virtual path.
     #[must_use]
     pub(crate) fn display_path(&self, vpath: &VirtualPath) -> PathBuf {
@@ -340,6 +385,44 @@ impl StyleSource {
             .filter(|s| !s.is_empty())
             .fold(base, |path, segment| path.join(segment))
     }
+}
+
+/// Adds every file under `root/relative` to `files`; a missing `relative` adds none (a style need not use `lib/`).
+fn walk_directory(root: &Path, relative: &Path, files: &mut Vec<(PathBuf, Vec<u8>)>) -> Result<(), Error> {
+    let here = root.join(relative);
+    let entries = match std::fs::read_dir(&here) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => return Err(Error::StyleRoot { path: here, source }),
+    };
+    for entry in entries {
+        let entry = entry.context(StyleRootSnafu { path: &here })?;
+        let name = entry.file_name();
+        if name.to_string_lossy().starts_with('.') {
+            continue;
+        }
+        let child = relative.join(&name);
+        let kind = entry.file_type().context(StyleRootSnafu { path: here.join(&name) })?;
+        if kind.is_dir() {
+            walk_directory(root, &child, files)?;
+        } else {
+            let virtual_path = VirtualPath::new(format!("/{}", slash_separated(&child)));
+            let read = virtual_path
+                .map_err(|_| FileError::AccessDenied)
+                .and_then(|vpath| read_directory(root, &vpath));
+            let bytes = read.context(StyleFileSnafu { path: here.join(&name) })?;
+            files.push((child, bytes.to_vec()));
+        }
+    }
+    Ok(())
+}
+
+/// `a/b/c` for a relative path, with `/` on every platform, which is what a virtual path wants.
+fn slash_separated(path: &Path) -> String {
+    path.components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn read_embedded(dir: &'static Dir<'static>, vpath: &VirtualPath) -> FileResult<Bytes> {
@@ -383,7 +466,7 @@ fn is_within(root: &Path, path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use claims::{assert_err, assert_ok};
+    use claims::{assert_err, assert_ok, assert_some};
     use include_dir::include_dir;
     use pretty_assertions::assert_eq;
 
@@ -399,6 +482,113 @@ mod tests {
 
     fn vpath(s: &str) -> VirtualPath {
         assert_ok!(VirtualPath::new(s))
+    }
+
+    #[test]
+    fn files_of_a_built_in_style_are_its_directory_and_the_lib_sorted() {
+        let style = assert_ok!(resolve(&name("pragmatic"), None));
+        let files = assert_ok!(style.files());
+        let paths: Vec<String> = files.iter().map(|(p, _)| slash_separated(p)).collect();
+        assert!(paths.windows(2).all(|w| w[0] < w[1]), "{paths:?}");
+        assert!(paths.contains(&"pragmatic/style.typ".to_string()), "{paths:?}");
+        assert!(paths.contains(&"lib/components.typ".to_string()), "{paths:?}");
+        assert!(
+            paths
+                .iter()
+                .all(|p| p.starts_with("pragmatic/") || p.starts_with("lib/")),
+            "{paths:?}"
+        );
+        let (_, theme) = assert_some!(files.iter().find(|(p, _)| slash_separated(p) == "pragmatic/theme.typ"));
+        assert_eq!(
+            theme.as_slice(),
+            assert_some!(BUILT_IN_STYLES.get_file("pragmatic/theme.typ")).contents()
+        );
+    }
+
+    #[test]
+    fn files_of_a_directory_style_match_its_bytes_and_skip_dot_files_and_other_styles() {
+        let tmp = assert_ok!(tempfile::tempdir());
+        for (path, text) in [
+            ("mine/style.typ", "a"),
+            ("mine/sub/part.typ", "b"),
+            ("mine/.hidden", "x"),
+            ("mine/.swap/inner.typ", "x"),
+            ("lib/shared.typ", "c"),
+            ("other/style.typ", "not mine"),
+        ] {
+            let full = tmp.path().join(path);
+            assert_ok!(std::fs::create_dir_all(full.parent().expect("parent")));
+            assert_ok!(std::fs::write(full, text));
+        }
+        let style = assert_ok!(StyleSource::directory(tmp.path(), name("mine")));
+        let files = assert_ok!(style.files());
+        let listed: Vec<(String, &[u8])> = files.iter().map(|(p, b)| (slash_separated(p), b.as_slice())).collect();
+        assert_eq!(
+            listed,
+            [
+                ("lib/shared.typ".to_string(), b"c".as_slice()),
+                ("mine/style.typ".to_string(), b"a".as_slice()),
+                ("mine/sub/part.typ".to_string(), b"b".as_slice()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_directory_style_without_a_lib_lists_just_its_own_files() {
+        let tmp = assert_ok!(tempfile::tempdir());
+        assert_ok!(std::fs::create_dir(tmp.path().join("mine")));
+        assert_ok!(std::fs::write(tmp.path().join("mine/style.typ"), "a"));
+        let files = assert_ok!(assert_ok!(StyleSource::directory(tmp.path(), name("mine"))).files());
+        assert_eq!(files.len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_that_links_outside_the_styles_directory_fails_the_listing() {
+        let tmp = assert_ok!(tempfile::tempdir());
+        let root = tmp.path().join("root");
+        assert_ok!(std::fs::create_dir_all(root.join("mine")));
+        assert_ok!(std::fs::write(root.join("mine/style.typ"), "a"));
+        assert_ok!(std::fs::write(tmp.path().join("secret"), "s"));
+        assert_ok!(std::os::unix::fs::symlink(
+            tmp.path().join("secret"),
+            root.join("mine/link.typ")
+        ));
+        let err = assert_err!(assert_ok!(StyleSource::directory(&root, name("mine"))).files());
+        assert!(
+            matches!(
+                err,
+                Error::StyleFile {
+                    source: FileError::AccessDenied,
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_directory_is_not_entered() {
+        let tmp = assert_ok!(tempfile::tempdir());
+        let root = tmp.path().join("root");
+        assert_ok!(std::fs::create_dir_all(root.join("mine")));
+        assert_ok!(std::fs::write(root.join("mine/style.typ"), "a"));
+        assert_ok!(std::os::unix::fs::symlink(&root, root.join("mine/loop")));
+        let err = assert_err!(assert_ok!(StyleSource::directory(&root, name("mine"))).files());
+        // A link to a directory is read as a file, which is refused: no loop and no escape.
+        assert!(matches!(err, Error::StyleFile { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn the_shared_lib_directory_is_not_a_style_built_in_or_in_a_styles_directory() {
+        let tmp = assert_ok!(tempfile::tempdir());
+        assert_ok!(std::fs::create_dir_all(tmp.path().join("lib")));
+        assert_ok!(std::fs::write(tmp.path().join("lib/style.typ"), "x"));
+        for styles_dir in [None, Some(tmp.path())] {
+            let err = assert_err!(resolve(&name("lib"), styles_dir));
+            assert!(matches!(err, Error::UnknownStyle { .. }), "{err:?}");
+        }
     }
 
     #[test]

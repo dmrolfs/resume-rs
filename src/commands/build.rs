@@ -2,7 +2,7 @@
 //! ABOUTME: Each file gets its own summary line; a failure in one file never hides or skips the others.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use snafu::ResultExt;
@@ -10,7 +10,7 @@ use snafu::ResultExt;
 use super::emit::Reporter;
 use super::report::Built;
 use super::{BuildLine, Env, Io, Outcome};
-use crate::cli::{BuildArgs, Cli};
+use crate::cli::{BuildArgs, Cli, RenderArgs};
 use crate::diagnostics::{Diagnostic, DiagnosticCode, Sources, Summary};
 use crate::error::{Error, ReadInputSnafu};
 use crate::markdown::Parsed;
@@ -34,12 +34,26 @@ impl<'a> BuildResult<'a> {
 }
 
 /// Everything the files of one `build` share: the style, the fonts, and the way to write.
-struct Job<'a> {
-    args: &'a BuildArgs,
+///
+/// `watch` builds with the same job again and again, so what one file's build came to is returned, not only
+/// printed.
+pub(super) struct Job<'a> {
+    out_dir: &'a Path,
+    render: &'a RenderArgs,
     format: OutputFormat,
     cwd: &'a Path,
     session: Session,
     writer: Writer,
+}
+
+/// What building one file came to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Built1 {
+    /// How the file's build ended, by its findings.
+    pub outcome: Outcome,
+    /// The PDF that was written; `None` when none was, including in a dry run. A layout error still writes
+    /// the PDF, so this can be `Some` while `outcome` is `Failure`.
+    pub wrote: Option<PathBuf>,
 }
 
 /// Builds every file in `args`, in the order given, and ends with the worst outcome of them.
@@ -54,7 +68,7 @@ pub(super) fn run(cli: &Cli, args: &BuildArgs, env: &Env, io: &mut Io<'_>) -> Ou
     };
     args.files
         .iter()
-        .map(|file| job.build_one(file, &mut out))
+        .map(|file| job.build_one(file, &mut out).outcome)
         .max()
         .unwrap_or(Outcome::Success)
 }
@@ -72,14 +86,26 @@ fn summary_with_error(findings: &[&Diagnostic], error: Option<&Error>) -> Summar
     }
 }
 
+impl Built1 {
+    fn unwritten(outcome: Outcome) -> Self {
+        Self { outcome, wrote: None }
+    }
+}
+
 impl<'a> Job<'a> {
     /// Resolves the style and builds the font set once, so an unknown style or an unreadable font directory
     /// fails the whole run before any file is touched.
     fn prepare(cli: &Cli, args: &'a BuildArgs, env: &'a Env) -> Result<Self, Error> {
+        Self::open(cli, &args.out, &args.render, env)
+    }
+
+    /// The job for building into `out_dir` with `render`, as `build` and `watch` both do.
+    pub(super) fn open(cli: &Cli, out_dir: &'a Path, render: &'a RenderArgs, env: &'a Env) -> Result<Self, Error> {
         // `build` can do nothing without a style or fonts, unlike `doctor`, which reports them.
-        let session = Session::open(&args.render, env.resume_font_path.as_deref()).require_ready()?;
+        let session = Session::open(render, env.resume_font_path.as_deref()).require_ready()?;
         Ok(Self {
-            args,
+            out_dir,
+            render,
             format: cli.format,
             cwd: &env.cwd,
             session,
@@ -91,55 +117,59 @@ impl<'a> Job<'a> {
         })
     }
 
-    fn build_one(&self, file: &Path, out: &mut Reporter<'_, '_>) -> Outcome {
+    pub(super) fn build_one(&self, file: &Path, out: &mut Reporter<'_, '_>) -> Built1 {
         let started = Instant::now();
         match self.attempt(file, started, out) {
-            Ok(outcome) => outcome,
-            Err(error) => self.present(
+            Ok(built) => built,
+            Err(error) => Built1::unwritten(self.present(
                 BuildResult::failed(self.shown(file), &error),
                 started,
                 &[],
                 &[],
                 &out.sources(),
                 out,
-            ),
+            )),
         }
     }
 
-    fn attempt(&self, file: &Path, started: Instant, out: &mut Reporter<'_, '_>) -> Result<Outcome, Error> {
+    fn attempt(&self, file: &Path, started: Instant, out: &mut Reporter<'_, '_>) -> Result<Built1, Error> {
         let text = fs::read_to_string(file).context(ReadInputSnafu { path: file })?;
-        let assessment = self.session.assess(file, &text, &self.args.render);
+        let assessment = self.session.assess(file, &text, self.render);
         let mut sources = out.sources();
         sources.insert(file, &text);
         let parsed = &assessment.parsed;
         let (compiled, layout) = match &assessment.rendered {
-            Rendered::Skipped(Skip::FormatErrors) => return Ok(self.without_pdf(file, parsed, &sources, started, out)),
+            Rendered::Skipped(Skip::FormatErrors) => {
+                return Ok(Built1::unwritten(
+                    self.without_pdf(file, parsed, &sources, started, out),
+                ));
+            }
             // `prepare` required a ready session, so a setup failure cannot get here.
             Rendered::Skipped(Skip::Setup) => unreachable!("build requires a ready session before any file"),
             Rendered::Failed(error) => {
                 let findings: Vec<&Diagnostic> = parsed.diagnostics().iter().collect();
-                return Ok(self.present(
+                return Ok(Built1::unwritten(self.present(
                     BuildResult::failed(self.shown(file), error),
                     started,
                     &findings,
                     &[],
                     &sources,
                     out,
-                ));
+                )));
             }
             Rendered::LayoutFailed { compiled, error } => {
                 for style_file in compiled.sources() {
                     sources.insert(&style_file.path, &style_file.text);
                 }
                 let findings: Vec<&Diagnostic> = parsed.diagnostics().iter().chain(compiled.warnings()).collect();
-                return Ok(self.present(
+                return Ok(Built1::unwritten(self.present(
                     BuildResult::failed(self.shown(file), error),
                     started,
                     &findings,
                     &[],
                     &sources,
                     out,
-                ));
+                )));
             }
             Rendered::Laid { compiled, layout } => (compiled, layout),
         };
@@ -148,7 +178,7 @@ impl<'a> Job<'a> {
         }
         let mut findings: Vec<&Diagnostic> = parsed.diagnostics().iter().chain(compiled.warnings()).collect();
         findings.extend(&layout.diagnostics);
-        let target = self.args.out.join(BuildArgs::pdf_name(file));
+        let target = self.out_dir.join(BuildArgs::pdf_name(file));
         // Delivery can fail after diagnostics exist. Present both rather than discarding the findings.
         let written = compiled.export_pdf(&BuildArgs::pdf_stem(file)).and_then(|pdf| {
             self.writer.commit(Planned {
@@ -160,14 +190,14 @@ impl<'a> Job<'a> {
         let written = match written {
             Ok(written) => written,
             Err(error) => {
-                return Ok(self.present(
+                return Ok(Built1::unwritten(self.present(
                     BuildResult::failed(self.shown(file), &error),
                     started,
                     &findings,
                     &layout.fonts,
                     &sources,
                     out,
-                ));
+                )));
             }
         };
         let path = self.shown(&target);
@@ -186,14 +216,27 @@ impl<'a> Job<'a> {
                 creates_dir: creates_dir.as_deref().map(|dir| self.shown(dir)),
             },
         };
-        Ok(self.present(
+        let outcome = self.present(
             BuildResult { built, error: None },
             started,
             &findings,
             &layout.fonts,
             &sources,
             out,
-        ))
+        );
+        Ok(Built1 {
+            outcome,
+            wrote: (self.writer.mode() == WriteMode::Write).then_some(target),
+        })
+    }
+
+    /// Resolves the style again before a build, for `watch` with a styles directory: a style made after the
+    /// watch started, or one removed, is seen. The fonts are kept, and so is the previous style when this fails.
+    ///
+    /// # Errors
+    /// The style can no longer be resolved, as it could at the start.
+    pub(super) fn refresh_style(&mut self) -> Result<(), Error> {
+        self.session.resolve_style_again(self.render)
     }
 
     /// The name of the style in use; the session was checked ready before any file was built.
