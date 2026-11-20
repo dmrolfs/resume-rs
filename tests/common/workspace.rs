@@ -29,6 +29,14 @@ pub fn fixture(name: &str) -> String {
     assert_ok!(fs::read_to_string(&path), "{}", path.display())
 }
 
+/// `full.md` without its Education section: two pages whose last page holds one role and a bullet, well below
+/// the sparse-page line, so a test of that finding does not depend on how tightly a theme sets the page.
+pub fn sparse_fixture() -> String {
+    let full = fixture("full.md");
+    let cut = full.find("## Education").expect("full.md has an Education section");
+    full[..cut].to_string()
+}
+
 impl Workspace {
     pub fn new() -> Self {
         Self {

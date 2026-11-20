@@ -12,7 +12,7 @@ use resume::diagnostics::termcolor::Buffer;
 
 #[path = "common/workspace.rs"]
 mod workspace;
-use workspace::{FailingStdout, Workspace, fixture};
+use workspace::{FailingStdout, Workspace, fixture, sparse_fixture};
 
 fn shown(parts: &[&str]) -> String {
     parts.iter().collect::<PathBuf>().display().to_string()
@@ -53,7 +53,7 @@ fn summary_lists_resolved_fonts() {
 #[test]
 fn sparse_last_page_warns() {
     let work = Workspace::new();
-    let input = work.file("Resume.md", &fixture("full.md"));
+    let input = work.file("Resume.md", &sparse_fixture());
     let run = work.build(&[&input], &[]);
     assert_eq!(run.outcome, Outcome::Success, "{}", run.stderr);
     assert!(run.stderr.contains("the last page is"), "{}", run.stderr);
@@ -239,7 +239,7 @@ fn refused_output_preserves_layout_findings_and_summary_in_both_formats_and_mode
     for dry_run in [false, true] {
         for format in ["human", "json"] {
             let work = Workspace::new();
-            let input = work.file("Resume.md", &fixture("full.md"));
+            let input = work.file("Resume.md", &sparse_fixture());
             let target = work.out().join("Resume.pdf");
             assert_ok!(fs::create_dir_all(&target));
             let mut extra = vec!["--max-pages", "1", "--format", format];
@@ -294,7 +294,7 @@ fn compile_failure_has_a_summary_counting_its_diagnostics() {
 #[test]
 fn a_read_only_pdf_preserves_findings_and_its_original_bytes() {
     let work = Workspace::new();
-    let input = work.file("Resume.md", &fixture("full.md"));
+    let input = work.file("Resume.md", &sparse_fixture());
     let target = work.file("out/Resume.pdf", "original PDF");
     let original_permissions = assert_ok!(fs::metadata(&target)).permissions();
     struct RestorePermissions(PathBuf, fs::Permissions);

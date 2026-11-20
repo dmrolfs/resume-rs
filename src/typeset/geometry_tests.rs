@@ -113,9 +113,15 @@ fn a_long_bullet_that_fits_is_not_an_overflow() {
     );
 }
 
+/// `full.md` without its Education section: the last page holds one role, well below the sparse line, so this
+/// does not depend on how tightly the theme sets the page.
+fn sparse_resume() -> &'static str {
+    &FULL[..FULL.find("## Education").expect("the fixture has an Education section")]
+}
+
 #[test]
-fn the_full_fixture_has_a_sparse_last_page() {
-    let report = report_of(FULL);
+fn a_two_page_resume_with_a_short_last_page_has_a_sparse_last_page() {
+    let report = report_of(sparse_resume());
     let found = with_code(&report, DiagnosticCode::SparseLastPage);
     assert_eq!(found.len(), 1, "{:?}", report.diagnostics);
     assert_eq!(found[0].severity, Severity::Warning);
