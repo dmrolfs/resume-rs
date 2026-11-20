@@ -60,7 +60,10 @@ impl DiagnosticCode {
                 summary: "The bold line looks like an era but is not `**Name · Period**`.",
                 why: "Project convention: an era is a paragraph that is only bold text: a name, ` · `, and dates. It shows progression inside one employer.",
                 fix: "Make the whole paragraph bold with a name, ` · `, and dates; move any other text into its own paragraph.",
-                example: Some(("**AI platforms** · 2026 – Present", "**AI platforms · 2026 – Present**")),
+                example: Some((
+                    "**AI platforms · 2026 – Present** Led the platform team.",
+                    "**AI platforms · 2026 – Present**\n\nLed the platform team.",
+                )),
             },
             EraOutsideRole => &Advice {
                 summary: "An era line is outside a role.",
@@ -81,19 +84,22 @@ impl DiagnosticCode {
                 summary: "The period ends before it starts.",
                 why: "Project convention: a period runs from its start to its end; a reversed range is almost always a typo.",
                 fix: "Swap the dates, or correct the year.",
-                example: Some(("2020 – 2018", "2018 – 2020")),
+                example: Some(("### Acme · Engineer · 2020 – 2018", "### Acme · Engineer · 2018 – 2020")),
             },
             PeriodHyphen => &Advice {
                 summary: "Use an en dash with a space on each side between dates.",
                 why: "Project convention: one separator everywhere keeps dates consistent, which the book asks for, and lets styles align them.",
                 fix: "Replace the separator with ` – ` (an en dash; Option+hyphen on a Mac).",
-                example: Some(("2015 - 2017", "2015 – 2017")),
+                example: Some(("### Acme · Engineer · 2015 - 2017", "### Acme · Engineer · 2015 – 2017")),
             },
             PeriodPresentSpelling => &Advice {
                 summary: "Write `Present` for an ongoing role.",
                 why: "Project convention: a single spelling keeps dates consistent, which the book asks for.",
                 fix: "Replace `Current`, `Now`, or another capitalization with `Present`.",
-                example: Some(("Aug 2017 – Current", "Aug 2017 – Present")),
+                example: Some((
+                    "### Acme · Engineer · Aug 2017 – Current",
+                    "### Acme · Engineer · Aug 2017 – Present",
+                )),
             },
             UnsupportedHtml => &Advice {
                 summary: "Raw HTML can't be typeset.",
@@ -154,8 +160,8 @@ impl DiagnosticCode {
                 why: "The Tech Resume Inside Out: don't share more than four contact details or social profiles.",
                 fix: "Keep location, email, phone, and one or two links; drop the rest.",
                 example: Some((
-                    "Seattle, WA · 206-555-0100 · ada@example.com · [LinkedIn](https://l.in/a) · [GitHub](https://g.h/a)",
-                    "Seattle, WA · ada@example.com · [LinkedIn](https://l.in/a) · [GitHub](https://g.h/a)",
+                    "# Ada Lovelace\n\nSeattle, WA · 206-555-0100 · ada@example.com · [LinkedIn](https://l.in/a) · [GitHub](https://g.h/a)",
+                    "# Ada Lovelace\n\nSeattle, WA · ada@example.com · [LinkedIn](https://l.in/a) · [GitHub](https://g.h/a)",
                 )),
             },
             MissingContact => &Advice {
@@ -213,21 +219,27 @@ impl DiagnosticCode {
                 summary: "A bundled font stands in for the template's font; layout is unchanged.",
                 why: "Project convention: each style names the template's own font and a free bundled substitute with the same character widths (Calibri and Carlito, Georgia and Gelasio), so line breaks and the page count match and only glyph shapes differ.",
                 fix: "No action is needed. To get the original glyph shapes, install the font or pass `--font-path <DIR>` with its font files. `--fonts bundled` always uses the substitute.",
-                example: Some(("resume build resume.md", "resume build resume.md --font-path ~/Fonts")),
+                example: Some((
+                    "resume check resume.md --fonts bundled",
+                    "resume check resume.md --font-path ~/Fonts",
+                )),
             },
             FontFallbackLayout => &Advice {
                 summary: "A bundled font with different character widths stands in; line breaks may change.",
                 why: "Project convention: the substitute for this role is not metric-compatible (TeX Gyre Pagella for Book Antiqua), so text can wrap differently and the page count can change.",
-                fix: "Install the preferred font or pass `--font-path <DIR>` with its font files, rebuild, and check the page count and the last page.",
-                example: Some(("resume build resume.md", "resume build resume.md --font-path ~/Fonts")),
+                fix: "Install the preferred font or pass `--font-path <DIR>` with its font files, rebuild, and check the page count and the last page. Or name a metric-compatible fallback in the style's `theme.typ`.",
+                example: Some((
+                    r#"body: (preferred: "Calibri", fallback: "Arimo", metric-compatible: false)"#,
+                    r#"body: (preferred: "Calibri", fallback: "Carlito", metric-compatible: true)"#,
+                )),
             },
             FontMissing => &Advice {
                 summary: "Neither the preferred font nor its bundled fallback is available.",
                 why: "Project convention: every role in a style names a preferred font and a bundled fallback, so a build never lacks a font; this happens only when a style's font list was edited.",
                 fix: "Name a bundled family as the fallback in the style's `theme.typ`, install the font, or pass `--font-path <DIR>`.",
                 example: Some((
-                    r#"body: (preferred: "Calibri", fallback: "Calbri")"#,
-                    r#"body: (preferred: "Calibri", fallback: "Carlito")"#,
+                    r#"body: (preferred: "Calibri", fallback: "Calbri", metric-compatible: true)"#,
+                    r#"body: (preferred: "Calibri", fallback: "Carlito", metric-compatible: true)"#,
                 )),
             },
             PageLimitExceeded => &Advice {
@@ -316,8 +328,8 @@ impl DiagnosticCode {
                 why: "Project convention: `--style` looks in `--styles-dir` first and then among the built-in styles; a name that is in neither cannot be rendered.",
                 fix: "Run `resume styles` to see the names, or fix the spelling. To make your own, run `resume export-style <NAME> <DIR>` and edit the copy.",
                 example: Some((
-                    "resume build resume.md --style monoo",
-                    "resume build resume.md --style mono",
+                    "resume check resume.md --style monoo",
+                    "resume check resume.md --style mono",
                 )),
             },
             StyleMissingMain => &Advice {
@@ -342,7 +354,7 @@ impl DiagnosticCode {
                 summary: "The output directory cannot be created or written, so build would fail.",
                 why: "Project convention: `build` writes the PDF beside nothing else, in the `--out` directory, creating it if it is missing; a file or a read-only path in the way stops it.",
                 fix: "Choose another directory with `-o <DIR>`, or remove what is in the way.",
-                example: Some(("resume build resume.md -o resume.md", "resume build resume.md -o out")),
+                example: Some(("resume check resume.md -o resume.md", "resume check resume.md -o out")),
             },
             TypstError => &Advice {
                 summary: "The style's Typst code failed to compile.",
