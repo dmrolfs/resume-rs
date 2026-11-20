@@ -23,7 +23,7 @@ when it differs from the copy in the locked crate, which is how a Typst upgrade 
 the other data the crate ships (Foxit fonts, ICC profiles, and W3C data). A search of the built binary finds no
 Foxit font (none of `FoxitSans`, `FoxitFixed`, or `FoxitSerif`; rsm-141.10), only the fonts listed here; the notice
 is printed whole anyway, so a later change that links them does not leave a license out. Whether the two GPL exceptions cover
-shipping `NewCM10-Regular` inside a program is for the owner to confirm (rsm-141.13).
+shipping `NewCM10-Regular` inside a program is for the owner to confirm; as of rsm-141.13 the README says the question is open, and it is not settled by that task.
 
 This is a summary of the obligations of each license, not legal advice.
 

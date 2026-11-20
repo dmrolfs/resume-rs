@@ -250,8 +250,12 @@ In-crate (`src/typeset/pragmatic_tests.rs`, reads frames) and through the public
 - [x] `watch_continues_after_output_locked` (`cfg(windows)`, `src/commands/watch.rs`): open the PDF with `share_mode(0)`, save, expect the lock error and hint, release, save, expect the new PDF
 
 ### rsm-141.13: README and migration
-- [ ] `baselines_build_in_all_styles` (ignored, needs `RESUME_BASELINES`)
-- [ ] Manual: review the README commands by running each one exactly as documented.
+- [x] `baselines_build_in_all_styles` (`tests/baselines_test.rs`, ignored, needs `RESUME_BASELINES`): both real resumes in `pragmatic`, `mono`, and `experienced` with `--fonts bundled`, no error finding, a PDF that starts `%PDF-` and ends `%%EOF`. Warnings are allowed, since they are advice about the writing. `baselines_parse_without_errors` (in `parse_test.rs`) no longer pins the exact set of findings, only that the five-item contact line is flagged.
+- [x] `tests/readme_test.rs`: the quick-start resume builds with no findings, every `resume ...` command in the quick start parses as written, the dry-run and explain and export commands do what the README says, and the README names the archives the packaging script makes.
+- [x] `tests/package_release_test.rs` (unix): the tarball and the zip hold one directory with the program and the license files, the program is executable, the `.sha256` line is the form `shasum -c` reads and verifies, bad arguments write nothing.
+- [x] Manual: every README command was run as written in an empty directory with the debug binary on `PATH` (exit 0 for each; `watch --open` rebuilt after an edit).
+- [x] The Windows leg of `ci.yml` packages the release exe with `scripts/package-release.sh`, checks the `.sha256` line, unzips it with `Expand-Archive`, and runs the program from the zip (runs on every push).
+- [ ] Not tested here: the `release` job of `ci.yml` (draft release) runs only on a `v*` tag, and installing on a clean macOS or Windows machine (Gatekeeper, SmartScreen) was not tried.
 
 ## Test File Organization
 
