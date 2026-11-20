@@ -1,4 +1,4 @@
-//! ABOUTME: Helpers shared by the parser's integration tests: applying Edits and checking what a span quotes.
+//! ABOUTME: Helpers shared by the integration tests: applying Edits, checking spans, and rendering the full fixture.
 //! ABOUTME: Lives in `common/mod.rs` so cargo does not compile it as a test target of its own.
 
 // Each integration test is its own crate and uses a different subset of these helpers.
@@ -169,4 +169,38 @@ pub fn run_child(mut command: std::process::Command, timeout: std::time::Duratio
         success: status.is_some_and(|s| s.success()),
         stderr,
     }
+}
+
+// ---- rendering the full fixture (the style tests) -------------------------------------------------
+
+/// The synthetic full fixture, which must parse with no diagnostics.
+pub fn full_resume() -> resume::model::Resume {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/full.md");
+    let text = claims::assert_ok!(std::fs::read_to_string(&path));
+    let (resume, diagnostics) = parse(&path, &text).into_parts();
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    claims::assert_some!(resume)
+}
+
+/// The bundled fonts, built once for all the tests of a binary.
+pub fn bundled_fonts() -> std::sync::Arc<resume::typeset::fonts::FontSet> {
+    static FONTS: std::sync::OnceLock<std::sync::Arc<resume::typeset::fonts::FontSet>> = std::sync::OnceLock::new();
+    std::sync::Arc::clone(FONTS.get_or_init(|| std::sync::Arc::new(resume::typeset::fonts::FontSet::bundled())))
+}
+
+/// The text of each page in content-stream order, with runs of whitespace collapsed to one space.
+pub fn page_texts(pdf: &[u8]) -> Vec<String> {
+    let doc = claims::assert_ok!(lopdf::Document::load_mem(pdf));
+    doc.get_pages()
+        .keys()
+        .map(|n| {
+            let text = claims::assert_ok!(doc.extract_text(&[*n]));
+            text.split_whitespace().collect::<Vec<_>>().join(" ")
+        })
+        .collect()
+}
+
+/// Where `needle` starts in `haystack`; fails the test when it is not there.
+pub fn position(haystack: &str, needle: &str) -> usize {
+    claims::assert_some!(haystack.find(needle), "`{needle}` not in {haystack:?}")
 }

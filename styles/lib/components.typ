@@ -144,8 +144,9 @@
 #let _phone-text = regex("^\+?[0-9(][0-9 ().\-]{6,}(\s*(ext|x)\.?\s*\d+)?$")
 #let _is-phone(item) = inlines-text(item).trim().match(_phone-text) != none
 
-// Sorts the contact items into the pragmatic header's two sides: `where` (location, then links) and
-// `reach` (phone, then email). Anything unrecognized counts as location, so nothing is dropped.
+// Sorts the contact items into four groups, each in the order written: `where` (location and anything
+// unrecognized, so nothing is dropped), `links`, `phones`, and `emails`. A style arranges them: pragmatic puts
+// `where` and `links` left and `phones` and `emails` right; mono puts them on one line.
 #let contact-parts(contact) = {
   let items = contact-items(contact)
   let emails = items.filter(_is-email)
@@ -189,12 +190,18 @@
 // What the three kinds of heading show. A style may replace any of them (see `default-headings`); the
 // stickiness and spacing stay with the components that call them, so a replacement keeps the guarantees.
 
-// Title, company and period of a role.
+// The layout of a role line: `lead` (title and company) on the left, `period` on the right, at the role size.
+#let role-grid(theme, lead, period) = text(
+  size: theme.size.role,
+  grid(columns: (1fr, auto), column-gutter: 1em, lead, align(right, period)),
+)
+
+// Title, company and period of a role, all bold.
 #let role-heading-content(theme, role) = {
   let lead = if role.title != none { strong(role.title) + [ · ] + strong(role.company) } else {
     strong(role.company)
   }
-  text(size: theme.size.role, grid(columns: (1fr, auto), column-gutter: 1em, lead, align(right, strong(role.period.text))))
+  role-grid(theme, lead, strong(role.period.text))
 }
 
 // Name and period of an era.
@@ -298,6 +305,13 @@
   ) { pagebreak(weak: true) } else {
     panic("unknown block kind `" + blk.kind + "`: the style and the resume schema have drifted apart")
   }
+}
+
+// Every section of the resume: its heading, then its blocks. `headings` replaces the content of the headings (see
+// `default-headings`); it reaches both the section headings and the role and era lines.
+#let render-sections(theme, resume, headings: default-headings) = for section in resume.sections {
+  section-heading(theme, section.title, headings: headings)
+  for blk in section.blocks { render-block(theme, blk, headings: headings) }
 }
 
 // ---- page furniture -------------------------------------------------------------------------------

@@ -189,6 +189,10 @@ In-crate (`src/typeset/pragmatic_tests.rs`, reads frames) and through the public
 ### rsm-141.8: mono
 - [ ] `full_fixture_renders_in_mono_without_warnings`
 - [ ] `mono_text_order_title_then_company`
+- [ ] `section_headings_are_set_in_capitals`, `the_contact_details_follow_the_books_order_under_the_name`, `footer_shows_name_and_page_of_total`, `roles_and_eras_leave_probes_in_document_order`, `font_roles_prefer_calibri_and_fall_back_to_carlito`, `bundled_mode_embeds_only_bundled_families`, and `the_built_in_mono_style_and_the_same_files_on_disk_render_the_same_bytes` (`tests/mono_test.rs`)
+- [ ] `mono_keeps_the_same_pagination_guarantees` (sweep, `src/typeset/pragmatic_tests.rs`) and the ignored `bundled_and_original_body_fonts_break_lines_identically_in_mono` (needs `RESUME_ORIGINAL_FONTS_DIR`)
+- [ ] In `src/typeset/pragmatic_tests.rs`: `the_mono_role_line_is_bold_throughout_like_the_template` (also a role without a title), `the_mono_contact_items_are_one_centered_line_under_the_centered_name_in_the_books_order`, `a_mono_contact_line_that_is_too_wide_wraps_between_items_never_inside_one`, `a_mono_resume_without_a_contact_line_renders_the_centered_name_then_the_first_section`, `mono_capitalizes_whatever_the_section_is_called`, `mono_has_no_color_but_its_links`, `mono_underlines_its_links_in_the_link_color`, `mono_sets_each_kind_of_text_in_the_templates_size_weight_and_face`, `each_mono_section_title_sits_over_one_black_one_point_rule_the_width_of_the_text`, `a_mono_name_that_wraps_keeps_the_contact_line_17pt_under_its_last_line`, `mono_is_centered_on_a4_too`, `mono_keeps_the_values_approved_for_pragmatic_in_step_with_pragmatic`, `the_mono_heading_checks_fail_once_their_stickiness_is_removed`; and `an_edited_copy_of_the_mono_theme_renders_differently` (`tests/mono_test.rs`)
+- Not covered: the mono ignored identity test does not compare x positions or a wrapped contact line
 
 ### rsm-141.9: experienced
 - [ ] `full_fixture_renders_in_experienced_without_warnings`
