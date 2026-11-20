@@ -62,11 +62,7 @@ mod tests {
         let cwd = Path::new("/work");
         let entries = [
             entry("pragmatic", StyleLocation::BuiltIn, None),
-            entry(
-                "mine",
-                StyleLocation::Directory(PathBuf::from("/work/styles/mine")),
-                None,
-            ),
+            entry("mine", StyleLocation::Directory(cwd.join("styles").join("mine")), None),
             entry(
                 "half",
                 StyleLocation::Directory(PathBuf::from("/elsewhere/half")),

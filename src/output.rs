@@ -578,7 +578,7 @@ mod tests {
         let dir = dir();
         let target = dir.path().join("out.pdf");
         assert_ok!(fs::write(&target, b"old"));
-        let _viewer = held_open(&target, share_mode);
+        let viewer = held_open(&target, share_mode);
         let err = assert_err!(write(&target, b"new"));
         if let Error::OutputLocked { source, .. } = &err {
             // The CI log records which Windows error a held file really causes (5, 32, or 33).
@@ -592,6 +592,8 @@ mod tests {
             assert_some_hint(&err).contains("close the PDF viewer"),
             "the hint says what to do: {err}"
         );
+        // The viewer still holds the file with no sharing, so even reading it back is refused until it lets go.
+        drop(viewer);
         assert_eq!(read(&target), b"old");
         assert_eq!(leftovers(dir.path()), Vec::<String>::new());
     }
