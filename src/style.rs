@@ -288,8 +288,8 @@ impl StyleSource {
     /// Opens a style embedded in the binary.
     ///
     /// # Errors
-    /// `Error::UnknownStyle` or `Error::StyleMissingMain` when the embedded set lacks the style: a build
-    /// defect, or a style that exists as a name (`experienced`) but has not been written yet.
+    /// `Error::UnknownStyle` or `Error::StyleMissingMain` when the embedded set lacks the style, which is a
+    /// build defect: every [`BuiltinStyle`] is written.
     pub fn builtin(style: BuiltinStyle) -> Result<Self, Error> {
         let name = StyleName::try_new(style.as_ref()).expect("built-in style names are valid style names");
         Self::embedded(&BUILT_IN_STYLES, name)

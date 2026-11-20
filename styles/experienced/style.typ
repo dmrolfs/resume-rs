@@ -1,0 +1,147 @@
+// ABOUTME: The experienced style: section labels in a left gutter, roles as Company, Title with the period on the right.
+// ABOUTME: Modeled on the Experienced Engineer's resume template; structure lives here, values in theme.typ.
+
+#import "/lib/components.typ": *
+#import "./theme.typ": theme as edited-theme
+
+// The gutter is taken out of the left page margin: the page margin the shared components set is the theme's
+// page margin plus the gutter, and `gutter-reach` is how far the header, the section rows and the footer reach
+// back over it. Derived here, so a theme edit to either `gutter` or `page-margin` moves everything together.
+#let theme = {
+  let reach = edited-theme.gutter.width + edited-theme.gutter.gap
+  let page = edited-theme.page-margin
+  (..edited-theme, margin: (..page, left: page.left + reach), gutter-reach: reach)
+}
+
+#let resume = index-roles(json("/resume.json"))
+
+#show: resume-document.with(theme, resume)
+
+// The name centered over the whole page, then email, phone and location, then the links, each centered.
+// The header reaches back over the gutter in the left margin, so it is centered on the page.
+#let header(theme, resume) = {
+  let parts = contact-parts(resume.contact)
+  let line(..groups) = {
+    let items = groups.pos().fold((), (all, group) => all + group)
+    if items.len() > 0 { align(center, join-items(items, sep: [ • ])) }
+  }
+  pad(left: -theme.gutter-reach, {
+    // The lines of the header sit one line pitch apart, with no paragraph spacing between them.
+    set par(spacing: 0pt)
+    align(center, text(font: font-stack(theme.fonts.label), size: theme.size.name, resume.name))
+    v(theme.spacing.name-below)
+    line(parts.emails, parts.phones, parts.where)
+    line(parts.links)
+  })
+}
+
+// The label in the gutter: the section title in capitals, in the label font, black, inset from the page margin.
+// The text edges are lengths taken from the size of the first line beside the label (`line-size`), not from the
+// label's own size, so the label and that line share a baseline.
+//
+// A word wider than the label cell cannot break (hyphenation is off) and would run over the content. So the label
+// is set smaller until its widest word fits, down to `size.label-min`; titles are in capitals and the longest
+// ordinary ones, such as ACCOMPLISHMENTS, take a little under 10pt in place of 12pt. A word that is still too wide
+// at the smallest size is set as one box per letter, so a line may end between any two letters and the label stays
+// inside the gutter for any title. The characters are unchanged: the bookmark and the heading tag carry the title
+// itself. Inserting zero-width spaces instead would put U+200B into both.
+#let section-label(theme, title, line-size) = context {
+  let cell = theme.gutter.width - 2 * theme.gutter.inset
+  let label-text(size, body) = text(
+    font: font-stack(theme.fonts.label),
+    size: size,
+    weight: "bold",
+    fill: theme.color.label,
+    top-edge: theme.line.top * (line-size / size),
+    bottom-edge: theme.line.bottom * (line-size / size),
+    body,
+  )
+  let words = upper(title).split()
+  let widest = calc.max(0pt, ..words.map(word => measure(label-text(theme.size.label, word)).width))
+  let size = if widest > cell { calc.max(theme.size.label * (cell / widest), theme.size.label-min) } else { theme.size.label }
+  // A word that fits after shrinking is left whole. The tolerance covers the rounding of a width that was scaled to
+  // the cell exactly, so a word that was shrunk to fit is never broken as well.
+  let fit(word) = if measure(label-text(size, word)).width > cell + 0.5pt { word.clusters().map(box).join() } else { word }
+  let body = words.map(fit).join(" ")
+  pad(left: theme.gutter.inset, right: theme.gutter.inset, heading(level: 1, label-text(size, body)))
+}
+
+// The role line: Company, Title in bold, with the period on the right in bold at the body size.
+#let role-heading(theme, role) = {
+  let lead = if role.title != none { role.company + ", " + role.title } else { role.company }
+  grid(
+    columns: (1fr, auto),
+    column-gutter: 1em,
+    align: (left + bottom, right + bottom),
+    text(size: theme.size.role, strong(lead)),
+    text(size: theme.size.period, strong(role.period.text)),
+  )
+}
+
+#let headings = (..default-headings, role: role-heading)
+
+// A group of skills as rows of a label and its value. The label column is as wide as the longest label,
+// up to `skills.label-max`; longer labels wrap. Each row is unbreakable. Labels are regular weight, as in the
+// template; an inline in a label (a link) keeps its own style.
+#let skills-table(theme, items) = context {
+  let labels = items.map(item => render-inlines(item.label) + [:])
+  let widest = calc.max(..labels.map(l => measure(l).width))
+  grid(
+    columns: (calc.min(widest, theme.skills.label-max), 1fr),
+    column-gutter: theme.skills.column-gap,
+    row-gutter: theme.spacing.skill-row,
+    ..items
+      .zip(labels)
+      .map(((item, label)) => (
+        grid.cell(breakable: false, label),
+        grid.cell(breakable: false, render-inlines(item.content)),
+      ))
+      .flatten(),
+  )
+}
+
+// A block of bullets in which every bullet has a label is a skills table; any other bullets are a list.
+#let is-skills(blk) = blk.kind == "bullets" and blk.items.len() > 0 and blk.items.all(item => item.label != none)
+
+#let render-section-block(theme, blk) = {
+  if is-skills(blk) {
+    block(above: theme.spacing.paragraph, below: theme.spacing.paragraph, skills-table(theme, blk.items))
+  } else { render-block(theme, blk, headings: headings) }
+}
+
+// The first unit of a section, which sits beside the label: a whole block, or for a role its heading and
+// blurb. The rest of a role follows below the row.
+#let render-first(theme, blk) = {
+  if blk.kind == "role" { role-head(theme, blk, headings: headings) } else { render-section-block(theme, blk) }
+}
+
+// A section: its label in the gutter beside its first unit, then the rest in the text column. The label
+// and the first unit share a grid row, so a label taller than the unit still gets room and the label never
+// ends a page alone. Page breaks that open a section come before the label.
+#let render-section(theme, section) = {
+  let start = section.blocks.position(blk => blk.kind != "page-break")
+  let leading = if start == none { section.blocks } else { section.blocks.slice(0, start) }
+  for blk in leading { render-block(theme, blk) }
+  let first-line-size = if start != none and section.blocks.at(start).kind == "role" { theme.size.role } else { theme.size.body }
+  let label = section-label(theme, section.title, first-line-size)
+  let row(content, sticky: false) = block(above: theme.spacing.section, below: 0pt, sticky: sticky, pad(left: -theme.gutter-reach, grid(
+    columns: (theme.gutter.width, 1fr),
+    column-gutter: theme.gutter.gap,
+    label,
+    content,
+  )))
+  // A section with nothing in it still shows its label; the row is sticky, so it moves with whatever follows.
+  if start == none { row([], sticky: true) } else {
+    let first = section.blocks.at(start)
+    // A role heading in the row has lost its own stickiness (a grid cell is one block), so the row takes
+    // it over: it moves to the next page with the first block after it. Other first blocks break normally.
+    let follows = first.kind == "role" and (first.blurb != none or first.body.len() > 0)
+    row(render-first(theme, first), sticky: follows)
+    if first.kind == "role" { role-body(theme, first, headings: headings) }
+    for blk in section.blocks.slice(start + 1) { render-section-block(theme, blk) }
+  }
+}
+
+#header(theme, resume)
+
+#for section in resume.sections { render-section(theme, section) }

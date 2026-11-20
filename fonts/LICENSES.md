@@ -5,9 +5,9 @@
 
 These fonts are compiled into the binary (`src/typeset/fonts.rs`, `FALLBACK_FAMILIES`) so a resume looks
 the same on every machine. Each stands in for a proprietary font that the style templates prefer and
-that is **never** bundled: Carlito for Calibri, Gelasio for Georgia, Arimo for Arial. A style uses the
-original when it is installed (or given with `--font-path`), and the stand-in otherwise. The stand-ins
-have the same character widths on the characters a resume uses, so line breaks match. Line positions also depend on the style setting explicit text edges, which the pragmatic theme does.
+that is **never** bundled: Carlito for Calibri, Gelasio for Georgia, Arimo for Arial, TeX Gyre Pagella for Book Antiqua. A style uses the
+original when it is installed (or given with `--font-path`), and the stand-in otherwise. The stand-ins for Calibri, Georgia, and Arial
+have the same character widths on the characters a resume uses, so line breaks match. TeX Gyre Pagella does not: its widths differ from Book Antiqua's by about 2.4% on average, so a style that falls back to it reports `font-fallback-layout` (a warning). Line positions also depend on the style setting explicit text edges, which the pragmatic theme does.
 
 Every file is the unmodified upstream file: nothing is subset, instanced, converted, or renamed.
 Carlito's license names a Reserved Font Name, and embedding the whole file keeps clear of it.
@@ -60,7 +60,33 @@ This is a summary of the obligations of each license, not legal advice.
   - `arimo/Arimo-Italic.ttf` `ffdf690e4357a392e4edcc3df0b3adb0302920f75e54f2e6eec355afbe7edcba`
   - `arimo/Arimo-BoldItalic.ttf` `77c967d49d4ef4a63c39fbcd1e27892102e503e35a20983cb058430c4f268b34`
 
-## What the OFL asks of a distribution that embeds these fonts
+## TeX Gyre Pagella 2.501 (stands in for Book Antiqua)
+
+- Source: <https://www.gust.org.pl/projects/e-foundry/tex-gyre/pagella/qpl2_501otf.zip>. The CTAN files (<https://mirrors.ctan.org/fonts/tex-gyre/opentype/>) are byte-identical.
+- License: GUST Font License v1.0 (22 June 2009), text in [`pagella/GUST-FONT-LICENSE.txt`](pagella/GUST-FONT-LICENSE.txt). It is an instance of the LaTeX Project Public License 1.3c (LPPL). The TeX Gyre README and MANIFEST are beside the fonts: [`pagella/README-TeX-Gyre-Pagella.txt`](pagella/README-TeX-Gyre-Pagella.txt) and [`pagella/MANIFEST-TeX-Gyre-Pagella.txt`](pagella/MANIFEST-TeX-Gyre-Pagella.txt) (from CTAN, version 2.501, matching the fonts; the GUST site now serves 2.609).
+- Copyright: Copyright 2006-2018 for TeX Gyre extensions by B. Jackowski, J.M. Nowacki, et al. (on behalf of TeX USERS GROUPS). Vietnamese characters were added by Han The Thanh.
+- Files, SHA-256:
+  - `pagella/texgyrepagella-regular.otf` `44e64260716d8f2bbe412baa1ee99b7c995190ac4573177c24def0b9200438c7`
+  - `pagella/texgyrepagella-bold.otf` `dd4f9b69f0b24f1fb9be8634abf1fce2009e5c68a30842a3e9f5d6e535900abd`
+  - `pagella/texgyrepagella-italic.otf` `069bb27f48eb98a741715227fc6e4b7baf3639c29fc13925f70d1ed8884ac29a`
+  - `pagella/texgyrepagella-bolditalic.otf` `556fd64655a92bd9f5485ae2c03f7b9cdaf745a27a91d7edb3c3abde997206d2`
+- Notice files kept beside the fonts, SHA-256 (so a truncated copy is noticed):
+  - `pagella/GUST-FONT-LICENSE.txt` `9372accba7de09e11b7e1d0a6a27d6703c5e329a60218032805e0accca1b8eeb`
+  - `pagella/README-TeX-Gyre-Pagella.txt` `6fc4c72a8754f7e04ffbbec99167a568c0a3d21e231318ed624b58ddfeb1f896`
+  - `pagella/MANIFEST-TeX-Gyre-Pagella.txt` `6ac4bc1448a1d71a3a7ad5fd13566f00855b37ca4db5b20451c88806ac3f5242`
+
+## What the GUST Font License and the LPPL ask of a distribution that embeds Pagella
+
+Shipping four of the Work's files counts as distributing part of the Work, and the LPPL (version 1.3c, clause 2) treats that as modifying the Work, even though the four files themselves are unchanged.
+So the conditions of clause 6 for distributing a Derived Work apply, and this program meets them as follows:
+
+- No change was made. The four files are the unmodified upstream files (the checksums above tie them to the table), so there is no changed component to identify (6a) or to describe in a change notice (6b), and the request in the GUST license to rename modified fonts does not arise. The request is a request, not a legal requirement.
+- No endorsement by the authors is implied, and no support from them is implied (6c). The authors of TeX Gyre Pagella have not reviewed or endorsed this program and do not offer support for it.
+- The information needed to obtain the complete unmodified Work is given (6d): the GUST page <https://www.gust.org.pl/projects/e-foundry/tex-gyre/pagella>, and CTAN, <https://ctan.org/pkg/tex-gyre> (files under <https://mirrors.ctan.org/fonts/tex-gyre/>). The GUST license, the README, and the MANIFEST travel with the fonts.
+
+Embedding the fonts in a program that has other, unrelated parts is aggregation (LPPL clause 11).
+
+## What the OFL asks of a distribution that embeds Carlito, Gelasio, and Arimo
 
 - Keep each family's copyright notice and license text with the fonts. They are in this directory.
 - Do not sell the fonts by themselves. They are part of a program.

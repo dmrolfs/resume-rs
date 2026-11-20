@@ -223,3 +223,44 @@ pub fn built_in_style_names() -> Vec<String> {
 pub fn available_styles_message() -> String {
     format!("available styles: {}", built_in_style_names().join(", "))
 }
+
+/// The titles of the PDF's outline (bookmarks), each entry then its children, in document order.
+pub fn outline_titles(pdf: &[u8]) -> Vec<String> {
+    use lopdf::Object;
+    fn reference(dict: &lopdf::Dictionary, key: &[u8]) -> Option<lopdf::ObjectId> {
+        dict.get(key).and_then(Object::as_reference).ok()
+    }
+    fn walk(doc: &lopdf::Document, first: Option<lopdf::ObjectId>, out: &mut Vec<String>) {
+        let mut next = first;
+        while let Some(id) = next {
+            let item = claims::assert_ok!(doc.get_dictionary(id));
+            out.push(claims::assert_ok!(lopdf::decode_text_string(claims::assert_ok!(
+                item.get(b"Title")
+            ))));
+            walk(doc, reference(item, b"First"), out);
+            next = reference(item, b"Next");
+        }
+    }
+    let doc = claims::assert_ok!(lopdf::Document::load_mem(pdf));
+    let mut titles = Vec::new();
+    if let Some(root) = reference(claims::assert_ok!(doc.catalog()), b"Outlines") {
+        walk(
+            &doc,
+            reference(claims::assert_ok!(doc.get_dictionary(root)), b"First"),
+            &mut titles,
+        );
+    }
+    titles
+}
+
+/// The `/T` (title) of every structure element of kind `kind`, such as `H1`, in object order.
+pub fn struct_titles(pdf: &[u8], kind: &[u8]) -> Vec<String> {
+    let doc = claims::assert_ok!(lopdf::Document::load_mem(pdf));
+    doc.objects
+        .values()
+        .filter_map(|object| object.as_dict().ok())
+        .filter(|dict| dict.get(b"S").and_then(lopdf::Object::as_name).ok() == Some(kind))
+        .filter_map(|dict| dict.get(b"T").ok())
+        .map(|title| claims::assert_ok!(lopdf::decode_text_string(title)))
+        .collect()
+}

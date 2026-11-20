@@ -329,9 +329,11 @@ fn page_ends(lines: &Lines) -> BTreeSet<Violation> {
         if last.contains("ZE") {
             found.insert(Violation::EraHeadingEndsPage);
         }
+        // The whole line: in the experienced style a label shares its line with the content beside it, which is
+        // not a stranded heading.
         if ["SUMMARY", "EXPERIENCE", "EDUCATION"]
             .iter()
-            .any(|s| last.to_uppercase().starts_with(s))
+            .any(|s| last.to_uppercase() == *s)
         {
             found.insert(Violation::SectionHeadingEndsPage);
         }
@@ -583,6 +585,17 @@ fn wrapped_bullet_lines_sit_one_theme_line_pitch_apart() {
             pair[1] - pair[0]
         );
     }
+}
+
+/// The full fixture, as Markdown.
+fn full_fixture_text() -> String {
+    assert_ok!(std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/full.md")
+    ))
+}
+
+fn position(haystack: &str, needle: &str) -> usize {
+    assert_some!(haystack.find(needle), "`{needle}` not in {haystack:?}")
 }
 
 // ---- header ----------------------------------------------------------------------------------------
@@ -1032,3 +1045,21 @@ fn mono_underlines_its_links_in_the_link_color() {
     assert_eq!(underlines.len(), 1, "one underline under the link");
     assert!((underlines[0].x0 - link.x).abs() < 0.5 && (underlines[0].x1 - (link.x + link.width)).abs() < 0.5);
 }
+
+#[test]
+fn the_pragmatic_footer_still_starts_at_its_own_left_margin() {
+    // `gutter-reach` defaults to 0pt for every style that does not set it; a stray default would shift this footer.
+    let compiled = compile(&builtin(), &full_fixture_text());
+    let runs = page_runs(&compiled, 0);
+    let footer = assert_some!(runs.iter().rfind(|r| r.text == "Ada Lovelace")).clone();
+    assert!(footer.y > 700.0, "that is the footer: {footer:?}");
+    assert!(
+        (footer.x - 0.6 * 72.0).abs() < 0.05,
+        "the footer starts at {}",
+        footer.x
+    );
+}
+
+// The experienced style's tests share this module's frame-run and sweep helpers.
+#[path = "experienced_tests.rs"]
+mod experienced_tests;

@@ -36,7 +36,7 @@ fn every_embedded_font_file_is_listed_in_licenses_md() {
     let licenses = std::fs::read_to_string(fonts_dir().join("LICENSES.md")).expect("fonts/LICENSES.md exists");
     let files = font_files();
     assert!(
-        files.len() >= 12,
+        files.len() == 16,
         "expected the bundled fallback fonts, found {files:?}"
     );
     for (_, relative) in files {
@@ -47,13 +47,20 @@ fn every_embedded_font_file_is_listed_in_licenses_md() {
     }
 }
 
+/// The license text each family directory must keep beside its fonts.
+fn expected_license(family_dir: &str) -> &'static str {
+    match family_dir {
+        "pagella" => "GUST-FONT-LICENSE.txt",
+        _ => "OFL.txt",
+    }
+}
+
 #[test]
-fn every_font_family_directory_keeps_its_license_text_beside_the_fonts() {
+fn every_font_family_directory_keeps_its_own_license_text_beside_the_fonts() {
     for (dir, relative) in font_files() {
-        let has_license = ["OFL.txt", "GUST-FONT-LICENSE.txt"]
-            .iter()
-            .any(|name| dir.join(name).is_file());
-        assert!(has_license, "{relative} has no license text beside it");
+        let family = relative.split('/').next().expect("family/file");
+        let name = expected_license(family);
+        assert!(dir.join(name).is_file(), "{relative} has no {name} beside it");
     }
 }
 
@@ -78,8 +85,11 @@ fn every_font_file_is_the_unmodified_file_listed_in_licenses_md() {
 }
 
 #[test]
-fn every_license_text_is_the_real_ofl() {
-    for (dir, relative) in font_files() {
+fn every_ofl_license_text_is_the_real_ofl() {
+    for (dir, relative) in font_files()
+        .into_iter()
+        .filter(|(dir, _)| dir.join("OFL.txt").is_file())
+    {
         let text = std::fs::read_to_string(dir.join("OFL.txt")).expect("OFL.txt is readable");
         assert!(
             text.contains("SIL OPEN FONT LICENSE Version 1.1"),
@@ -90,12 +100,85 @@ fn every_license_text_is_the_real_ofl() {
     }
 }
 
+#[test]
+fn pagella_keeps_the_gust_license_readme_and_manifest_beside_the_fonts() {
+    let dir = fonts_dir().join("pagella");
+    let license = std::fs::read_to_string(dir.join("GUST-FONT-LICENSE.txt")).expect("the GUST license is kept");
+    assert!(license.contains("version 1.0, dated 22 June 2009, of the GUST Font License"));
+    assert!(license.contains("LaTeX Project Public License"));
+    for name in ["README-TeX-Gyre-Pagella.txt", "MANIFEST-TeX-Gyre-Pagella.txt"] {
+        let text = std::fs::read_to_string(dir.join(name)).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert!(text.contains("Version: 2.501"), "{name} is not the 2.501 file");
+    }
+}
+
+/// The text of one `## ` section of `LICENSES.md`, from its heading to the next one.
+fn section_of(licenses: &str, heading: &str) -> String {
+    let start = licenses
+        .find(heading)
+        .unwrap_or_else(|| panic!("LICENSES.md has no section `{heading}`"));
+    let rest = &licenses[start + heading.len()..];
+    rest.split("\n## ").next().unwrap_or(rest).to_string()
+}
+
+#[test]
+fn licenses_md_states_the_three_lppl_conditions_for_pagella() {
+    let licenses = std::fs::read_to_string(fonts_dir().join("LICENSES.md")).expect("fonts/LICENSES.md exists");
+    // The conditions are in the section about them and the entry is in Pagella's own section, so another
+    // family's text cannot satisfy either check.
+    let conditions = section_of(&licenses, "## What the GUST Font License and the LPPL ask");
+    for needle in [
+        "No change was made",
+        "No endorsement by the authors is implied",
+        "https://www.gust.org.pl/projects/e-foundry/tex-gyre/pagella",
+        "https://ctan.org/pkg/tex-gyre",
+    ] {
+        assert!(conditions.contains(needle), "the Pagella conditions lack `{needle}`");
+    }
+    let entry = section_of(&licenses, "## TeX Gyre Pagella 2.501");
+    for needle in [
+        "Copyright 2006-2018 for TeX Gyre extensions by B. Jackowski, J.M. Nowacki, et al.",
+        "GUST Font License v1.0",
+        "pagella/GUST-FONT-LICENSE.txt",
+    ] {
+        assert!(entry.contains(needle), "the Pagella entry lacks `{needle}`");
+    }
+}
+
+#[test]
+fn the_pagella_notice_files_are_whole_and_listed_with_their_checksums() {
+    // A truncated README or MANIFEST would still say `Version: 2.501`; the checksum notices that it is not the file.
+    let licenses = std::fs::read_to_string(fonts_dir().join("LICENSES.md")).expect("fonts/LICENSES.md exists");
+    for name in [
+        "GUST-FONT-LICENSE.txt",
+        "README-TeX-Gyre-Pagella.txt",
+        "MANIFEST-TeX-Gyre-Pagella.txt",
+    ] {
+        let digest = sha256_hex(&fonts_dir().join("pagella").join(name));
+        assert!(
+            licenses.contains(&format!("`pagella/{name}` `{digest}`")),
+            "pagella/{name} does not match the SHA-256 in fonts/LICENSES.md (now {digest})"
+        );
+    }
+}
+
 // ============================================================================
 // The notices the binary prints (`resume licenses`) cannot drift from the fonts it embeds
 // ============================================================================
 
 use claims::{assert_ok, assert_some};
 use resume::typeset::fonts::{FontSet, bundled_font_notices};
+
+/// The license text a bundled family directory keeps beside its fonts: the GUST Font License for TeX Gyre
+/// Pagella, the OFL for the others.
+fn license_text(family_dir: &str) -> String {
+    let name = if family_dir == "pagella" {
+        "GUST-FONT-LICENSE.txt"
+    } else {
+        "OFL.txt"
+    };
+    assert_ok!(std::fs::read_to_string(fonts_dir().join(family_dir).join(name)))
+}
 
 fn vendored_notice() -> String {
     assert_ok!(std::fs::read_to_string(fonts_dir().join("typst-assets").join("NOTICE")))
@@ -113,9 +196,11 @@ fn the_notices_carry_the_typst_assets_notice_in_full() {
 #[test]
 fn the_notices_carry_every_bundled_license_text_in_full() {
     let notices = bundled_font_notices();
-    for family in ["carlito", "gelasio", "arimo"] {
-        let text = assert_ok!(std::fs::read_to_string(fonts_dir().join(family).join("OFL.txt")));
-        assert!(notices.contains(&text), "{family}'s OFL.txt is not in the notices");
+    for family in ["carlito", "gelasio", "arimo", "pagella"] {
+        assert!(
+            notices.contains(&license_text(family)),
+            "{family}'s license text is not in the notices"
+        );
     }
 }
 
@@ -129,6 +214,7 @@ fn the_notices_cover_every_bundled_family() {
         ("arimo", "Arimo", "arimo"),
         ("carlito", "Carlito", "carlito"),
         ("gelasio", "Gelasio", "gelasio"),
+        ("tex gyre pagella", "GUST Font License", "pagella"),
         ("libertinus serif", "Libertinus", TYPST_ASSETS),
         ("new computer modern", "NewComputerModern", TYPST_ASSETS),
         ("new computer modern math", "NewComputerModern", TYPST_ASSETS),
@@ -137,7 +223,7 @@ fn the_notices_cover_every_bundled_family() {
     let notices = bundled_font_notices();
     let families = FontSet::bundled().families();
     assert!(
-        families.len() >= 7,
+        families.len() >= 8,
         "expected the bundled and Typst fonts, found {families:?}"
     );
     for family in families {
@@ -148,7 +234,7 @@ fn the_notices_cover_every_bundled_family() {
         let text = if *source == TYPST_ASSETS {
             vendored_notice()
         } else {
-            assert_ok!(std::fs::read_to_string(fonts_dir().join(source).join("OFL.txt")))
+            license_text(source)
         };
         assert!(
             text.contains(needle),

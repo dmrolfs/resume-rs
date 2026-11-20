@@ -184,7 +184,12 @@ fn a_fresh_process_matches_this_warm_one() {
 
 /// The full fixture in the built-in pragmatic style with the fonts of `--fonts bundled`.
 fn render_pragmatic_bundled(mode: FontsMode, ident: &str) -> Vec<u8> {
-    let style = assert_ok!(StyleSource::builtin(BuiltinStyle::Pragmatic));
+    render_builtin(BuiltinStyle::Pragmatic, mode, ident)
+}
+
+/// The full fixture in a built-in style with the fonts of `mode`.
+fn render_builtin(builtin: BuiltinStyle, mode: FontsMode, ident: &str) -> Vec<u8> {
+    let style = assert_ok!(StyleSource::builtin(builtin));
     let fonts = assert_ok!(FontSet::builder().mode(mode).build());
     let typesetter = Typesetter::new(Arc::new(fonts));
     let resume = resume_from("tests/fixtures/full.md");
@@ -212,10 +217,18 @@ fn embedded_fonts(pdf: &[u8]) -> Vec<String> {
     names
 }
 
-/// True when every embedded font is one `--fonts bundled` ships: the Carlito, Gelasio, and Arimo fallbacks
+/// True when every embedded font is one `--fonts bundled` ships: the Carlito, Gelasio, Arimo, and TeX Gyre Pagella fallbacks
 /// or a font typst-kit embeds (DejaVu Sans Mono for code, New Computer Modern, Libertinus).
 fn only_bundled(fonts: &[String]) -> bool {
-    const BUNDLED: [&str; 6] = ["Carlito", "Gelasio", "Arimo", "DejaVu", "NewCM", "Libertinus"];
+    const BUNDLED: [&str; 7] = [
+        "Carlito",
+        "Gelasio",
+        "Arimo",
+        "TeXGyrePagella",
+        "DejaVu",
+        "NewCM",
+        "Libertinus",
+    ];
     fonts
         .iter()
         .all(|font| BUNDLED.iter().any(|family| font.starts_with(family)))
@@ -261,4 +274,49 @@ fn write_determinism_pdf() {
         assert_ok!(std::fs::create_dir_all(parent));
     }
     assert_ok!(std::fs::write(&out, pdf));
+}
+
+/// Writes the experienced style's reference PDF that CI compares across operating systems, like the pragmatic one.
+///
+/// The experienced style measures its skills column, sizes its labels to the gutter, and falls back to TeX Gyre
+/// Pagella (which is not metric-compatible with the font it prefers), so it is where a platform difference in
+/// text measuring would show first.
+#[test]
+#[ignore = "writes the cross-OS reference PDF; run by CI with RESUME_DETERMINISM_EXPERIENCED_OUT set"]
+fn write_experienced_determinism_pdf() {
+    let out = PathBuf::from(
+        std::env::var("RESUME_DETERMINISM_EXPERIENCED_OUT")
+            .expect("set RESUME_DETERMINISM_EXPERIENCED_OUT to the output path"),
+    );
+    let pdf = render_builtin(BuiltinStyle::Experienced, FontsMode::Bundled, "determinism-experienced");
+    let fonts = embedded_fonts(&pdf);
+    assert!(
+        only_bundled(&fonts),
+        "the reference PDF embeds a font --fonts bundled does not ship: {fonts:?}"
+    );
+    println!("embedded fonts: {}", fonts.join(", "));
+    if let Some(parent) = out.parent() {
+        assert_ok!(std::fs::create_dir_all(parent));
+    }
+    assert_ok!(std::fs::write(&out, pdf));
+}
+
+#[test]
+fn an_experienced_render_embeds_only_bundled_fonts_and_uses_both_fallbacks() {
+    // Its labels use the Pagella fallback and its body the Carlito one, so both families must be present.
+    // The cross-OS comparison of this PDF is `write_experienced_determinism_pdf` and the CI `determinism` job.
+    let fonts = embedded_fonts(&render_builtin(
+        BuiltinStyle::Experienced,
+        FontsMode::Bundled,
+        "determinism-experienced",
+    ));
+    assert!(only_bundled(&fonts), "{fonts:?}");
+    assert!(fonts.iter().any(|f| f.starts_with("Carlito")), "{fonts:?}");
+    assert!(fonts.iter().any(|f| f.starts_with("TeXGyrePagella")), "{fonts:?}");
+}
+
+#[test]
+fn a_repeated_experienced_render_is_byte_identical() {
+    let render = || render_builtin(BuiltinStyle::Experienced, FontsMode::Bundled, "determinism-experienced");
+    assert_same_bytes(&render(), &render(), "two experienced renders in one process");
 }

@@ -282,10 +282,15 @@
 
 // ---- blocks ---------------------------------------------------------------------------------------
 
-// A role with its blurb and body (eras, bullets, paragraphs).
-#let render-role(theme, role, headings: default-headings) = {
+// The start of a role: its heading and blurb. A style that sets something beside the heading (the
+// experienced style's section label) renders this part and then `role-body`.
+#let role-head(theme, role, headings: default-headings) = {
   role-line(theme, role, headings: headings)
   if role.blurb != none { blurb(theme, role.blurb, sticky: role.body.len() > 0) }
+}
+
+// The rest of a role: eras, bullets and paragraphs.
+#let role-body(theme, role, headings: default-headings) = {
   for part in role.body {
     if part.kind == "era" {
       era-line(theme, role.index, part, headings: headings)
@@ -294,6 +299,12 @@
       paragraph(theme, part.content)
     } else { panic("unknown role body kind `" + part.kind + "`: the style and the resume schema have drifted apart") }
   }
+}
+
+// A role with its blurb and body (eras, bullets, paragraphs).
+#let render-role(theme, role, headings: default-headings) = {
+  role-head(theme, role, headings: headings)
+  role-body(theme, role, headings: headings)
 }
 
 // One block of a section.
@@ -337,7 +348,11 @@
   set page(
     paper: sys.inputs.at("paper", default: "us-letter"),
     margin: theme.margin,
-    footer: footer(theme, resume.name),
+    footer: {
+      // A style whose left margin holds a gutter lets the footer reach back over it by `gutter-reach`.
+      let reach = theme.at("gutter-reach", default: 0pt)
+      if reach == 0pt { footer(theme, resume.name) } else { pad(left: -reach, footer(theme, resume.name)) }
+    },
     footer-descent: theme.footer-descent,
   )
   // The page language is fixed (not read from the resume) so output does not depend on the machine.
