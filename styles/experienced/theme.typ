@@ -20,9 +20,9 @@
     label: (preferred: "Book Antiqua", fallback: "TeX Gyre Pagella", metric-compatible: false),
     mono: (preferred: "DejaVu Sans Mono", fallback: "DejaVu Sans Mono", metric-compatible: true),
   ),
-  // `name` is the name above the contact lines, `label` the section labels, `role` the company and title of a
-  // role line, and `period` its dates.
-  size: (body: 11pt, name: 24pt, label: 12pt, role: 12pt, period: 11pt, footer: 8.5pt),
+  // `name` is the name above the contact lines, `label` the section labels (set smaller, down to `label-min`, when
+  // one word is wider than the gutter), `role` the company and title of a role line, and `period` its dates.
+  size: (body: 11pt, name: 24pt, label: 12pt, label-min: 8pt, role: 12pt, period: 11pt, footer: 8.5pt),
   color: (
     text: rgb("#000000"),
     label: rgb("#000000"),

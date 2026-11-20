@@ -36,7 +36,7 @@ fn every_embedded_font_file_is_listed_in_licenses_md() {
     let licenses = std::fs::read_to_string(fonts_dir().join("LICENSES.md")).expect("fonts/LICENSES.md exists");
     let files = font_files();
     assert!(
-        files.len() >= 16,
+        files.len() == 16,
         "expected the bundled fallback fonts, found {files:?}"
     );
     for (_, relative) in files {
@@ -105,17 +105,36 @@ fn pagella_keeps_the_gust_license_readme_and_manifest_beside_the_fonts() {
     }
 }
 
+/// The text of one `## ` section of `LICENSES.md`, from its heading to the next one.
+fn section_of(licenses: &str, heading: &str) -> String {
+    let start = licenses
+        .find(heading)
+        .unwrap_or_else(|| panic!("LICENSES.md has no section `{heading}`"));
+    let rest = &licenses[start + heading.len()..];
+    rest.split("\n## ").next().unwrap_or(rest).to_string()
+}
+
 #[test]
 fn licenses_md_states_the_three_lppl_conditions_for_pagella() {
     let licenses = std::fs::read_to_string(fonts_dir().join("LICENSES.md")).expect("fonts/LICENSES.md exists");
+    // The conditions are in the section about them and the entry is in Pagella's own section, so another
+    // family's text cannot satisfy either check.
+    let conditions = section_of(&licenses, "## What the GUST Font License and the LPPL ask");
     for needle in [
         "No change was made",
         "No endorsement by the authors is implied",
         "https://www.gust.org.pl/projects/e-foundry/tex-gyre/pagella",
         "https://ctan.org/pkg/tex-gyre",
-        "Copyright 2006-2018 for TeX Gyre extensions by B. Jackowski, J.M. Nowacki, et al.",
     ] {
-        assert!(licenses.contains(needle), "LICENSES.md lacks `{needle}`");
+        assert!(conditions.contains(needle), "the Pagella conditions lack `{needle}`");
+    }
+    let entry = section_of(&licenses, "## TeX Gyre Pagella 2.501");
+    for needle in [
+        "Copyright 2006-2018 for TeX Gyre extensions by B. Jackowski, J.M. Nowacki, et al.",
+        "GUST Font License v1.0",
+        "pagella/GUST-FONT-LICENSE.txt",
+    ] {
+        assert!(entry.contains(needle), "the Pagella entry lacks `{needle}`");
     }
 }
 

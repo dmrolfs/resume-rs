@@ -30,18 +30,26 @@
 // The label in the gutter: the section title in capitals, in the label font, black, inset from the page margin.
 // The text edges are lengths taken from the size of the first line beside the label (`line-size`), not from the
 // label's own size, so the label and that line share a baseline.
-#let section-label(theme, title, line-size) = pad(left: theme.gutter.inset, right: theme.gutter.inset, heading(
-  level: 1,
-  text(
+//
+// A word wider than the label cell cannot break (hyphenation is off) and would run over the content, so the label
+// is set smaller until its widest word fits, down to `size.label-min`. Titles are in capitals and the longest
+// ordinary ones, such as ACCOMPLISHMENTS, take a little under 10pt in place of 12pt.
+#let section-label(theme, title, line-size) = context {
+  let cell = theme.gutter.width - 2 * theme.gutter.inset
+  let label-text(size, body) = text(
     font: font-stack(theme.fonts.label),
-    size: theme.size.label,
+    size: size,
     weight: "bold",
     fill: theme.color.label,
-    top-edge: theme.line.top * (line-size / theme.size.label),
-    bottom-edge: theme.line.bottom * (line-size / theme.size.label),
-    upper(title),
-  ),
-))
+    top-edge: theme.line.top * (line-size / size),
+    bottom-edge: theme.line.bottom * (line-size / size),
+    body,
+  )
+  let words = upper(title).split()
+  let widest = calc.max(0pt, ..words.map(word => measure(label-text(theme.size.label, word)).width))
+  let size = if widest > cell { calc.max(theme.size.label * (cell / widest), theme.size.label-min) } else { theme.size.label }
+  pad(left: theme.gutter.inset, right: theme.gutter.inset, heading(level: 1, label-text(size, upper(title))))
+}
 
 // The role line: Company, Title in bold, with the period on the right in bold at the body size.
 #let role-heading(theme, role) = {
@@ -108,7 +116,8 @@
     label,
     content,
   )))
-  if start == none { row([]) } else {
+  // A section with nothing in it still shows its label; the row is sticky, so it moves with whatever follows.
+  if start == none { row([], sticky: true) } else {
     let first = section.blocks.at(start)
     // A role heading in the row has lost its own stickiness (a grid cell is one block), so the row takes
     // it over: it moves to the next page with the first block after it. Other first blocks break normally.

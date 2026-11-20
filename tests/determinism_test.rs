@@ -184,7 +184,12 @@ fn a_fresh_process_matches_this_warm_one() {
 
 /// The full fixture in the built-in pragmatic style with the fonts of `--fonts bundled`.
 fn render_pragmatic_bundled(mode: FontsMode, ident: &str) -> Vec<u8> {
-    let style = assert_ok!(StyleSource::builtin(BuiltinStyle::Pragmatic));
+    render_builtin(BuiltinStyle::Pragmatic, mode, ident)
+}
+
+/// The full fixture in a built-in style with the fonts of `mode`.
+fn render_builtin(builtin: BuiltinStyle, mode: FontsMode, ident: &str) -> Vec<u8> {
+    let style = assert_ok!(StyleSource::builtin(builtin));
     let fonts = assert_ok!(FontSet::builder().mode(mode).build());
     let typesetter = Typesetter::new(Arc::new(fonts));
     let resume = resume_from("tests/fixtures/full.md");
@@ -269,4 +274,24 @@ fn write_determinism_pdf() {
         assert_ok!(std::fs::create_dir_all(parent));
     }
     assert_ok!(std::fs::write(&out, pdf));
+}
+
+#[test]
+fn the_experienced_reference_pdf_embeds_only_bundled_fonts_and_uses_both_fallbacks() {
+    // The experienced style measures its skills column and sizes its labels, which is where a platform
+    // difference would show first; its labels also use the Pagella fallback, so both families must be present.
+    let fonts = embedded_fonts(&render_builtin(
+        BuiltinStyle::Experienced,
+        FontsMode::Bundled,
+        "determinism-experienced",
+    ));
+    assert!(only_bundled(&fonts), "{fonts:?}");
+    assert!(fonts.iter().any(|f| f.starts_with("Carlito")), "{fonts:?}");
+    assert!(fonts.iter().any(|f| f.starts_with("TeXGyrePagella")), "{fonts:?}");
+}
+
+#[test]
+fn a_repeated_experienced_render_is_byte_identical() {
+    let render = || render_builtin(BuiltinStyle::Experienced, FontsMode::Bundled, "determinism-experienced");
+    assert_same_bytes(&render(), &render(), "two experienced renders in one process");
 }

@@ -41,7 +41,7 @@ fn full_fixture_renders_in_experienced_without_warnings() {
     for paper in [Paper::Letter, Paper::A4] {
         let compiled = experienced(paper);
         assert!(compiled.warnings().is_empty(), "{:?}", compiled.warnings());
-        assert!(compiled.page_count() >= 2, "the page-break block forces a page 2");
+        assert_eq!(compiled.page_count(), 2, "the page-break block forces page 2");
     }
 }
 
@@ -72,12 +72,13 @@ fn experienced_skills_render_label_value_rows() {
     let rows = [
         "Languages: Rust, Java, Scala",
         "Cloud and infrastructure: AWS (EKS, EC2), Kubernetes",
-        "Acme , VP of Engineering: Led all product development.", // the link in the label splits the run
+        "VP of Engineering: Led all product development.",
     ];
     let mut last = 0;
+    assert!(text.contains("Acme"), "the link in the last label is shown");
     for row in rows {
         let at = position(&text, row);
-        assert!(at >= last, "`{row}` is out of order in {text}");
+        assert!(at > last, "`{row}` is out of order in {text}");
         last = at;
     }
 }
@@ -104,35 +105,6 @@ fn a_page_after_the_first_keeps_the_gutter_and_the_footer_spans_the_page() {
         ProbeKind::Role { company, .. } if company.starts_with("Consulting")
     )));
     assert_eq!(consulting.page.get(), 2);
-}
-
-#[test]
-fn the_role_line_is_company_comma_title_with_the_period_at_the_right() {
-    let compiled = compile(
-        &parsed(
-            "# Ada Lovelace\n\nCity · a@b.co\n\n## Experience\n\n### Acme Corp · Principal Engineer · 2020 – Present\n\nA blurb.\n\n- one\n\n### Babbage & Co · 2012 – 2017\n\n- two\n",
-        ),
-        Paper::Letter,
-    );
-    let text = first_page_text(&compiled);
-    assert!(text.contains("Acme Corp, Principal Engineer 2020 – Present"), "{text}");
-    assert!(
-        text.contains("Babbage & Co 2012 – 2017"),
-        "a role without a title: {text}"
-    );
-}
-
-#[test]
-fn roles_and_eras_leave_probes_in_document_order() {
-    let probes = assert_ok!(experienced(Paper::Letter).probes());
-    let count = |era: bool| {
-        probes
-            .iter()
-            .filter(|p| matches!(p.kind, ProbeKind::Era { .. }) == era)
-            .count()
-    };
-    assert_eq!((count(false), count(true)), (4, 3));
-    assert!(probes.iter().all(|p| p.y > 0.0 && p.y < p.page_height));
 }
 
 #[test]
@@ -202,34 +174,6 @@ fn the_built_in_experienced_style_and_the_same_files_on_disk_render_the_same_byt
         .export_pdf("fixture")
     );
     assert!(embedded == on_disk, "the embedded copy differs from styles/ on disk");
-}
-
-#[test]
-fn a_section_of_plain_bullets_is_a_list_and_a_mixed_one_is_not_a_table() {
-    // Only a block whose every bullet has a label becomes a table; one unlabeled bullet makes it a list.
-    let compiled = compile(
-        &parsed("# Ada Lovelace\n\nCity · a@b.co\n\n## Skills\n\n- **Languages:** Rust\n- an unlabeled one\n"),
-        Paper::Letter,
-    );
-    let text = first_page_text(&compiled);
-    assert!(text.contains("Languages: Rust"), "{text}");
-    assert!(text.contains("an unlabeled one"), "{text}");
-}
-
-#[test]
-fn a_section_that_opens_with_a_page_break_puts_the_label_after_the_break() {
-    let compiled = compile(
-        &parsed(
-            "# Ada Lovelace\n\nCity · a@b.co\n\n## Summary\n\n- one\n\n## Education\n\n<div class=\"page-break\"></div>\n\n### University · 2004 – 2008\n\n- Mathematics.\n",
-        ),
-        Paper::Letter,
-    );
-    assert_eq!(compiled.page_count(), 2);
-    let pages = page_texts(&assert_ok!(compiled.export_pdf("fixture")));
-    assert!(
-        pages[1].starts_with("EDUCATION University"),
-        "the label is with its content on page 2: {pages:?}"
-    );
 }
 
 #[test]

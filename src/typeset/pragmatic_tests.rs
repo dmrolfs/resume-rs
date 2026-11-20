@@ -38,6 +38,8 @@ struct Run {
     x: f64,
     text: String,
     bold: bool,
+    /// The font family of the run's face, such as `Carlito`.
+    family: String,
     /// Width of the run, in points.
     width: f64,
     /// The fill as hex, such as `#000000`; `None` for a gradient or pattern.
@@ -73,6 +75,7 @@ fn collect_runs(frame: &Frame, origin: Point, out: &mut Vec<Run>) {
                 x: at.x.to_pt(),
                 text: run.text.to_string(),
                 bold: run.font.info().variant.weight.to_number() >= 600,
+                family: run.font.info().family.clone(),
                 width: run.width().to_pt(),
                 size: run.size.to_pt(),
                 family: run.font.info().family.clone(),
@@ -1251,17 +1254,6 @@ fn experienced_capitalizes_whatever_the_section_is_called() {
 }
 
 #[test]
-fn experienced_has_the_accent_only_on_links() {
-    let compiled = compile(&experienced(), &full_fixture_text());
-    let colors: BTreeSet<_> = page_runs(&compiled, 0).into_iter().filter_map(|r| r.fill).collect();
-    assert_eq!(
-        colors.into_iter().collect::<Vec<_>>(),
-        ["#000000", "#595959", "#cc0000"],
-        "text, the muted footer, and the red links"
-    );
-}
-
-#[test]
 fn a_page_break_before_a_sections_first_block_keeps_the_label_with_its_content() {
     let md = "# A B\n\nCity · a@b.co\n\n## Summary\n\n- one\n\n## Education\n\n<div class=\"page-break\"></div>\n\n### University · 2004 – 2008\n\n- Mathematics.\n";
     let compiled = compile(&experienced(), md);
@@ -1299,4 +1291,153 @@ fn a_section_label_shares_a_baseline_with_the_first_line_beside_it() {
             line_run.y
         );
     }
+}
+
+#[test]
+fn the_experienced_style_sets_each_kind_of_text_in_its_own_font_weight_and_color() {
+    // The full fixture, bundled fonts: Pagella for the name and the labels, Carlito for the rest.
+    let compiled = compile(&experienced(), &full_fixture_text());
+    let runs = page_runs(&compiled, 0);
+    let check = |needle: &str, family: &str, bold: bool, fill: &str| {
+        let run = run_containing(&runs, needle);
+        assert_eq!(
+            (run.family.as_str(), run.bold, run.fill.as_deref()),
+            (family, bold, Some(fill)),
+            "`{needle}`: {run:?}"
+        );
+    };
+    check("Lovelace", "TeX Gyre Pagella", false, "#000000"); // the name, regular weight
+    check("SUMMARY", "TeX Gyre Pagella", true, "#000000"); // a section label, black
+    check("Languages:", "Carlito", false, "#000000"); // a skills label is regular weight
+    check("Rust, Java", "Carlito", false, "#000000"); // a skills value
+    check("Cloud and infrastructure:", "Carlito", false, "#000000");
+    check("Analytical Engines Ltd", "Carlito", true, "#000000"); // the company and title are bold
+    check("Aug 2017", "Carlito", true, "#000000"); // and so is the period
+    check("Programming languages", "Carlito", false, "#000000"); // an era name is italic, not bold
+    check("Notes", "Carlito", false, "#cc0000"); // a link is red
+    check("Page 1 of", "Carlito", false, "#595959"); // the footer is muted
+    // The accent is only on links: no label, role line or value is red.
+    let red: Vec<_> = runs.iter().filter(|r| r.fill.as_deref() == Some("#cc0000")).collect();
+    assert!(
+        red.iter()
+            .all(|r| ["Notes", "GitHub", "ABAC", "Acme"].iter().any(|l| r.text.contains(l))),
+        "{red:?}"
+    );
+}
+
+#[test]
+fn a_skills_table_after_the_first_block_of_a_section_is_still_a_table() {
+    let md = "# A B\n\nCity · a@b.co\n\n## Skills\n\nA paragraph first.\n\n- **Languages:** Rust\n- **Cloud and infrastructure:** AWS\n";
+    let compiled = compile(&experienced(), md);
+    let values = lefts(&compiled, &["Rust", "AWS"]);
+    assert!(all_equal(&values), "the values do not line up: {values:?}");
+    let runs = page_runs(&compiled, 0);
+    assert!(
+        runs.iter().all(|r| r.text != "•"),
+        "a labeled block has no bullet markers: {runs:?}"
+    );
+    let widest = run_containing(&runs, "Cloud and infrastructure");
+    // The value column starts one `skills.column-gap` (0.15in) after the widest label.
+    assert!(
+        (values[0] - (widest.x + widest.width) - 0.15 * 72.0).abs() < 0.5,
+        "values at {}, widest label ends at {}",
+        values[0],
+        widest.x + widest.width
+    );
+}
+
+#[test]
+fn a_skills_block_with_one_unlabeled_bullet_is_a_list_not_a_table() {
+    let md = "# A B\n\nCity · a@b.co\n\n## Skills\n\n- **Languages:** Rust\n- **Cloud and infrastructure:** AWS\n- an unlabeled one\n";
+    let compiled = compile(&experienced(), md);
+    let runs = page_runs(&compiled, 0);
+    let markers = runs.iter().filter(|r| r.text == "•").count();
+    assert_eq!(markers, 3, "every item has a bullet marker: {runs:?}");
+    let values = lefts(&compiled, &["Rust", "AWS"]);
+    assert!(
+        (values[0] - values[1]).abs() > 0.5,
+        "the values sit right after their own label, not in one column: {values:?}"
+    );
+}
+
+#[test]
+fn a_skill_row_never_splits_across_a_page_break() {
+    // The middle row is long enough to run past a page foot when the spacers put it there: its label, the first
+    // of its words, and the `end1` that closes it must all be on one page, which only holds if the row is
+    // unbreakable. A short row would never reach the foot of the page mid-row.
+    let long = "word ".repeat(400);
+    let mut split_without_the_rule = 0;
+    for spacers in 0..8 {
+        let spacer: String = (0..spacers * 3).map(|i| format!("Spacer {i}.\n\n")).collect();
+        let md = format!(
+            "# A B\n\nCity · a@b.co\n\n## Skills\n\n{spacer}- **Short:** one end0\n- **Long:** {long} end1\n- **Last:** three end2\n"
+        );
+        let compiled = compile(&experienced(), &md);
+        let mut pages = std::collections::BTreeMap::<String, BTreeSet<usize>>::new();
+        for page in 0..compiled.page_count() {
+            for run in page_runs(&compiled, page) {
+                for token in run.text.split_whitespace() {
+                    if token.starts_with("end") || token == "Long:" {
+                        pages.entry(token.to_string()).or_default().insert(page);
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            pages["Long:"], pages["end1"],
+            "with {spacers} spacer paragraphs the long row splits: {pages:?}"
+        );
+        split_without_the_rule += usize::from(compiled.page_count() > 1);
+    }
+    assert!(
+        split_without_the_rule >= 2,
+        "the spacers never pushed the long row to a page break"
+    );
+}
+
+#[test]
+fn a_section_label_wider_than_the_gutter_is_set_smaller_and_stays_inside_it() {
+    for title in ["Accomplishments", "Responsibilities", "Contributions"] {
+        let md = format!("# A B\n\nCity · a@b.co\n\n## {title}\n\nA paragraph of text beside it.\n");
+        let compiled = compile(&experienced(), &md);
+        let runs = page_runs(&compiled, 0);
+        let label = run_containing(&runs, &title.to_uppercase());
+        let text = run_containing(&runs, "A paragraph");
+        assert!(
+            label.x + label.width <= text.x,
+            "{title}: the label ends at {} but the text starts at {}",
+            label.x + label.width,
+            text.x
+        );
+    }
+    // A label that fits is not shrunk: 12pt, same as the others.
+    let compiled = compile(&experienced(), "# A B\n\nCity · a@b.co\n\n## Summary\n\nText.\n");
+    let label = run_containing(&page_runs(&compiled, 0), "SUMMARY");
+    assert!((label.width - 12.0 / 11.0 * 66.7).abs() < 20.0 && label.width > 60.0);
+}
+
+#[test]
+fn an_empty_section_keeps_its_label_with_the_section_after_it() {
+    let md = "# A B\n\nCity · a@b.co\n\n## Summary\n\n- one\n\n## Interests\n\n";
+    let compiled = compile(&experienced(), md);
+    assert!(text_of(&compiled).contains("INTERESTS"), "{}", text_of(&compiled));
+}
+
+#[test]
+fn roles_and_eras_come_in_document_order_with_each_era_after_its_role() {
+    let probes = assert_ok!(compile(&experienced(), &full_fixture_text()).probes());
+    let mut last = (0, f64::MIN);
+    let mut roles = Vec::new();
+    for probe in &probes {
+        let at = (probe.page.get(), probe.y);
+        assert!(at >= last, "the probes are out of order: {probes:?}");
+        last = at;
+        match &probe.kind {
+            crate::typeset::probe::ProbeKind::Role { index, .. } => roles.push(*index),
+            crate::typeset::probe::ProbeKind::Era { role, .. } => {
+                assert_eq!(Some(role), roles.last(), "an era follows its own role");
+            }
+        }
+    }
+    assert_eq!(roles, [0, 1, 2, 3]);
 }
