@@ -143,6 +143,37 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      # Rung 3 of rsm-141.15: the real command. The release binary builds the full synthetic fixture with
+      # `--fonts bundled`, once as an LF file and once as a CRLF copy of it. Both files are named Resume.md, in
+      # different directories, because the PDF's document id comes from the file name. The `determinism` job
+      # requires all four PDFs (two systems, two line endings) to be byte-identical.
+      - name: Build the reference PDFs with the release binary (LF and CRLF input)
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir=target/determinism/cli
+          mkdir -p "$dir/in-lf" "$dir/in-crlf"
+          cp tests/fixtures/full.md "$dir/in-lf/Resume.md"
+          perl -pe 's/\r?\n/\r\n/' tests/fixtures/full.md > "$dir/in-crlf/Resume.md"
+          # The premise: one file has no carriage return and the other has one on every line.
+          if grep -q $'\r' "$dir/in-lf/Resume.md"; then echo "::error::the LF input has a carriage return"; exit 1; fi
+          if [ "$(grep -c $'\r' "$dir/in-crlf/Resume.md")" -ne "$(wc -l < "$dir/in-lf/Resume.md")" ]; then
+            echo "::error::the CRLF input does not have a carriage return on every line"; exit 1
+          fi
+          for kind in lf crlf; do
+            target/release/${{ matrix.binary }} build "$dir/in-$kind/Resume.md" --fonts bundled --out "$dir/out-$kind"
+          done
+
+      - name: Upload the PDFs built by the release binary
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: determinism-cli-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            target/determinism/cli/out-lf/Resume.pdf
+            target/determinism/cli/out-crlf/Resume.pdf
+          if-no-files-found: error
+          retention-days: 7
+
   # Fails closed: it names both expected artifacts instead of globbing, so a missing, empty, or renamed
   # upload is an error, never a pass. A passing run prints both SHA-256 values.
   determinism:
@@ -151,6 +182,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Check out (for scripts/compare-pdfs.sh)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       - name: Download the macOS reference PDF
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -163,29 +199,32 @@ jobs:
           name: determinism-pdf-Windows-X64
           path: pdf/windows
 
-      - name: Compare the two PDFs byte for byte
+      - name: Download the PDFs the macOS release binary built
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: determinism-cli-macOS-ARM64
+          path: pdf-cli/macos
+
+      - name: Download the PDFs the Windows release binary built
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: determinism-cli-Windows-X64
+          path: pdf-cli/windows
+
+      # Rungs 1 and 2: the test-written PDF. Then rung 3: the four PDFs the release binary built. A bundled-fonts
+      # build must never embed Calibri, which the Windows runner has installed. The script is tested by
+      # tests/compare_pdfs_test.rs and fails closed on a missing, empty, forbidden, or differing file.
+      - name: Compare the test-written PDFs byte for byte
+        shell: bash
+        run: bash scripts/compare-pdfs.sh macOS=pdf/macos/determinism.pdf Windows=pdf/windows/determinism.pdf --forbid Calibri
+
+      - name: Compare the four PDFs built by the release binary byte for byte
         shell: bash
         run: |
-          set -euo pipefail
-          macos=pdf/macos/determinism.pdf
-          windows=pdf/windows/determinism.pdf
-          for f in "$macos" "$windows"; do
-            if [ ! -s "$f" ]; then
-              echo "::error title=Reference PDF missing or empty::$f"
-              exit 1
-            fi
-          done
-          sha256sum "$macos" "$windows"
-          ls -l "$macos" "$windows"
-          if cmp "$macos" "$windows"; then
-            echo "::notice title=PDFs are byte-identical::$(sha256sum "$macos" | cut -d' ' -f1)"
-          else
-            first="$(cmp "$macos" "$windows" 2>&1 | head -1 || true)"
-            sizes="$(wc -c < "$macos") bytes (macOS), $(wc -c < "$windows") bytes (Windows)"
-            hashes="$(sha256sum "$macos" "$windows" | cut -d' ' -f1 | tr '\n' ' ')"
-            echo "::error title=PDF bytes differ across operating systems::${first}; ${sizes}; sha256 macOS then Windows: ${hashes}"
-            exit 1
-          fi
+          bash scripts/compare-pdfs.sh \
+            macOS-LF=pdf-cli/macos/out-lf/Resume.pdf macOS-CRLF=pdf-cli/macos/out-crlf/Resume.pdf \
+            Windows-LF=pdf-cli/windows/out-lf/Resume.pdf Windows-CRLF=pdf-cli/windows/out-crlf/Resume.pdf \
+            --forbid Calibri
 
   # The macOS universal2 build runs on main and release tags only, so the `just build-macos` recipe
   # cannot rot unnoticed without spending minutes on every branch push.
