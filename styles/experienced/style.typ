@@ -2,7 +2,16 @@
 // ABOUTME: Modeled on the Experienced Engineer's resume template; structure lives here, values in theme.typ.
 
 #import "/lib/components.typ": *
-#import "./theme.typ": theme
+#import "./theme.typ": theme as edited-theme
+
+// The gutter is taken out of the left page margin: the page margin the shared components set is the theme's
+// page margin plus the gutter, and `gutter-reach` is how far the header, the section rows and the footer reach
+// back over it. Derived here, so a theme edit to either `gutter` or `page-margin` moves everything together.
+#let theme = {
+  let reach = edited-theme.gutter.width + edited-theme.gutter.gap
+  let page = edited-theme.page-margin
+  (..edited-theme, margin: (..page, left: page.left + reach), gutter-reach: reach)
+}
 
 #let resume = index-roles(json("/resume.json"))
 
@@ -16,8 +25,7 @@
     let items = groups.pos().fold((), (all, group) => all + group)
     if items.len() > 0 { align(center, join-items(items, sep: [ • ])) }
   }
-  let bleed = theme.footer-bleed
-  pad(left: -bleed, {
+  pad(left: -theme.gutter-reach, {
     // The lines of the header sit one line pitch apart, with no paragraph spacing between them.
     set par(spacing: 0pt)
     align(center, text(font: font-stack(theme.fonts.label), size: theme.size.name, resume.name))
@@ -34,8 +42,9 @@
 // A word wider than the label cell cannot break (hyphenation is off) and would run over the content. So the label
 // is set smaller until its widest word fits, down to `size.label-min`; titles are in capitals and the longest
 // ordinary ones, such as ACCOMPLISHMENTS, take a little under 10pt in place of 12pt. A word that is still too wide
-// at the smallest size is allowed to break between any two letters (a zero-width space is a break opportunity and
-// draws nothing, so the text is unchanged), which keeps the label inside the gutter for any title.
+// at the smallest size is set as one box per letter, so a line may end between any two letters and the label stays
+// inside the gutter for any title. The characters are unchanged: the bookmark and the heading tag carry the title
+// itself. Inserting zero-width spaces instead would put U+200B into both.
 #let section-label(theme, title, line-size) = context {
   let cell = theme.gutter.width - 2 * theme.gutter.inset
   let label-text(size, body) = text(
@@ -52,7 +61,7 @@
   let size = if widest > cell { calc.max(theme.size.label * (cell / widest), theme.size.label-min) } else { theme.size.label }
   // A word that fits after shrinking is left whole. The tolerance covers the rounding of a width that was scaled to
   // the cell exactly, so a word that was shrunk to fit is never broken as well.
-  let fit(word) = if measure(label-text(size, word)).width > cell + 0.5pt { word.clusters().join("\u{200B}") } else { word }
+  let fit(word) = if measure(label-text(size, word)).width > cell + 0.5pt { word.clusters().map(box).join() } else { word }
   let body = words.map(fit).join(" ")
   pad(left: theme.gutter.inset, right: theme.gutter.inset, heading(level: 1, label-text(size, body)))
 }
@@ -115,8 +124,7 @@
   for blk in leading { render-block(theme, blk) }
   let first-line-size = if start != none and section.blocks.at(start).kind == "role" { theme.size.role } else { theme.size.body }
   let label = section-label(theme, section.title, first-line-size)
-  let side = theme.footer-bleed
-  let row(content, sticky: false) = block(above: theme.spacing.section, below: 0pt, sticky: sticky, pad(left: -side, grid(
+  let row(content, sticky: false) = block(above: theme.spacing.section, below: 0pt, sticky: sticky, pad(left: -theme.gutter-reach, grid(
     columns: (theme.gutter.width, 1fr),
     column-gutter: theme.gutter.gap,
     label,

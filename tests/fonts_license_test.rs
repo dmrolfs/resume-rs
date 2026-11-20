@@ -172,7 +172,11 @@ use resume::typeset::fonts::{FontSet, bundled_font_notices};
 /// The license text a bundled family directory keeps beside its fonts: the GUST Font License for TeX Gyre
 /// Pagella, the OFL for the others.
 fn license_text(family_dir: &str) -> String {
-    let name = if family_dir == "pagella" { "GUST-FONT-LICENSE.txt" } else { "OFL.txt" };
+    let name = if family_dir == "pagella" {
+        "GUST-FONT-LICENSE.txt"
+    } else {
+        "OFL.txt"
+    };
     assert_ok!(std::fs::read_to_string(fonts_dir().join(family_dir).join(name)))
 }
 

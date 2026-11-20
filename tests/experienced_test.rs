@@ -13,7 +13,7 @@ use resume::typeset::fonts::{FontResolution, FontSet, Metrics};
 use resume::typeset::probe::ProbeKind;
 use resume::typeset::{Compiled, RenderOptions, Typesetter};
 
-use common::{bundled_fonts, full_resume, page_texts, position};
+use common::{bundled_fonts, full_resume, outline_titles, page_texts, position, struct_titles};
 
 fn experienced_style() -> StyleSource {
     assert_ok!(StyleSource::builtin(BuiltinStyle::Experienced))
@@ -178,4 +178,67 @@ fn a_resume_without_a_contact_line_renders_the_name_then_the_first_section() {
     assert_eq!(compiled.page_count(), 1);
     let text = first_page_text(&compiled);
     assert!(position(&text, "Ada Lovelace") < position(&text, "SUMMARY"), "{text}");
+}
+
+/// The PDF of `markdown` in the built-in experienced style with a theme whose gutter is `gutter` wide.
+fn pdf_with_gutter(markdown: &str, gutter: &str) -> Vec<u8> {
+    let dir = assert_ok!(tempfile::tempdir());
+    let styles = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("styles");
+    for relative in ["lib/components.typ", "experienced/style.typ", "experienced/theme.typ"] {
+        let target = dir.path().join(relative);
+        assert_ok!(std::fs::create_dir_all(assert_some!(target.parent())));
+        let text = assert_ok!(std::fs::read_to_string(styles.join(relative)));
+        assert!(
+            !relative.ends_with("theme.typ") || text.contains("width: 113.15pt"),
+            "the gutter width moved out of theme.typ"
+        );
+        let edited = text.replace("width: 113.15pt", &format!("width: {gutter}"));
+        assert_ok!(std::fs::write(target, edited));
+    }
+    let style = assert_ok!(StyleSource::directory(
+        dir.path(),
+        assert_ok!(StyleName::try_new("experienced"))
+    ));
+    let compiled = assert_ok!(Typesetter::new(bundled_fonts()).compile(
+        &parsed(markdown),
+        &style,
+        RenderOptions::new(Paper::Letter)
+    ));
+    assert_ok!(compiled.export_pdf("fixture"))
+}
+
+#[test]
+fn a_label_broken_to_fit_the_gutter_keeps_its_title_in_the_outline_and_the_tags() {
+    // A word too wide for the gutter even at the smallest size is drawn over two or more lines. The bookmarks and
+    // the heading tags must still carry the title itself, so search, screen readers and screening software see the
+    // words; the page text holds every letter, with only the visible line breaks between them.
+    let titles = ["Experience", "Languages and Technologies", &"W".repeat(60)];
+    let markdown: String = titles
+        .iter()
+        .fold("# Ada Lovelace\n\nCity · a@b.co\n\n".to_string(), |md, title| {
+            md + &format!("## {title}\n\nText.\n\n")
+        });
+    let expected: Vec<String> = titles.iter().map(|t| t.to_uppercase()).collect();
+    for gutter in ["113.15pt", "60pt"] {
+        let pdf = pdf_with_gutter(&markdown, gutter);
+        assert_eq!(outline_titles(&pdf), expected, "gutter {gutter}: the bookmarks");
+        let mut tags = struct_titles(&pdf, b"H1");
+        tags.sort();
+        let mut sorted = expected.clone();
+        sorted.sort();
+        assert_eq!(tags, sorted, "gutter {gutter}: the heading tags");
+        let text = page_texts(&pdf).join(" ");
+        assert!(
+            !text.contains('\u{200B}'),
+            "gutter {gutter}: a break marker is in the text: {text:?}"
+        );
+        let letters: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+        for title in &expected {
+            let squeezed: String = title.chars().filter(|c| !c.is_whitespace()).collect();
+            assert!(
+                letters.contains(&squeezed),
+                "gutter {gutter}: `{title}` lost a letter: {text}"
+            );
+        }
+    }
 }

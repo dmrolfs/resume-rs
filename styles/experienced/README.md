@@ -41,12 +41,12 @@ To customize, run `resume export-style experienced <dir>` and edit `theme.typ` i
   `metric-compatible: false`. A build that falls back to Pagella reports `font-fallback-layout` (a warning),
   because line breaks in the name and the labels can differ. Install Book Antiqua, or pass its files with
   `--font-path`, for the template's own breaks.
-- **`gutter`** (`width: 113.15pt`, `inset: 5.9pt`, `gap: 5.95pt`) and **`margin`**: the gutter is part of the left
-  page margin (`margin.left` is the page margin plus the gutter plus the gap), so every block starts in the text
-  column. The labels, the name, the contact lines and the footer reach back over it; a label is inset by `inset`
-  from the page margin. The three numbers are the template's: measured in its PDF, labels start 41.9pt from the
-  page edge and the content 155.1pt. `footer-bleed` is how far; keep it equal
-  to `gutter.width + gutter.gap`.
+- **`gutter`** (`width: 113.15pt`, `inset: 5.9pt`, `gap: 5.95pt`) and **`page-margin`**: the gutter sits inside
+  the left page margin. The style sets the page's left margin to `page-margin.left + gutter.width + gutter.gap`,
+  so every block starts in the text column, and reaches the labels, the name, the contact lines and the footer
+  back over it (`gutter-reach`, derived in `style.typ`). Edit only these two entries; the rest follows. A label is
+  inset by `inset` from the page margin. The numbers are the template's: measured in its PDF, labels start
+  41.9pt from the page edge and the content 155.1pt.
 - **`skills`**: the label column of the skills table is as wide as its longest label, up to `label-max`; a
   longer label wraps. `column-gap` is the space between the label and the value.
 - **`line`**: the line pitch is set from explicit lengths, not from font metrics, so Calibri and Carlito give
@@ -81,8 +81,9 @@ To customize, run `resume export-style experienced <dir>` and edit `theme.typ` i
 - A label wider than the gutter wraps over several lines (`Languages and Technologies` takes three); the row
   grows to hold it. A single word wider than the label cell (`ACCOMPLISHMENTS` is 130pt against 101pt) cannot
   wrap, so the label is set smaller until it fits, down to `size.label-min` (8pt). A word that is still too wide at
-  8pt is broken between letters (with zero-width spaces, which draw nothing), so a label never runs into the
-  content, whatever the title or the gutter width.
+  8pt is set one letter per box, so a line may end between any two letters and a label never runs into the
+  content, whatever the title or the gutter width. The text itself is not changed: the PDF bookmark and the
+  heading tag carry the title as written. A copy of the page text has a line break where the word broke.
 - The Experienced template is optimized for two pages. Nothing here limits the length; `resume build` reports a
   longer one. The principal architect baseline is five pages in this style, which comes from its content: no
   theme setting tried (line pitch, bullet gap, indents) brings it under five.

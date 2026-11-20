@@ -349,9 +349,9 @@
     paper: sys.inputs.at("paper", default: "us-letter"),
     margin: theme.margin,
     footer: {
-      // A style whose left margin holds a gutter lets the footer reach back over it (`footer-bleed`).
-      let bleed = theme.at("footer-bleed", default: 0pt)
-      if bleed == 0pt { footer(theme, resume.name) } else { pad(left: -bleed, footer(theme, resume.name)) }
+      // A style whose left margin holds a gutter lets the footer reach back over it by `gutter-reach`.
+      let reach = theme.at("gutter-reach", default: 0pt)
+      if reach == 0pt { footer(theme, resume.name) } else { pad(left: -reach, footer(theme, resume.name)) }
     },
     footer-descent: theme.footer-descent,
   )

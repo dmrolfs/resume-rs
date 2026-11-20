@@ -159,10 +159,11 @@ struct FallbackFamily {
     faces: &'static [&'static [u8]],
 }
 
-/// The free, metric-compatible stand-ins for the template fonts, embedded unmodified.
+/// The free stand-ins for the template fonts, embedded unmodified.
 ///
-/// Carlito stands in for Calibri, Gelasio for Georgia, Arimo for Arial, and TeX Gyre Pagella for Book
-/// Antiqua (its widths differ by about 2.4% on average). They are static files, not
+/// Carlito stands in for Calibri, Gelasio for Georgia, and Arimo for Arial, each with the same character widths;
+/// TeX Gyre Pagella stands in for Book Antiqua, whose widths it does not match (they differ by about 2.4% on
+/// average), so a style marks that role `metric-compatible: false`. They are static files, not
 /// variable fonts: a later variable face would win a tie against an earlier static one of the same
 /// family, and statics need no weight handling. They are never subset or instanced (Carlito has a
 /// Reserved Font Name). Sources, pins, and checksums are in `fonts/LICENSES.md`.
