@@ -232,12 +232,6 @@ fn an_edited_copy_of_the_theme_renders_differently() {
 }
 
 #[test]
-fn a_style_that_is_named_but_not_written_yet_is_unknown_not_a_panic() {
-    let err = StyleSource::builtin(BuiltinStyle::Experienced).expect_err("rsm-141.9 writes this");
-    assert!(matches!(err, Error::UnknownStyle { .. }), "{err:?}");
-}
-
-#[test]
 fn malformed_font_metadata_in_a_user_style_is_a_typed_error_not_a_panic() {
     let compiled = compiled_with(&fixture_style("bad-probe"));
     let err = compiled

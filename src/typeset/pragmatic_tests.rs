@@ -329,9 +329,11 @@ fn page_ends(lines: &Lines) -> BTreeSet<Violation> {
         if last.contains("ZE") {
             found.insert(Violation::EraHeadingEndsPage);
         }
+        // The whole line: in the experienced style a label shares its line with the content beside it, which is
+        // not a stranded heading.
         if ["SUMMARY", "EXPERIENCE", "EDUCATION"]
             .iter()
-            .any(|s| last.to_uppercase().starts_with(s))
+            .any(|s| last.to_uppercase() == *s)
         {
             found.insert(Violation::SectionHeadingEndsPage);
         }
@@ -1031,4 +1033,270 @@ fn mono_underlines_its_links_in_the_link_color() {
         .collect();
     assert_eq!(underlines.len(), 1, "one underline under the link");
     assert!((underlines[0].x0 - link.x).abs() < 0.5 && (underlines[0].x1 - (link.x + link.width)).abs() < 0.5);
+}
+
+// ---- experienced -----------------------------------------------------------------------------------
+
+fn experienced() -> StyleSource {
+    builtin_style(BuiltinStyle::Experienced)
+}
+
+/// The left edge, in points, of the first run of page 1 that holds each needle.
+fn lefts(compiled: &Compiled, needles: &[&str]) -> Vec<f64> {
+    let runs = page_runs(compiled, 0);
+    needles.iter().map(|needle| run_containing(&runs, needle).x).collect()
+}
+
+fn all_equal(values: &[f64]) -> bool {
+    values.windows(2).all(|pair| (pair[0] - pair[1]).abs() < 0.01)
+}
+
+#[test]
+fn experienced_keeps_the_same_pagination_guarantees() {
+    // The label shares a grid row with the first block of its section; the guarantees must survive that.
+    assert_eq!(
+        violations(&experienced(), SWEEP),
+        BTreeSet::new(),
+        "headings or blurbs stranded, or bullets split"
+    );
+}
+
+#[test]
+fn the_experienced_heading_checks_fail_once_their_stickiness_is_removed() {
+    // The sweep reads headings by their text; this proves it still sees the experienced style's (labels in
+    // capitals beside the first block, a role without a title) by removing each guarantee from a copy.
+    for (what, from, to, expected) in &WEAKENINGS[..2] {
+        let (_dir, style) = weakened_in("experienced", from, to);
+        let found = violations(&style, SWEEP);
+        assert!(
+            found.contains(expected),
+            "without {what} the experienced sweep saw only {found:?}"
+        );
+    }
+    // The first role of a section sits in the label's row, so the row's stickiness holds the heading and blurb.
+    let (_dir, style) = weakened_in(
+        "experienced",
+        "row(render-first(theme, first), sticky: follows)",
+        "row(render-first(theme, first), sticky: false)",
+    );
+    let found = violations(&style, SWEEP);
+    assert!(
+        found.contains(&Violation::BlurbEndsPageThoughBodyFollows),
+        "without the row's stickiness the sweep saw only {found:?}"
+    );
+}
+
+/// A resume whose Experience opens with a role that has no blurb, so the label's row holds only the role heading.
+fn first_role_without_blurb(spacers: usize) -> String {
+    let mut md = String::from("# A B\n\nCity · a@b.co\n\n## Summary\n\n");
+    for i in 0..spacers {
+        md += &format!("Spacer {i}.\n\n");
+    }
+    md + "## Experience\n\n### ZR0 · Title0 · 2020 – 2021\n\n- B1 one end1\n- B2 two end2\n"
+}
+
+#[test]
+fn the_experienced_label_row_with_only_a_role_heading_moves_with_the_first_bullet() {
+    let ends_page_alone = |style: &StyleSource| {
+        SWEEP.clone().any(|spacers| {
+            let lines = body_lines(&compile(style, &first_role_without_blurb(spacers)));
+            page_ends(&lines).contains(&Violation::RoleHeadingEndsPage)
+        })
+    };
+    assert!(!ends_page_alone(&experienced()));
+    let (_dir, weakened) = weakened_in(
+        "experienced",
+        "row(render-first(theme, first), sticky: follows)",
+        "row(render-first(theme, first), sticky: false)",
+    );
+    assert!(
+        ends_page_alone(&weakened),
+        "the sweep cannot see a stranded role heading"
+    );
+}
+
+#[test]
+fn the_section_labels_share_a_left_edge_and_the_content_starts_one_gutter_to_the_right() {
+    let compiled = compile(&experienced(), &full_fixture_text());
+    let labels = lefts(&compiled, &["SUMMARY", "LANGUAGES", "EXPERIENCE"]);
+    let content = lefts(&compiled, &["Principal engineer who designs", "Analytical Engines Ltd"]);
+    assert!(all_equal(&labels), "labels: {labels:?}");
+    assert!(all_equal(&content), "content: {content:?}");
+    // The theme's gutter is 113.15pt, the content starts 5.95pt after it, and a label is inset 5.9pt.
+    let gutter = content[0] - labels[0];
+    assert!(
+        (gutter - (113.15 + 5.95 - 5.9)).abs() < 0.5,
+        "the content starts {gutter}pt right of the labels"
+    );
+}
+
+#[test]
+fn the_skill_values_start_in_one_column_right_of_the_widest_label() {
+    let compiled = compile(&experienced(), &full_fixture_text());
+    let values = lefts(&compiled, &["Rust, Java", "AWS (EKS", "Led all product"]);
+    assert!(all_equal(&values), "the values do not line up: {values:?}");
+    let runs = page_runs(&compiled, 0);
+    let widest = run_containing(&runs, "Cloud and infrastructure");
+    assert!(
+        values[0] > widest.x + widest.width,
+        "the values start at {} but the widest label ends at {}",
+        values[0],
+        widest.x + widest.width
+    );
+}
+
+#[test]
+fn a_skill_label_longer_than_the_label_column_wraps_inside_it() {
+    let long = "Distributed systems design and operation across many regions and clouds";
+    let md = format!("# Ada Lovelace\n\nCity · a@b.co\n\n## Skills\n\n- **{long}:** Rust\n- **Go:** Fast\n");
+    let compiled = compile(&experienced(), &md);
+    let runs = page_runs(&compiled, 0);
+    let value = run_containing(&runs, "Rust");
+    let label = run_containing(&runs, "Distributed");
+    // theme.skills.label-max is 2.2in: the label wraps and the value column starts right of that.
+    assert!(
+        value.x - label.x <= 2.2 * 72.0 + 0.15 * 72.0 + 0.5,
+        "{} from the label to the value",
+        value.x - label.x
+    );
+    assert!(
+        page_lines(&compiled, 0)
+            .iter()
+            .filter(|(_, l)| l.contains("Distributed") || l.contains("clouds"))
+            .count()
+            >= 2,
+        "the label wraps over two lines or more"
+    );
+}
+
+#[test]
+fn the_experienced_role_line_is_bold_company_comma_title_and_a_bold_period_at_the_right() {
+    let md = "# Ada Lovelace\n\nCity · a@b.co\n\n## Experience\n\n### Acme Corp · Principal Engineer · 2020 – Present\n\nA blurb.\n\n- one\n\n### Babbage & Co · 2012 – 2017\n\n- two\n";
+    let compiled = compile(&experienced(), md);
+    let runs = page_runs(&compiled, 0);
+    let middle = compiled.document.pages()[0].frame.width().to_pt() / 2.0;
+    let (lead, period) = (
+        run_containing(&runs, "Acme Corp, Principal Engineer"),
+        run_containing(&runs, "2020 – Present"),
+    );
+    assert!(lead.bold && period.bold, "{lead:?} {period:?}");
+    assert!(period.x > middle && (lead.y - period.y).abs() < 0.3);
+    let (alone, alone_period) = (run_containing(&runs, "Babbage"), run_containing(&runs, "2012 – 2017"));
+    assert!(
+        alone.bold && alone_period.bold && alone_period.x > middle,
+        "{alone:?} {alone_period:?}"
+    );
+}
+
+#[test]
+fn the_name_and_contact_lines_are_centered_on_the_page_not_on_the_text_column() {
+    let md = "# Ada Lovelace\n\n[GitHub](https://github.com/ada) · City, ST · a@b.co\n\n## Summary\n\n- one\n";
+    let compiled = compile(&experienced(), md);
+    let page = compiled.document.pages()[0].frame.width().to_pt();
+    let lines = page_lines(&compiled, 0);
+    assert_eq!(lines[0].1, "Ada Lovelace");
+    assert_eq!(lines[1].1, "a@b.co • City, ST");
+    assert_eq!(lines[2].1, "GitHub");
+    let runs = page_runs(&compiled, 0);
+    for needle in ["Lovelace", "GitHub", "City, ST"] {
+        let run = run_containing(&runs, needle);
+        let on_line: Vec<_> = runs.iter().filter(|r| (r.y - run.y).abs() < 0.3).collect();
+        let (left, right) = (
+            on_line.iter().map(|r| r.x).fold(f64::MAX, f64::min),
+            on_line.iter().map(|r| r.x + r.width).fold(f64::MIN, f64::max),
+        );
+        // The page margin is 0.5in on the right and 0.5in + the gutter on the left; centered text is
+        // centered between the two edges of the page, not of the column.
+        assert!(
+            ((left + right) / 2.0 - page / 2.0).abs() < 1.5,
+            "`{needle}` is centered off the page middle"
+        );
+    }
+}
+
+#[test]
+fn the_experienced_footer_spans_the_page_over_the_gutter() {
+    let compiled = compile(&experienced(), &full_fixture_text());
+    let runs = page_runs(&compiled, 0);
+    // Runs are sorted top to bottom, so the footer's are the last two.
+    let footer_name = assert_some!(runs.iter().rfind(|r| r.text == "Ada Lovelace")).clone();
+    let page_of = run_containing(&runs, "Page 1 of");
+    assert!(
+        footer_name.y > 700.0,
+        "that is the footer's name, not the header's: {footer_name:?}"
+    );
+    // The footer name sits at the left page margin, over the gutter, and the labels are inset from it;
+    // `Page N of M` ends at the right margin.
+    let labels = lefts(&compiled, &["SUMMARY"]);
+    assert!(
+        (footer_name.x - 0.5 * 72.0).abs() < 0.5 && (labels[0] - footer_name.x - 5.9).abs() < 0.5,
+        "the footer starts at {} and the labels at {}",
+        footer_name.x,
+        labels[0]
+    );
+    let page = compiled.document.pages()[0].frame.width().to_pt();
+    assert!((page_of.x + page_of.width - (page - 0.5 * 72.0)).abs() < 0.5);
+}
+
+#[test]
+fn experienced_capitalizes_whatever_the_section_is_called() {
+    let compiled = compile(
+        &experienced(),
+        "# A B\n\nCity · a@b.co\n\n## Open source & writing\n\n- one\n",
+    );
+    // The label wraps in the gutter, so the words are checked in order, not as one string.
+    let text = text_of(&compiled);
+    assert!(position(&text, "OPEN SOURCE") < position(&text, "WRITING"), "{text}");
+    assert!(!text.contains("Open source"), "{text}");
+}
+
+#[test]
+fn experienced_has_the_accent_only_on_links() {
+    let compiled = compile(&experienced(), &full_fixture_text());
+    let colors: BTreeSet<_> = page_runs(&compiled, 0).into_iter().filter_map(|r| r.fill).collect();
+    assert_eq!(
+        colors.into_iter().collect::<Vec<_>>(),
+        ["#000000", "#595959", "#cc0000"],
+        "text, the muted footer, and the red links"
+    );
+}
+
+#[test]
+fn a_page_break_before_a_sections_first_block_keeps_the_label_with_its_content() {
+    let md = "# A B\n\nCity · a@b.co\n\n## Summary\n\n- one\n\n## Education\n\n<div class=\"page-break\"></div>\n\n### University · 2004 – 2008\n\n- Mathematics.\n";
+    let compiled = compile(&experienced(), md);
+    let lines = page_lines(&compiled, 1);
+    assert!(lines[0].1.starts_with("EDUCATION"), "{lines:?}");
+}
+
+fn position(haystack: &str, needle: &str) -> usize {
+    assert_some!(haystack.find(needle), "`{needle}` not in {haystack:?}")
+}
+
+/// The full fixture, as Markdown.
+fn full_fixture_text() -> String {
+    assert_ok!(std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/full.md")
+    ))
+}
+
+#[test]
+fn a_section_label_shares_a_baseline_with_the_first_line_beside_it() {
+    // The label is 12pt, the body 11pt and a role line 12pt; the label takes the text edges of the line it sits beside.
+    let md = "# A B\n\nCity · a@b.co\n\n## Summary\n\nA paragraph.\n\n## Experience\n\n### Acme · Lead · 2020 – 2021\n\n- one\n\n## Education\n\n- Mathematics.\n";
+    let compiled = compile(&experienced(), md);
+    let runs = page_runs(&compiled, 0);
+    for (label, line) in [
+        ("SUMMARY", "A paragraph."),
+        ("EXPERIENCE", "Acme, Lead"),
+        ("EDUCATION", "Mathematics."),
+    ] {
+        let (label_run, line_run) = (run_containing(&runs, label), run_containing(&runs, line));
+        assert!(
+            (label_run.y - line_run.y).abs() < 0.05,
+            "`{label}` baseline {} and `{line}` baseline {}",
+            label_run.y,
+            line_run.y
+        );
+    }
 }
