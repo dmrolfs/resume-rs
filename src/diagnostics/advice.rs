@@ -197,6 +197,12 @@ impl DiagnosticCode {
                     "### Acme · Staff Engineer · 2019 – 2023",
                 )),
             },
+            PlaceholderUnresolved => &Advice {
+                summary: "A selected letter placeholder has no application field value.",
+                why: "Project convention: every selected placeholder must resolve before text or PDF output.",
+                fix: "Supply the named field, or select wording that does not use it.",
+                example: None,
+            },
             InputLimit => &Advice {
                 summary: "The input exceeds a size or nesting limit.",
                 why: "Project convention: limits protect the tool from pathological files: 1 MiB of Markdown, 8 levels of nested emphasis or lists, and 500 findings.",

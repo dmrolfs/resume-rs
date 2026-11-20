@@ -377,7 +377,7 @@ pub enum DiagnosticCode {
     EraShape, EraOutsideRole, PeriodUnparseable, PeriodEndBeforeStart, PeriodHyphen,
     UnsupportedHtml, InvalidLink, UnsupportedLink, NestedList, RoleOrder, MidSentenceBold, Image, TooManyContactItems,
     MissingContact, PeriodPresentSpelling, UnsupportedMarkdown, HardBreak, TextTooLong, EmptyHeading, InputLimit,
-    HeadingMarkerSpacing,
+    HeadingMarkerSpacing, PlaceholderUnresolved, // letter field resolution, after selection
     // Content (doctor)
     LongBullet, UnquantifiedBullet, WeakOpener, FirstPerson, SloppyPhrase, LongSummary,
     EducationNotLast, OldRoleDetail,

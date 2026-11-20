@@ -193,6 +193,27 @@ fn every_format_code_is_demonstrated_by_a_fixture() {
                 .collect::<Vec<_>>()
         })
         .collect();
+    // Field resolution runs after parsing; demonstrate its Format finding with a located model fixture.
+    let missing = resume::letter::Piece {
+        content: vec![resume::letter::LetterInline::Placeholder {
+            key: resume::letter::Placeholder::Company,
+            range: 0..11,
+        }],
+        range: 0..11,
+    };
+    let selected = resume::letter::SelectedLetter {
+        name: assert_ok!(resume::model::Name::try_new("Alex Example")),
+        contact: vec![],
+        greeting: missing.clone(),
+        body: vec![missing.clone()],
+        closing: missing,
+    };
+    let findings = claims::assert_err!(resume::letter::resolve(
+        selected,
+        &resume::letter::LetterFields::default(),
+        std::path::Path::new("letter.md"),
+    ));
+    seen.extend(findings.iter().map(|d| d.code));
     seen.push(DiagnosticCode::InputLimit); // the size and nesting caps are exercised below
     for code in DiagnosticCode::iter().filter(|c| c.category() == Category::Format) {
         assert!(seen.contains(&code), "no fixture produces `{code}`");

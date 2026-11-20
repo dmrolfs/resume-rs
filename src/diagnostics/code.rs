@@ -54,6 +54,7 @@ pub enum DiagnosticCode {
     EmptyHeading,
     InputLimit,
     HeadingMarkerSpacing,
+    PlaceholderUnresolved,
     // Content (doctor)
     LongBullet,
     UnquantifiedBullet,
@@ -113,7 +114,8 @@ impl DiagnosticCode {
             | TextTooLong
             | EmptyHeading
             | InputLimit
-            | HeadingMarkerSpacing => Category::Format,
+            | HeadingMarkerSpacing
+            | PlaceholderUnresolved => Category::Format,
             LongBullet | UnquantifiedBullet | WeakOpener | FirstPerson | SloppyPhrase | LongSummary
             | EducationNotLast | OldRoleDetail => Category::Content,
             PageLimitExceeded
@@ -137,9 +139,24 @@ impl DiagnosticCode {
     pub const fn default_severity(self) -> Severity {
         use DiagnosticCode::*;
         match self {
-            MissingName | DuplicateName | ContentBeforeSection | RoleLineShape | RoleSeparator | EmptyRolePart
-            | EraShape | EraOutsideRole | PeriodUnparseable | PeriodEndBeforeStart | UnsupportedHtml | InvalidLink
-            | UnsupportedLink | UnsupportedMarkdown | TextTooLong | EmptyHeading | InputLimit => Severity::Error,
+            MissingName
+            | DuplicateName
+            | ContentBeforeSection
+            | RoleLineShape
+            | RoleSeparator
+            | EmptyRolePart
+            | EraShape
+            | EraOutsideRole
+            | PeriodUnparseable
+            | PeriodEndBeforeStart
+            | UnsupportedHtml
+            | InvalidLink
+            | UnsupportedLink
+            | UnsupportedMarkdown
+            | TextTooLong
+            | EmptyHeading
+            | InputLimit
+            | PlaceholderUnresolved => Severity::Error,
             PeriodHyphen
             | PeriodPresentSpelling
             | NestedList

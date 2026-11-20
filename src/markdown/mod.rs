@@ -523,6 +523,7 @@ mod tests {
             TextTooLong,
             EmptyHeading,
             InputLimit,
+            PlaceholderUnresolved,
         ];
         let warnings = [
             PeriodHyphen,
