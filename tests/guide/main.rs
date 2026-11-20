@@ -587,8 +587,8 @@ fn a_repeatable_option_and_a_documented_option_that_does_not_exist_are_caught() 
         format!("{row}\n| `--debounce <DURATION>` | `150ms` | wait |")
     });
     assert_problem(&checks::commands(&Guide::parse(&invented)), "--debounce");
-    let prose = format!("{clean}\nUse `--open` to see it.\n");
-    assert_problem(&checks::commands(&Guide::parse(&prose)), "--open");
+    let prose = format!("{clean}\nUse `--no-such-flag` to see it.\n");
+    assert_problem(&checks::commands(&Guide::parse(&prose)), "--no-such-flag");
 }
 
 // ---- diagnostics: the generated appendix and the links ---------------------------------------------------

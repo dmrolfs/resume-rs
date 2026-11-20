@@ -301,6 +301,8 @@ A style has two files you edit:
 - `theme.typ` holds **values**: fonts, sizes, colors, spacing, margins. Most changes belong here.
 - `style.typ` holds **structure**: how the header is laid out and which parts appear. Change this to move things around.
 
+To see a change as you make it, run [`resume watch`](#resume-watch) with `--styles-dir`: it rebuilds the PDF each time you save a style file. To design a style with Typst's own live preview instead, use [`resume export`](#resume-export).
+
 ### Theme keys
 
 Every value a built-in theme sets is listed here. A theme is a Typst dictionary, and `spacing.section` means the `section` entry of `spacing`. Lengths are in Typst units, such as `pt` (points), `in` (inches), and `em` (a multiple of the font size). The **Styles** column says which built-in styles have the key. The styles do not all have the same keys: `experienced` keeps its page margins in `page-margin` and has no `margin`, for example.
@@ -440,7 +442,7 @@ These work with every command, and so do `-h` and `--help` (a command's usage) a
 
 | Option | Values and default | What it does |
 |---|---|---|
-| `--dry-run` | a switch | Shows what would be written and writes nothing. For `build` it still compiles and runs every check, so the exit code is a real build's. For `doctor --fix` it prints the diff. For `export-style` it lists the files. `styles`, `check`, `licenses`, and `doctor` without `--fix` write nothing and ignore it. |
+| `--dry-run` | a switch | Shows what would be written and writes nothing. For `build` it still compiles and runs every check, so the exit code is a real build's. For `doctor --fix` it prints the diff. For `export-style` and `export` it lists the files. `watch` refuses it. `styles`, `check`, `licenses`, and `doctor` without `--fix` write nothing and ignore it. |
 | `--format <FORMAT>` | `human` or `json`; default `human` | How findings are written: for people, or as JSON lines on standard output. `styles`, `licenses`, and `export-style` have no findings and ignore it. |
 | `--color <COLOR>` | `auto`, `always`, or `never`; default `auto` | When to color the output. `auto` colors only on an interactive terminal, and turns color off when `NO_COLOR` is set to something or `TERM` is `dumb`. `always` and `never` override both. |
 
@@ -463,6 +465,34 @@ resume build Resume.md Other.md --out pdfs
 | `--max-pages <N>` | a number of pages | Fail when the resume needs more pages than this. |
 | `--fonts <FONTS>` | `auto` or `bundled`; default `auto` | Which fonts may be used. See [Fonts](#fonts). |
 | `--font-path <DIR>` | none; repeatable | A directory of fonts to use when `--fonts` is `auto`. Give it more than once. It cannot be combined with `--fonts bundled`. |
+
+### resume watch
+
+Builds one resume, then builds it again each time the resume or a style file changes. Leave it running in a terminal beside your editor and open the PDF in a viewer that reloads on change (Skim on a Mac, SumatraPDF on Windows). Stop it with Ctrl+C.
+
+```sh
+resume watch Resume.md --open
+resume watch Resume.md --styles-dir my-styles --style pragmatic
+```
+
+Each build is a `build`: the same summary line, the same findings, and the same rules for what is written. A build that fails is printed, and the watch goes on to the next change. The watch ends only when it cannot start (a missing resume, an unknown style, a file watcher that cannot be created), when the file watcher dies, or when nobody reads its output any more. A PDF that a viewer holds open cannot be replaced on Windows; close the viewer, and the next change builds again.
+
+A build starts shortly after the last change, so an editor that is still writing the file is not built half-way. Changes during a build cause one more build. A resume saved by an editor that replaces the file is seen. The resume's folder is watched, and with `--styles-dir`, so is that folder, except the output directory.
+
+`--dry-run` is refused with `watch`, since watching without writing has no purpose: use `build --dry-run`.
+
+| Option | Values and default | What it does |
+|---|---|---|
+| `<FILE>` | one Markdown file | The resume to watch and build. |
+| `-o, --out <DIR>` | default `out` | The directory the PDF is written to. |
+| `-s, --style <NAME>` | default `pragmatic` | The style to render with. The style is looked up again before each build, so a style you create or change while watching is used. |
+| `--styles-dir <DIR>` | none | A directory of styles to use besides the built-in ones. It is watched too. |
+| `--paper <PAPER>` | `letter` or `a4`; default `letter` | The paper size. |
+| `--max-pages <N>` | a number of pages | Fail a build when the resume needs more pages than this. |
+| `--fonts <FONTS>` | `auto` or `bundled`; default `auto` | Which fonts may be used. See [Fonts](#fonts). |
+| `--font-path <DIR>` | none; repeatable | A directory of fonts to use when `--fonts` is `auto`. It cannot be combined with `--fonts bundled`. |
+| `--debounce <DURATION>` | a time such as `1s`; default `150ms` | How long to wait after the last change before building. |
+| `--open` | a switch | Opens the PDF once, after the first build that writes it, even a build with a layout error. A failure to open it is a warning. |
 
 ### resume doctor
 
@@ -532,6 +562,35 @@ resume export-style mono my-styles
 | `<DIR>` | a directory | Where to copy it. The style goes to `DIR/NAME/` and what styles share to `DIR/lib/`. |
 | `--force` | a switch | Replace files that already exist, including any edits you made to an earlier copy. Without it, nothing is written when any file exists. |
 
+### resume export
+
+Writes a resume as data, together with a style, so you can design the style with a live preview in Typst's own tools. It reads and checks the resume but does not compile it, so it needs no fonts.
+
+```sh
+resume export Resume.md preview
+resume export Resume.md preview --style mono --force
+```
+
+It writes three things under the directory you give: `resume.json`, the resume as the style reads it; the style, in `DIR/NAME/`; and the files every style shares, in `DIR/lib/`. `DIR` is also a valid `--styles-dir`, so `resume build Resume.md --styles-dir preview` builds with what you edit there.
+
+To preview, open the directory in an editor with the tinymist extension, or run Typst's own watcher on the style file:
+
+```text
+typst watch --root preview preview/pragmatic/style.typ
+```
+
+Exporting again refreshes `resume.json` and keeps style files that already exist, because you are probably editing `theme.typ`; `--force` replaces them too. A resume with format errors writes nothing and exits with 1.
+
+The preview is a guide to the look and not to the page count: Typst's own tools use the fonts installed on your machine and US Letter paper, so page breaks can differ from `resume build`, which is the authority on the number of pages. To preview A4, give Typst the `paper` input, as in `typst watch --root preview --input paper=a4 preview/pragmatic/style.typ`. Do not set a `fonts` input: the style expects a list, and Typst's command line gives text.
+
+| Option | Values and default | What it does |
+|---|---|---|
+| `<FILE>` | one Markdown file | The resume to export. |
+| `<DIR>` | a directory | Where to write `resume.json`, the style, and what styles share. |
+| `-s, --style <NAME>` | default `pragmatic` | The style to export. |
+| `--styles-dir <DIR>` | none | A directory of styles to use besides the built-in ones. |
+| `--force` | a switch | Replace style files that already exist. `resume.json` is always replaced. |
+
 ### resume licenses
 
 Prints the license notices of the fonts built into the program, to standard output. It takes no options of its own.
@@ -539,13 +598,6 @@ Prints the license notices of the fonts built into the program, to standard outp
 ```sh
 resume licenses
 ```
-
-### Planned commands
-
-<!-- guide:planned rsm-141.12 witness=command:watch -->
-<!-- guide:planned rsm-141.12 witness=command:export -->
-
-**Planned, not available yet.** Two more commands are planned. Neither exists today; the commands above are the whole program.
 
 ### Environment variables
 
