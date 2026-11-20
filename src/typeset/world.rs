@@ -244,7 +244,8 @@ mod tests {
                 "gelasio",
                 "libertinus serif",
                 "new computer modern",
-                "new computer modern math"
+                "new computer modern math",
+                "tex gyre pagella"
             ]
         );
     }

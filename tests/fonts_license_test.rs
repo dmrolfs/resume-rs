@@ -36,7 +36,7 @@ fn every_embedded_font_file_is_listed_in_licenses_md() {
     let licenses = std::fs::read_to_string(fonts_dir().join("LICENSES.md")).expect("fonts/LICENSES.md exists");
     let files = font_files();
     assert!(
-        files.len() >= 12,
+        files.len() >= 16,
         "expected the bundled fallback fonts, found {files:?}"
     );
     for (_, relative) in files {
@@ -78,8 +78,11 @@ fn every_font_file_is_the_unmodified_file_listed_in_licenses_md() {
 }
 
 #[test]
-fn every_license_text_is_the_real_ofl() {
-    for (dir, relative) in font_files() {
+fn every_ofl_license_text_is_the_real_ofl() {
+    for (dir, relative) in font_files()
+        .into_iter()
+        .filter(|(dir, _)| dir.join("OFL.txt").is_file())
+    {
         let text = std::fs::read_to_string(dir.join("OFL.txt")).expect("OFL.txt is readable");
         assert!(
             text.contains("SIL OPEN FONT LICENSE Version 1.1"),
@@ -90,12 +93,45 @@ fn every_license_text_is_the_real_ofl() {
     }
 }
 
+#[test]
+fn pagella_keeps_the_gust_license_readme_and_manifest_beside_the_fonts() {
+    let dir = fonts_dir().join("pagella");
+    let license = std::fs::read_to_string(dir.join("GUST-FONT-LICENSE.txt")).expect("the GUST license is kept");
+    assert!(license.contains("version 1.0, dated 22 June 2009, of the GUST Font License"));
+    assert!(license.contains("LaTeX Project Public License"));
+    for name in ["README-TeX-Gyre-Pagella.txt", "MANIFEST-TeX-Gyre-Pagella.txt"] {
+        let text = std::fs::read_to_string(dir.join(name)).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert!(text.contains("Version: 2.501"), "{name} is not the 2.501 file");
+    }
+}
+
+#[test]
+fn licenses_md_states_the_three_lppl_conditions_for_pagella() {
+    let licenses = std::fs::read_to_string(fonts_dir().join("LICENSES.md")).expect("fonts/LICENSES.md exists");
+    for needle in [
+        "No change was made",
+        "No endorsement by the authors is implied",
+        "https://www.gust.org.pl/projects/e-foundry/tex-gyre/pagella",
+        "https://ctan.org/pkg/tex-gyre",
+        "Copyright 2006-2018 for TeX Gyre extensions by B. Jackowski, J.M. Nowacki, et al.",
+    ] {
+        assert!(licenses.contains(needle), "LICENSES.md lacks `{needle}`");
+    }
+}
+
 // ============================================================================
 // The notices the binary prints (`resume licenses`) cannot drift from the fonts it embeds
 // ============================================================================
 
 use claims::{assert_ok, assert_some};
 use resume::typeset::fonts::{FontSet, bundled_font_notices};
+
+/// The license text a bundled family directory keeps beside its fonts: the GUST Font License for TeX Gyre
+/// Pagella, the OFL for the others.
+fn license_text(family_dir: &str) -> String {
+    let name = if family_dir == "pagella" { "GUST-FONT-LICENSE.txt" } else { "OFL.txt" };
+    assert_ok!(std::fs::read_to_string(fonts_dir().join(family_dir).join(name)))
+}
 
 fn vendored_notice() -> String {
     assert_ok!(std::fs::read_to_string(fonts_dir().join("typst-assets").join("NOTICE")))
@@ -113,9 +149,11 @@ fn the_notices_carry_the_typst_assets_notice_in_full() {
 #[test]
 fn the_notices_carry_every_bundled_license_text_in_full() {
     let notices = bundled_font_notices();
-    for family in ["carlito", "gelasio", "arimo"] {
-        let text = assert_ok!(std::fs::read_to_string(fonts_dir().join(family).join("OFL.txt")));
-        assert!(notices.contains(&text), "{family}'s OFL.txt is not in the notices");
+    for family in ["carlito", "gelasio", "arimo", "pagella"] {
+        assert!(
+            notices.contains(&license_text(family)),
+            "{family}'s license text is not in the notices"
+        );
     }
 }
 
@@ -129,6 +167,7 @@ fn the_notices_cover_every_bundled_family() {
         ("arimo", "Arimo", "arimo"),
         ("carlito", "Carlito", "carlito"),
         ("gelasio", "Gelasio", "gelasio"),
+        ("tex gyre pagella", "GUST Font License", "pagella"),
         ("libertinus serif", "Libertinus", TYPST_ASSETS),
         ("new computer modern", "NewComputerModern", TYPST_ASSETS),
         ("new computer modern math", "NewComputerModern", TYPST_ASSETS),
@@ -137,7 +176,7 @@ fn the_notices_cover_every_bundled_family() {
     let notices = bundled_font_notices();
     let families = FontSet::bundled().families();
     assert!(
-        families.len() >= 7,
+        families.len() >= 8,
         "expected the bundled and Typst fonts, found {families:?}"
     );
     for family in families {
@@ -148,7 +187,7 @@ fn the_notices_cover_every_bundled_family() {
         let text = if *source == TYPST_ASSETS {
             vendored_notice()
         } else {
-            assert_ok!(std::fs::read_to_string(fonts_dir().join(source).join("OFL.txt")))
+            license_text(source)
         };
         assert!(
             text.contains(needle),

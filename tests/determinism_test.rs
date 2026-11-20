@@ -212,10 +212,18 @@ fn embedded_fonts(pdf: &[u8]) -> Vec<String> {
     names
 }
 
-/// True when every embedded font is one `--fonts bundled` ships: the Carlito, Gelasio, and Arimo fallbacks
+/// True when every embedded font is one `--fonts bundled` ships: the Carlito, Gelasio, Arimo, and TeX Gyre Pagella fallbacks
 /// or a font typst-kit embeds (DejaVu Sans Mono for code, New Computer Modern, Libertinus).
 fn only_bundled(fonts: &[String]) -> bool {
-    const BUNDLED: [&str; 6] = ["Carlito", "Gelasio", "Arimo", "DejaVu", "NewCM", "Libertinus"];
+    const BUNDLED: [&str; 7] = [
+        "Carlito",
+        "Gelasio",
+        "Arimo",
+        "TeXGyrePagella",
+        "DejaVu",
+        "NewCM",
+        "Libertinus",
+    ];
     fonts
         .iter()
         .all(|font| BUNDLED.iter().any(|family| font.starts_with(family)))

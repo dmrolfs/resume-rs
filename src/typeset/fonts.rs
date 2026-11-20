@@ -57,7 +57,7 @@ impl FontSet {
     }
 
     /// Only the bundled fonts: typst-kit's (Libertinus Serif, New Computer Modern, DejaVu Sans Mono) and the
-    /// Carlito, Gelasio, and Arimo fallbacks. The same as a [`FontsMode::Bundled`] build, without the builder.
+    /// Carlito, Gelasio, Arimo, and TeX Gyre Pagella fallbacks. The same as a [`FontsMode::Bundled`] build, without the builder.
     #[must_use]
     pub fn bundled() -> Self {
         Self::assemble(bundled_faces(), Vec::new())
@@ -154,18 +154,18 @@ impl FontSet {
 /// One bundled family: its faces and the license text that must travel with them.
 struct FallbackFamily {
     name: &'static str,
-    /// The family's `OFL.txt`, which every copy of the fonts must carry (OFL condition 2).
+    /// The family's license text (`OFL.txt`, or the GUST Font License), which every copy of the fonts must carry.
     license: &'static str,
     faces: &'static [&'static [u8]],
 }
 
 /// The free, metric-compatible stand-ins for the template fonts, embedded unmodified.
 ///
-/// Carlito stands in for Calibri, Gelasio for Georgia, and Arimo for Arial. They are static files, not
+/// Carlito stands in for Calibri, Gelasio for Georgia, Arimo for Arial, and TeX Gyre Pagella for Book
+/// Antiqua (its widths differ by about 2.4% on average). They are static files, not
 /// variable fonts: a later variable face would win a tie against an earlier static one of the same
 /// family, and statics need no weight handling. They are never subset or instanced (Carlito has a
-/// Reserved Font Name). Sources, pins, and checksums are in `fonts/LICENSES.md`. TeX Gyre Pagella joins
-/// them in rsm-141.9, where it is first used, as one more entry here.
+/// Reserved Font Name). Sources, pins, and checksums are in `fonts/LICENSES.md`.
 const FALLBACK_FAMILIES: &[FallbackFamily] = &[
     FallbackFamily {
         name: "Carlito",
@@ -195,6 +195,16 @@ const FALLBACK_FAMILIES: &[FallbackFamily] = &[
             include_bytes!("../../fonts/arimo/Arimo-Bold.ttf"),
             include_bytes!("../../fonts/arimo/Arimo-Italic.ttf"),
             include_bytes!("../../fonts/arimo/Arimo-BoldItalic.ttf"),
+        ],
+    },
+    FallbackFamily {
+        name: "TeX Gyre Pagella",
+        license: include_str!("../../fonts/pagella/GUST-FONT-LICENSE.txt"),
+        faces: &[
+            include_bytes!("../../fonts/pagella/texgyrepagella-regular.otf"),
+            include_bytes!("../../fonts/pagella/texgyrepagella-bold.otf"),
+            include_bytes!("../../fonts/pagella/texgyrepagella-italic.otf"),
+            include_bytes!("../../fonts/pagella/texgyrepagella-bolditalic.otf"),
         ],
     },
 ];
@@ -708,11 +718,12 @@ mod tests {
                 "Gelasio",
                 "Libertinus Serif",
                 "New Computer Modern",
-                "New Computer Modern Math"
+                "New Computer Modern Math",
+                "TeX Gyre Pagella"
             ]
         );
-        // typst-kit's 17 faces first (so their indexes never move), then 4 variants of each of 3 families.
-        assert_eq!(set.origins().len(), 17 + 12, "a face was added or removed");
+        // typst-kit's 17 faces first (so their indexes never move), then 4 variants of each of 4 families.
+        assert_eq!(set.origins().len(), 17 + 16, "a face was added or removed");
         assert!(set.origins().iter().all(|o| *o == FontOrigin::Bundled));
         assert_eq!(set.mode(), FontsMode::Bundled);
     }
@@ -745,16 +756,18 @@ mod tests {
         for family in FALLBACK_FAMILIES {
             assert!(notices.contains(family.name), "{} is missing", family.name);
         }
-        // One OFL text per bundled family, and the ones the typst-assets NOTICE carries for itself.
+        // One OFL text per OFL family (all but TeX Gyre Pagella, which is under the GUST Font License), and the
+        // ones the typst-assets NOTICE carries for itself.
         let ofl = "SIL OPEN FONT LICENSE Version 1.1";
         assert_eq!(
             notices.matches(ofl).count(),
-            FALLBACK_FAMILIES.len() + TYPST_ASSETS_NOTICE.matches(ofl).count()
+            FALLBACK_FAMILIES.len() - 1 + TYPST_ASSETS_NOTICE.matches(ofl).count()
         );
         assert!(
             notices.contains(TYPST_ASSETS_NOTICE),
             "the typst-assets NOTICE is missing"
         );
+        assert!(notices.contains("version 1.0, dated 22 June 2009, of the GUST Font License"));
     }
 
     #[test]
@@ -769,7 +782,7 @@ mod tests {
     #[test]
     fn every_fallback_family_has_all_four_variants_and_is_static() {
         let set = FontSet::bundled();
-        for family in ["Arimo", "Carlito", "Gelasio"] {
+        for family in ["Arimo", "Carlito", "Gelasio", "TeX Gyre Pagella"] {
             let mut variants: Vec<(FontStyle, u16)> = (0..set.origins().len())
                 .filter_map(|i| set.book().info(i))
                 .filter(|info| info.family == family)
