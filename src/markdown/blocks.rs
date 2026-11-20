@@ -68,7 +68,7 @@ fn report_before_section(range: Range<usize>, before: &str, sink: &mut Sink<'_>)
     sink.report(finding);
 }
 
-fn name(heading: &HeadingNode, sink: &mut Sink<'_>) -> Option<Name> {
+pub(super) fn name(heading: &HeadingNode, sink: &mut Sink<'_>) -> Option<Name> {
     let text = heading_text(heading, sink);
     match Name::try_new(text) {
         Ok(name) => Some(name),
@@ -84,7 +84,7 @@ fn name(heading: &HeadingNode, sink: &mut Sink<'_>) -> Option<Name> {
 }
 
 /// Plain text of a heading; markup and setext underlines are reported and then flattened.
-fn heading_text(heading: &HeadingNode, sink: &mut Sink<'_>) -> String {
+pub(super) fn heading_text(heading: &HeadingNode, sink: &mut Sink<'_>) -> String {
     if heading.setext {
         let message = "underlined (setext) headings are not supported";
         unsupported(
@@ -209,7 +209,7 @@ fn classify_html(text: &str) -> HtmlClass {
     }
 }
 
-fn is_comment(block: &BlockNode) -> bool {
+pub(super) fn is_comment(block: &BlockNode) -> bool {
     matches!(block, BlockNode::Html(html) if classify_html(&html.text) == HtmlClass::Comment)
 }
 

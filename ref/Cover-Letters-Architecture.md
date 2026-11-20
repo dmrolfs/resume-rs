@@ -252,6 +252,14 @@ Use synthetic public fixtures and private owner review separately.
 Known limitations: paragraph coherence still needs human review; arbitrary site counters may differ; shell redirection may truncate files before process startup; stdout writes are not atomic; one PDF style is initially supplied.
 The design does not promise sentence-level tailoring, general document templates, generated letter prose, live JD fetching or a combined application command.
 
+## Implemented parser policy update
+
+See [Cover-Letters-Parser.md](Cover-Letters-Parser.md) for rsm-5q1.2 and the owner's subsequent syntax decisions.
+Literal, numeric/named and mixed HTML-entity placeholder spellings are accepted in allowed text positions with original-source spans.
+Explicit backslash escapes and placeholders split across comment/formatting boundaries are errors.
+Only actual Markdown comments are annotations; visible escaped/code lookalikes are not instructions.
+This update supersedes any conflicting verbatim-only or broad lexical-ban proposal in the raw reports.
+
 ## Detailed decisions and final review disposition
 
 The following incorporated decision record is authoritative for edge cases and corrections to the raw reports.

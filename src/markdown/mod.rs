@@ -7,7 +7,12 @@
 //! reports every convention violation with its source range, a hint, and an [`Edit`] when the fix is
 //! mechanical.
 
+mod annotation;
 mod blocks;
+mod letter;
+mod letter_inline;
+mod letter_safety;
+pub use letter::{ParsedLetter, parse_letter};
 mod edit_safety;
 mod inline;
 mod lint;
@@ -123,19 +128,26 @@ pub fn parse(path: impl AsRef<Path>, text: &str) -> Parsed {
 /// The parse itself, without the whole-document check of hard-break Edits (which re-parses through this).
 fn analyze(path: &Path, text: &str) -> Parsed {
     let mut sink = Sink::new(path);
-    if text.len() > MAX_INPUT_BYTES {
-        let message = format!("input is {} bytes; the limit is {MAX_INPUT_BYTES}", text.len());
-        sink.report(Finding::new(DiagnosticCode::InputLimit, 0..0, message).hint("split the resume or remove content"));
+    let Some(doc) = lower_document(text, &mut sink) else {
         return Parsed::new(None, sink.finish());
-    }
-    let base = if text.starts_with(BOM) { BOM.len_utf8() } else { 0 };
-    let normalized = normalize_lone_cr(&text[base..]);
-    let doc = tree::lower(&normalized, base, &mut sink);
+    };
     let src = Source { text };
     let (resume, outline) = blocks::interpret(&doc, &src, &mut sink);
     let mut diagnostics = sink.finish();
     enforce_span_contract(&mut diagnostics, text);
     Parsed::new(resume, diagnostics).with_outline(outline)
+}
+
+/// Shared bounded lowering for resumes and letters, retaining original byte coordinates.
+fn lower_document(text: &str, sink: &mut Sink<'_>) -> Option<tree::Document> {
+    if text.len() > MAX_INPUT_BYTES {
+        let message = format!("input is {} bytes; the limit is {MAX_INPUT_BYTES}", text.len());
+        sink.report(Finding::new(DiagnosticCode::InputLimit, 0..0, message).hint("split the resume or remove content"));
+        return None;
+    }
+    let base = if text.starts_with(BOM) { BOM.len_utf8() } else { 0 };
+    let normalized = normalize_lone_cr(&text[base..]);
+    Some(tree::lower(&normalized, base, sink))
 }
 
 /// Replaces each lone `\r` with `\n`, byte for byte, so every offset still indexes the original.
@@ -524,6 +536,16 @@ mod tests {
             EmptyHeading,
             InputLimit,
             PlaceholderUnresolved,
+            LetterMissingSection,
+            LetterUnknownSection,
+            LetterDuplicateSection,
+            LetterSectionOrder,
+            LetterSectionShape,
+            LetterUnsupportedBlock,
+            LetterAnnotationUnsupported,
+            PlaceholderUnknown,
+            PlaceholderMalformed,
+            PlaceholderPosition,
         ];
         let warnings = [
             PeriodHyphen,

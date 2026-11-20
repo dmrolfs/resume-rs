@@ -55,6 +55,16 @@ pub enum DiagnosticCode {
     InputLimit,
     HeadingMarkerSpacing,
     PlaceholderUnresolved,
+    LetterMissingSection,
+    LetterUnknownSection,
+    LetterDuplicateSection,
+    LetterSectionOrder,
+    LetterSectionShape,
+    LetterUnsupportedBlock,
+    LetterAnnotationUnsupported,
+    PlaceholderUnknown,
+    PlaceholderMalformed,
+    PlaceholderPosition,
     // Content (doctor)
     LongBullet,
     UnquantifiedBullet,
@@ -115,7 +125,17 @@ impl DiagnosticCode {
             | EmptyHeading
             | InputLimit
             | HeadingMarkerSpacing
-            | PlaceholderUnresolved => Category::Format,
+            | PlaceholderUnresolved
+            | LetterMissingSection
+            | LetterUnknownSection
+            | LetterDuplicateSection
+            | LetterSectionOrder
+            | LetterSectionShape
+            | LetterUnsupportedBlock
+            | LetterAnnotationUnsupported
+            | PlaceholderUnknown
+            | PlaceholderMalformed
+            | PlaceholderPosition => Category::Format,
             LongBullet | UnquantifiedBullet | WeakOpener | FirstPerson | SloppyPhrase | LongSummary
             | EducationNotLast | OldRoleDetail => Category::Content,
             PageLimitExceeded
@@ -156,7 +176,17 @@ impl DiagnosticCode {
             | TextTooLong
             | EmptyHeading
             | InputLimit
-            | PlaceholderUnresolved => Severity::Error,
+            | PlaceholderUnresolved
+            | LetterMissingSection
+            | LetterUnknownSection
+            | LetterDuplicateSection
+            | LetterSectionOrder
+            | LetterSectionShape
+            | LetterUnsupportedBlock
+            | LetterAnnotationUnsupported
+            | PlaceholderUnknown
+            | PlaceholderMalformed
+            | PlaceholderPosition => Severity::Error,
             PeriodHyphen
             | PeriodPresentSpelling
             | NestedList

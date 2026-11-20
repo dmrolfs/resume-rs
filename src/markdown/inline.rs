@@ -134,7 +134,7 @@ pub(crate) fn plain_text(nodes: &[InlineNode]) -> Option<TextNode> {
 }
 
 /// True for a complete inline HTML comment.
-fn is_comment(html: &str) -> bool {
+pub(super) fn is_comment(html: &str) -> bool {
     html.starts_with("<!--") && html.ends_with("-->")
 }
 

@@ -215,6 +215,17 @@ fn every_format_code_is_demonstrated_by_a_fixture() {
     ));
     seen.extend(findings.iter().map(|d| d.code));
     seen.push(DiagnosticCode::InputLimit); // the size and nesting caps are exercised below
+    for fixture in [
+        include_str!("fixtures/letters/valid.md"),
+        include_str!("fixtures/letters/invalid.md"),
+    ] {
+        seen.extend(
+            resume::markdown::parse_letter("letter.md", fixture)
+                .diagnostics()
+                .iter()
+                .map(|d| d.code),
+        );
+    }
     for code in DiagnosticCode::iter().filter(|c| c.category() == Category::Format) {
         assert!(seen.contains(&code), "no fixture produces `{code}`");
     }

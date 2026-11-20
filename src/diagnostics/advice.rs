@@ -197,6 +197,48 @@ impl DiagnosticCode {
                     "### Acme · Staff Engineer · 2019 – 2023",
                 )),
             },
+            LetterMissingSection | LetterUnknownSection | LetterDuplicateSection | LetterSectionOrder => &Advice {
+                summary: "The letter needs Greeting, Body and Closing sections in that order.",
+                why: "Project convention: explicit sections keep the greeting and closing separate from selectable content.",
+                fix: "Use exactly ## Greeting, ## Body and ## Closing, each once after # Name.",
+                example: None,
+            },
+            LetterSectionShape => &Advice {
+                summary: "The letter section has the wrong number of paragraphs.",
+                why: "Project convention: the greeting and closing each have one paragraph; the body is nonempty.",
+                fix: "Write one greeting, one closing, and at least one body paragraph.",
+                example: None,
+            },
+            LetterUnsupportedBlock => &Advice {
+                summary: "This construct is not supported in a cover letter.",
+                why: "Project convention: letters contain paragraphs with text, emphasis, links and inline code.",
+                fix: "Rewrite the construct as a paragraph; lists and nested sections are not supported.",
+                example: None,
+            },
+            LetterAnnotationUnsupported => &Advice {
+                summary: "Letter annotations are not supported yet.",
+                why: "Project convention: silently ignoring a draft or selection annotation could publish unintended content.",
+                fix: "Remove the annotation only if this text is ready to include, or wait for letter tailoring support.",
+                example: None,
+            },
+            PlaceholderUnknown => &Advice {
+                summary: "The letter placeholder names an unknown application field.",
+                why: "Project convention: the closed field vocabulary makes typos errors instead of printed markers.",
+                fix: "Use {{company}}, {{title}} or {{recipient}}.",
+                example: None,
+            },
+            PlaceholderMalformed => &Advice {
+                summary: "The letter placeholder is malformed or explicitly escaped.",
+                why: "Project convention: a complete placeholder stays in one text run; HTML character references are allowed.",
+                fix: "Write {{company}}, {{title}} or {{recipient}} without backslash escapes or internal formatting.",
+                example: None,
+            },
+            PlaceholderPosition => &Advice {
+                summary: "A placeholder appears outside permitted letter text.",
+                why: "Project convention: application fields fill paragraphs and link labels, never URLs, code or header fields.",
+                fix: "Move the placeholder to the greeting, body or closing paragraph text.",
+                example: None,
+            },
             PlaceholderUnresolved => &Advice {
                 summary: "A selected letter placeholder has no application field value.",
                 why: "Project convention: every selected placeholder must resolve before text or PDF output.",
