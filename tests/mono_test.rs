@@ -173,7 +173,7 @@ fn an_edited_copy_of_the_mono_theme_renders_differently() {
     // `header.gap` is mono's own key and `accent` colors the section titles and rules: each must change the output.
     let reference = assert_ok!(mono(Paper::Letter).export_pdf("fixture"));
     for (from, to) in [
-        ("header: (gap: 4pt)", "header: (gap: 20pt)"),
+        ("header: (gap: 0pt)", "header: (gap: 20pt)"),
         ("accent: rgb(\"#000000\")", "accent: rgb(\"#cc0000\")"),
     ] {
         let tmp = assert_ok!(tempfile::tempdir());

@@ -34,7 +34,8 @@ To customize, run `resume export-style mono <dir>` and edit `theme.typ` in the c
   location, then links. Pragmatic splits them around the name.
 - Section titles are set in capitals, in black bold over a black rule. `color.accent` is black, so nothing on the
   page is colored except the links, which stay blue as in pragmatic.
-- The name is 24 pt and the section titles are 12 pt (pragmatic: 14 pt headings).
+- The name is 24 pt, the section titles 12 pt (pragmatic: 14 pt), and the contact line 11 pt (pragmatic: 12 pt), as in the
+  template. The contact line sits 17 pt under the name (`header.gap: 0pt`), as in the template.
 - The capitals are real text in the PDF (`SUMMARY`, not `Summary`), and `ß` becomes `SS`.
 
 Everything else is shared with pragmatic and was approved for it: Calibri/Carlito at 11 pt, the role line with

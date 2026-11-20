@@ -21,9 +21,11 @@
   let parts = contact-parts(resume.contact)
   let items = parts.emails + parts.phones + parts.where + parts.links
   align(center, {
+    // The two lines are paragraphs; `gap` is the only space between them.
+    set par(spacing: theme.header.gap)
     text(font: font-stack(theme.fonts.display), size: theme.size.name, resume.name)
     if items.len() > 0 {
-      v(theme.header.gap)
+      parbreak()
       text(size: theme.size.contact, items.map(item => box(render-inlines(item))).join([ · ]))
     }
   })

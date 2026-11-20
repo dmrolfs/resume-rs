@@ -11,7 +11,7 @@
     mono: (preferred: "DejaVu Sans Mono", fallback: "DejaVu Sans Mono", metric-compatible: true),
   ),
   // `role` is the role line (title, company, period); `contact` is the contact line under the name.
-  size: (body: 11pt, name: 24pt, heading: 12pt, role: 12pt, contact: 12pt, footer: 8.5pt),
+  size: (body: 11pt, name: 24pt, heading: 12pt, role: 12pt, contact: 11pt, footer: 8.5pt),
   // The template is black on white. `accent` colors the section titles and their rules, so it is black here;
   // links are blue, because a black link reads as a font style.
   color: (
@@ -38,8 +38,8 @@
     bullet: 2.5pt,
     paragraph: 5pt,
   ),
-  // `gap`: the space between the name and the contact line.
-  header: (gap: 4pt),
+  // `gap`: the space between the name and the contact line. 0pt puts the two lines 17pt apart, as in the template.
+  header: (gap: 0pt),
   rule: (weight: 1pt, gap: 2pt),
   bullet: (marker: [•], indent: 0.15in, gap: 0.15in),
 )

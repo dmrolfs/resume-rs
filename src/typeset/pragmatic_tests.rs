@@ -727,7 +727,12 @@ fn the_mono_contact_items_are_one_centered_line_under_the_centered_name_in_the_b
         texts,
         ["Ada Lovelace", "a@b.co · (415) 555-0123 · City, ST · GitHub", "SUMMARY"]
     );
-    assert!(lines[1].0 > lines[0].0, "the contact line is under the name");
+    // The template puts the contact line 17pt under the name; `header.gap` is the space beyond that.
+    assert!(
+        (lines[1].0 - lines[0].0 - 17.0).abs() < 0.6,
+        "the contact line is {}pt under the name",
+        lines[1].0 - lines[0].0
+    );
     assert!(is_centered(&compiled, "Lovelace"), "the name is centered");
     assert!(is_centered(&compiled, "a@b.co"), "the contact line is centered");
 }
