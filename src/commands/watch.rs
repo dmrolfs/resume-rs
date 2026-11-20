@@ -48,7 +48,12 @@ pub(super) fn watch(
     // The watches come before the first build, so a save made while the fonts are being scanned is not lost, and
     // the first summary line means the watch is ready.
     let watching = Watching::start(&watched)?;
-    Ok(serve(&mut job, args, watching.signals(), out, stop, open))
+    let outcome = serve(&mut job, args, watching.signals(), out, stop, open);
+    if outcome == Outcome::Failure {
+        // `serve` fails only when the watcher is gone; its drop must not run (see `Watching::abandon`).
+        watching.abandon();
+    }
+    Ok(outcome)
 }
 
 /// Builds, then waits for a change and builds again, until told to stop or the signals end. A failed build is

@@ -150,44 +150,27 @@ fn same_file(a: &Path, b: &Path) -> bool {
     std::fs::canonicalize(a).is_ok_and(|a| a == b)
 }
 
-/// The canonical form of `path` when it exists; otherwise of its nearest existing parent with the rest added,
-/// so a directory that will be created is still named the way events under it will be.
+/// The canonical form of `path`, for a path that may not all exist yet (the output directory is made by the first
+/// build): the parts that exist are resolved one at a time, so a symlink is followed before a `..` that comes after
+/// it, as the system would; a part that does not exist cannot be a link, so a `..` after it just cancels it.
 fn canonical_if_possible(path: &Path) -> PathBuf {
-    let normalized = without_dot_dot(path);
-    let path = normalized.as_path();
-    let mut missing = Vec::new();
-    let mut here = path;
-    loop {
-        if let Ok(real) = std::fs::canonicalize(here) {
-            return missing.iter().rev().fold(real, |base, part| base.join(part));
-        }
-        match (here.parent(), here.file_name()) {
-            (Some(parent), Some(name)) => {
-                missing.push(name.to_os_string());
-                here = parent;
-            }
-            _ => return path.to_path_buf(),
-        }
-    }
-}
-
-/// `path` with `.` dropped and each `..` cancelling the component before it, without touching the file system.
-/// A `..` after a directory that does not exist yet (`styles/new/../out`) cannot be resolved by asking the
-/// system, and left in, it would make the output directory look like something other than where events come from.
-fn without_dot_dot(path: &Path) -> PathBuf {
-    let mut parts: Vec<Component<'_>> = Vec::new();
+    let mut here = PathBuf::new();
     for part in path.components() {
         match part {
+            Component::Prefix(_) | Component::RootDir => here.push(part),
             Component::CurDir => {}
-            Component::ParentDir if matches!(parts.last(), Some(Component::Normal(_))) => {
-                parts.pop();
+            Component::ParentDir => {
+                here.pop();
             }
-            // The parent of the root is the root.
-            Component::ParentDir if matches!(parts.last(), Some(Component::RootDir | Component::Prefix(_))) => {}
-            other => parts.push(other),
+            Component::Normal(name) => {
+                here.push(name);
+                if let Ok(real) = std::fs::canonicalize(&here) {
+                    here = real;
+                }
+            }
         }
     }
-    parts.iter().collect()
+    here
 }
 
 /// What a watch tells the loop.
@@ -264,7 +247,7 @@ pub fn ceiling_for(debounce: Duration) -> Duration {
 
 /// The watches and the signals they send, kept alive for as long as this is.
 pub struct Watching {
-    _watcher: RecommendedWatcher,
+    watcher: Option<RecommendedWatcher>,
     signals: Receiver<Signal>,
 }
 
@@ -286,9 +269,18 @@ impl Watching {
             watcher.watch(path, mode).context(WatchSnafu { path })?;
         }
         Ok(Self {
-            _watcher: watcher,
+            watcher: Some(watcher),
             signals,
         })
+    }
+
+    /// Gives up a watcher whose thread has died, without dropping it: dropping a Linux (inotify) watcher sends
+    /// the thread a message and `unwrap`s the result, so it panics when the thread is gone, which would turn a
+    /// reported failure into exit code 101. The process is about to end, so the leak costs nothing.
+    pub fn abandon(mut self) {
+        if let Some(watcher) = self.watcher.take() {
+            std::mem::forget(watcher);
+        }
     }
 
     /// The signals the watch has sent.
@@ -529,8 +521,63 @@ mod tests {
             real.join("styles/out")
         );
         assert_eq!(canonical_if_possible(&real.join("a/b/../../c")), real.join("c"));
-        assert_eq!(without_dot_dot(Path::new("/a/../..")), PathBuf::from("/"));
-        assert_eq!(without_dot_dot(Path::new("../a")), PathBuf::from("../a"));
+        assert_eq!(
+            canonical_if_possible(&real.join("..").join("..")).file_name(),
+            real.ancestors().nth(2).and_then(Path::file_name)
+        );
+        let root = real.ancestors().last().expect("a root").to_path_buf();
+        assert_eq!(canonical_if_possible(&root.join("..").join("..")), root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dot_dot_after_a_symlink_goes_to_the_parent_of_what_the_link_points_to() {
+        // `styles/link/../out` is `elsewhere/out`, not `styles/out`: the system follows the link first.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let real = std::fs::canonicalize(dir.path()).expect("canonical");
+        std::fs::create_dir_all(real.join("styles")).expect("styles");
+        std::fs::create_dir_all(real.join("elsewhere/target")).expect("target");
+        std::os::unix::fs::symlink(real.join("elsewhere/target"), real.join("styles/link")).expect("link");
+        assert_eq!(
+            canonical_if_possible(&real.join("styles/link/../out")),
+            real.join("elsewhere/out")
+        );
+        // And a link in the middle of a path that does exist is resolved wherever it is.
+        assert_eq!(
+            canonical_if_possible(&real.join("styles/link/deeper")),
+            real.join("elsewhere/target/deeper")
+        );
+        let w = Watched::resolve(
+            &real.join("styles/../elsewhere/x.md"),
+            Some(&real.join("styles")),
+            &real.join("styles/link/../out"),
+            &real,
+        );
+        // `x.md` does not exist, so only the output directory is looked at here.
+        assert!(w.is_err());
+        std::fs::write(real.join("elsewhere/x.md"), "x").expect("write");
+        let w = Watched::resolve(
+            &real.join("elsewhere/x.md"),
+            Some(&real.join("styles")),
+            Path::new("styles/link/../out"),
+            &real,
+        )
+        .expect("resolves");
+        assert_eq!(w.out_dir, real.join("elsewhere/out"));
+        // The PDF written there is under neither the input's directory name nor the styles directory.
+        assert!(!w.is_relevant(&modify(&real.join("elsewhere/out/Resume.pdf").to_string_lossy())));
+    }
+
+    #[test]
+    fn abandoning_a_watcher_does_not_drop_it_and_does_not_panic() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let real = std::fs::canonicalize(dir.path()).expect("canonical");
+        std::fs::write(real.join("Resume.md"), "x").expect("write");
+        let watched = Watched::resolve(&real.join("Resume.md"), None, Path::new("out"), &real).expect("resolves");
+        let Ok(watching) = Watching::start(&watched) else {
+            panic!("a watch of an existing directory starts")
+        };
+        watching.abandon();
     }
 
     #[test]
