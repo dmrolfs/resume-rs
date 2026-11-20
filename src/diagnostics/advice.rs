@@ -220,7 +220,7 @@ impl DiagnosticCode {
                 why: "Project convention: each style names the template's own font and a free bundled substitute with the same character widths (Calibri and Carlito, Georgia and Gelasio), so line breaks and the page count match and only glyph shapes differ.",
                 fix: "No action is needed. To get the original glyph shapes, install the font or pass `--font-path <DIR>` with its font files. `--fonts bundled` always uses the substitute.",
                 example: Some((
-                    "resume check resume.md --fonts bundled",
+                    "resume check resume.md --fonts bundled --format json",
                     "resume check resume.md --font-path ~/Fonts",
                 )),
             },

@@ -20,7 +20,6 @@
   color: (
     text: rgb("#000000"),
     label: rgb("#000000"),
-    accent: rgb("#cc0000"),
     link: rgb("#cc0000"),
     muted: rgb("#595959"),
   ),

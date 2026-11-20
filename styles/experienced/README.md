@@ -51,7 +51,7 @@ To customize, run `resume export-style experienced <dir>` and edit `theme.typ` i
   longer label wraps. `column-gap` is the space between the label and the value.
 - **`line`**: the line pitch is set from explicit lengths, not from font metrics, so Calibri and Carlito give
   the same line positions. Keep `top` positive and `bottom` negative.
-- **`color.accent`**: `#cc0000`, from the template; used for links (`color.link`). The labels are black.
+- **`color.link`**: `#cc0000`, from the template. The labels are black, and there is no `color.accent`: this style does not set section titles in a color.
 
 ## How the layout works
 

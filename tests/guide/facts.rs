@@ -1,15 +1,13 @@
-//! ABOUTME: What the code says, for the guide's checks to compare with: commands, options, codes, styles, components.
+//! ABOUTME: What the code says, for the guide's checks to compare with: commands, options, styles, components.
 //! ABOUTME: Everything is read from the real definitions in-process; nothing is spawned and nothing is typed in twice.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use claims::assert_ok;
 use clap::{ArgAction, CommandFactory};
 use regex::Regex;
 use resume::cli::Cli;
-use resume::diagnostics::DiagnosticCode;
-use resume::diagnostics::code::Category;
-use strum::IntoEnumIterator;
 
 use crate::root;
 use crate::theme_keys;
@@ -98,6 +96,16 @@ pub fn global_options() -> Vec<CliOption> {
         .collect()
 }
 
+/// Every short option letter of every command and the global options, with `-h` and `-V`.
+pub fn every_short_option() -> BTreeSet<char> {
+    let mut all: BTreeSet<char> = global_options().iter().filter_map(|o| o.short).collect();
+    for options in commands().values() {
+        all.extend(options.iter().filter_map(|o| o.short));
+    }
+    all.extend(['h', 'V']);
+    all
+}
+
 /// Every `--long` option of every command, global or not.
 pub fn every_long_option() -> BTreeSet<String> {
     let mut all: BTreeSet<String> = global_options().iter().map(|o| o.name.clone()).collect();
@@ -108,24 +116,9 @@ pub fn every_long_option() -> BTreeSet<String> {
     all
 }
 
-/// Every code with its category, default severity, and summary.
-pub fn codes() -> Vec<(DiagnosticCode, Category, String, &'static str)> {
-    DiagnosticCode::iter()
-        .map(|code| {
-            (
-                code,
-                code.category(),
-                code.default_severity().to_string(),
-                code.advice().summary,
-            )
-        })
-        .collect()
-}
-
 /// The built-in styles, from the directories under `styles/`.
 pub fn built_in_styles() -> Vec<String> {
-    resume::style::catalog(None)
-        .expect("the catalog of built-in styles")
+    assert_ok!(resume::style::catalog(None))
         .into_iter()
         .map(|entry| entry.name)
         .collect()
@@ -148,7 +141,7 @@ pub fn font_roles() -> BTreeSet<String> {
     built_in_styles()
         .into_iter()
         .flat_map(|name| {
-            let src = std::fs::read_to_string(root().join(format!("styles/{name}/theme.typ"))).expect("a theme");
+            let src = assert_ok!(std::fs::read_to_string(root().join(format!("styles/{name}/theme.typ"))));
             theme_keys::font_roles(&theme_keys::theme_keys(&src))
         })
         .collect()
@@ -156,15 +149,14 @@ pub fn font_roles() -> BTreeSet<String> {
 
 /// The shared components: every public `#let` of `styles/lib/components.typ`.
 pub fn components() -> BTreeSet<String> {
-    let src = std::fs::read_to_string(root().join("styles/lib/components.typ")).expect("components.typ");
-    let public = Regex::new(r"(?m)^#let ([a-z][a-z0-9-]*)").expect("a valid regex");
+    let src = assert_ok!(std::fs::read_to_string(root().join("styles/lib/components.typ")));
+    let public = assert_ok!(Regex::new(r"(?m)^#let ([a-z][a-z0-9-]*)"));
     public.captures_iter(&src).map(|c| c[1].to_string()).collect()
 }
 
 /// The bundled font families the program carries besides Typst's own: the directories of `fonts/`.
 pub fn bundled_families() -> BTreeSet<String> {
-    std::fs::read_dir(root().join("fonts"))
-        .expect("the fonts directory")
+    assert_ok!(std::fs::read_dir(root().join("fonts")))
         .filter_map(Result::ok)
         .filter(|entry| entry.path().is_dir())
         .filter_map(|entry| entry.file_name().into_string().ok())

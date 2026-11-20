@@ -3,7 +3,13 @@
 
 use std::collections::BTreeSet;
 
-/// Removes comments, strings, and `[...]` content blocks, which hold characters that look like syntax.
+use claims::assert_ok;
+use regex::Regex;
+
+/// Removes comments, string contents, and `[...]` content blocks, which hold characters that look like syntax.
+///
+/// A string that is a dictionary key (`"a-b": 1`) keeps its text, because the key is what is read.
+/// Block comments nest, as in Typst, and a backslash escapes the next character in a string or a content block.
 fn strip(src: &str) -> String {
     let chars: Vec<char> = src.chars().collect();
     let mut out = String::new();
@@ -16,24 +22,45 @@ fn strip(src: &str) -> String {
                 }
             }
             '/' if chars.get(i + 1) == Some(&'*') => {
-                i += 2;
-                while i + 1 < chars.len() && !(chars[i] == '*' && chars[i + 1] == '/') {
-                    i += 1;
+                let mut depth = 0;
+                while i < chars.len() {
+                    if chars[i] == '/' && chars.get(i + 1) == Some(&'*') {
+                        depth += 1;
+                        i += 2;
+                    } else if chars[i] == '*' && chars.get(i + 1) == Some(&'/') {
+                        depth -= 1;
+                        i += 2;
+                        if depth == 0 {
+                            break;
+                        }
+                    } else {
+                        i += 1;
+                    }
                 }
-                i += 2;
             }
             '"' => {
+                let start = i + 1;
                 i += 1;
                 while i < chars.len() && chars[i] != '"' {
                     i += if chars[i] == '\\' { 2 } else { 1 };
                 }
+                let content: String = chars[start..i.min(chars.len())].iter().collect();
                 i += 1;
-                out.push_str("\"\"");
+                let is_key = chars[i.min(chars.len())..]
+                    .iter()
+                    .find(|c| !c.is_whitespace())
+                    .is_some_and(|c| *c == ':');
+                out.push('"');
+                if is_key {
+                    out.push_str(&content);
+                }
+                out.push('"');
             }
             '[' => {
                 let mut depth = 0;
                 while i < chars.len() {
                     match chars[i] {
+                        '\\' => i += 1,
                         '[' => depth += 1,
                         ']' => {
                             depth -= 1;
@@ -70,6 +97,45 @@ impl Reader {
         }
     }
 
+    /// True when the `(` at `self.at` opens a dictionary (`(a: 1)`, `(:)`) and not an array or a parenthesized
+    /// expression (`(1pt, 2pt)`, `(1pt + 2pt)`): a dictionary has a `:` at its own level before its first `,`.
+    fn opens_dictionary(&self) -> bool {
+        let mut depth = 0;
+        for c in &self.chars[self.at..] {
+            match c {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return false;
+                    }
+                }
+                ',' if depth == 1 => return false,
+                ':' if depth == 1 => return true,
+                _ => {}
+            }
+        }
+        false
+    }
+
+    /// Reads one entry's key, up to its `:`, or up to the `,` or `)` that ends an entry without one (a spread).
+    fn key(&mut self) -> String {
+        let start = self.at;
+        let mut depth = 0;
+        while let Some(c) = self.chars.get(self.at) {
+            match c {
+                '(' => depth += 1,
+                ')' if depth == 0 => break,
+                ')' => depth -= 1,
+                ':' | ',' if depth == 0 => break,
+                _ => {}
+            }
+            self.at += 1;
+        }
+        let raw: String = self.chars[start..self.at].iter().collect();
+        raw.trim().trim_matches('"').to_string()
+    }
+
     /// Reads a dictionary that starts at `(`, recording the dotted path of every leaf.
     fn dictionary(&mut self, prefix: &str) {
         self.at += 1; // (
@@ -83,17 +149,9 @@ impl Reader {
                 }
                 Some(',') => self.at += 1,
                 Some(_) => {
-                    let start = self.at;
-                    while self
-                        .chars
-                        .get(self.at)
-                        .is_some_and(|c| *c != ':' && *c != ',' && *c != ')')
-                    {
-                        self.at += 1;
-                    }
-                    let key: String = self.chars[start..self.at].iter().collect::<String>().trim().to_string();
+                    let key = self.key();
                     if self.chars.get(self.at) != Some(&':') {
-                        continue;
+                        continue; // a spread such as `..base`
                     }
                     self.at += 1; // :
                     self.skip_space();
@@ -102,7 +160,7 @@ impl Reader {
                     } else {
                         format!("{prefix}.{key}")
                     };
-                    if self.chars.get(self.at) == Some(&'(') {
+                    if self.chars.get(self.at) == Some(&'(') && self.opens_dictionary() {
                         self.dictionary(&path);
                     } else {
                         self.keys.push(path);
@@ -113,7 +171,7 @@ impl Reader {
         }
     }
 
-    /// Skips an expression such as `35%`, `rgb("")`, or `[]`, up to the `,` or `)` that ends it.
+    /// Skips an expression such as `35%`, `rgb("")`, `(1pt + 2pt)`, or `[]`, up to the `,` or `)` that ends it.
     fn value(&mut self) {
         let mut depth = 0;
         while let Some(c) = self.chars.get(self.at) {
@@ -130,13 +188,16 @@ impl Reader {
 }
 
 /// The dotted key path of every value in the `theme` dictionary of a `theme.typ`, in file order.
+///
+/// Only `#let theme = (...)` is read: another binding such as `#let theme-dark = (...)` is not the theme.
 pub fn theme_keys(src: &str) -> Vec<String> {
     let text = strip(src);
-    let Some(start) = text.find("#let theme").and_then(|i| text[i..].find('(').map(|j| i + j)) else {
+    let binding = assert_ok!(Regex::new(r"#let theme\s*=\s*\("));
+    let Some(found) = binding.find(&text) else {
         return Vec::new();
     };
     let mut reader = Reader {
-        chars: text[start..].chars().collect(),
+        chars: text[found.end() - 1..].chars().collect(),
         at: 0,
         keys: Vec::new(),
     };
@@ -233,5 +294,35 @@ mod tests {
     #[test]
     fn nothing_is_found_without_a_theme_dictionary() {
         assert!(theme_keys("#let other = (a: 1)").is_empty());
+    }
+
+    #[test]
+    fn a_parenthesized_value_and_an_array_are_leaves_not_dictionaries() {
+        let keys = theme_keys("#let theme = (a: (1pt + 2pt), b: (1pt, 2pt), c: (), d: (e: 1))");
+        assert_eq!(keys, ["a", "b", "c", "d.e"]);
+    }
+
+    #[test]
+    fn a_spread_is_skipped_and_the_keys_around_it_are_kept() {
+        let keys = theme_keys("#let theme = (a: 1, ..base, b: 2, ..other(x, y), c: 3)");
+        assert_eq!(keys, ["a", "b", "c"]);
+    }
+
+    #[test]
+    fn a_quoted_key_is_read_and_a_quoted_value_is_not() {
+        let keys = theme_keys(r#"#let theme = ("a-b": 1, c: "d: (e, f)", g: 2)"#);
+        assert_eq!(keys, ["a-b", "c", "g"]);
+    }
+
+    #[test]
+    fn block_comments_nest_and_an_escaped_bracket_does_not_end_a_content_block() {
+        let keys = theme_keys("#let theme = (a: 1, /* x /* y: 2, */ z: 3, */ b: [\\[], c: 3)");
+        assert_eq!(keys, ["a", "b", "c"]);
+    }
+
+    #[test]
+    fn only_the_binding_named_theme_is_the_theme() {
+        let keys = theme_keys("#let theme-dark = (x: 1)\n#let theme = (y: 2)\n");
+        assert_eq!(keys, ["y"]);
     }
 }

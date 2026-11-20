@@ -6,11 +6,14 @@ mod checks;
 mod common;
 mod extract;
 mod facts;
+mod synthetic;
 mod theme_keys;
 
 use std::path::PathBuf;
 
+use claims::{assert_ok, assert_some};
 use extract::Guide;
+use facts::CliOption;
 
 /// The repository root.
 fn root() -> PathBuf {
@@ -21,82 +24,28 @@ fn guide_path() -> PathBuf {
     root().join("docs/User-Guide.md")
 }
 
+fn guide_text() -> String {
+    let text = assert_ok!(std::fs::read_to_string(guide_path()));
+    text.replace("\r\n", "\n")
+}
+
 fn load() -> Guide {
-    let text = std::fs::read_to_string(guide_path()).unwrap_or_else(|e| panic!("docs/User-Guide.md is missing: {e}"));
-    Guide::parse(&text)
-}
-
-#[test]
-fn the_guide_exists_and_starts_with_the_two_aboutme_lines() {
-    let guide = load();
-    let first_two: Vec<&str> = guide.text.lines().take(2).collect();
-    assert!(
-        first_two
-            .iter()
-            .all(|l| l.starts_with("<!-- ABOUTME:") && l.ends_with("-->")),
-        "the first two lines are `<!-- ABOUTME: ... -->`, as in every file of the project: {first_two:?}"
-    );
-}
-
-#[test]
-fn the_facts_the_checks_read_are_what_the_binary_has() {
-    let commands = facts::commands();
-    let names: Vec<&str> = commands.keys().map(String::as_str).collect();
-    assert_eq!(
-        names,
-        ["build", "check", "doctor", "export-style", "licenses", "styles"]
-    );
-    let build: Vec<String> = commands["build"].iter().map(facts::CliOption::key).collect();
-    assert!(
-        build.contains(&"--paper".to_string()) && build.contains(&"<FILE>".to_string()),
-        "{build:?}"
-    );
-    let paper = commands["build"].iter().find(|o| o.name == "paper").expect("--paper");
-    assert_eq!(paper.values, ["letter", "a4"]);
-    assert_eq!(paper.default.as_deref(), Some("letter"));
-    let font_path = commands["build"]
-        .iter()
-        .find(|o| o.name == "font-path")
-        .expect("--font-path");
-    assert!(font_path.repeatable && font_path.takes_value);
-    let globals: Vec<String> = facts::global_options().iter().map(facts::CliOption::key).collect();
-    assert_eq!(globals, ["--dry-run", "--format", "--color"]);
-    let force = commands["export-style"]
-        .iter()
-        .find(|o| o.name == "force")
-        .expect("--force");
-    assert!(
-        !force.takes_value && force.values.is_empty(),
-        "a switch has no values: {force:?}"
-    );
-}
-
-#[test]
-fn the_facts_know_the_codes_the_styles_the_components_and_the_font_families() {
-    assert!(facts::codes().len() >= 40, "the codes");
-    assert!(facts::built_in_styles().contains(&"pragmatic".to_string()));
-    assert!(facts::components().contains("render-sections") && !facts::components().contains("_has-link"));
-    assert!(facts::bundled_families().contains("carlito"));
-    assert!(facts::font_roles().contains("body"));
-    assert!(facts::theme_keys_by_style()["pragmatic"].contains("spacing.section"));
+    Guide::parse(&guide_text())
 }
 
 // ---- helpers for the checks and their negative controls ----------------------------------------------
 
-/// The guide with the first `from` replaced by `to`; fails when `from` is not there, so a control cannot pass
-/// by changing nothing.
-fn mutated(from: &str, to: &str) -> Guide {
-    let guide = load();
-    assert!(guide.text.contains(from), "the control needs `{from}` in the guide");
-    Guide::parse(&guide.text.replacen(from, to, 1))
+/// `text` with the first `from` replaced by `to`. Fails when `from` is not there, so a control cannot pass by
+/// changing nothing.
+fn replaced(text: &str, from: &str, to: &str) -> String {
+    assert!(text.contains(from), "the control needs `{from}` in:\n{text}");
+    text.replacen(from, to, 1)
 }
 
-/// The guide with the first line that starts with `prefix` changed by `edit`.
-fn with_line(prefix: &str, edit: impl Fn(&str) -> String) -> Guide {
-    let guide = load();
+/// `text` with the first line that starts with `prefix` changed by `edit`.
+fn edited_line(text: &str, prefix: &str, edit: impl Fn(&str) -> String) -> String {
     let mut done = false;
-    let text: Vec<String> = guide
-        .text
+    let lines: Vec<String> = text
         .lines()
         .map(|line| {
             if !done && line.starts_with(prefix) {
@@ -107,17 +56,13 @@ fn with_line(prefix: &str, edit: impl Fn(&str) -> String) -> Guide {
             }
         })
         .collect();
-    assert!(done, "the control needs a line that starts with `{prefix}`");
-    Guide::parse(&(text.join("\n") + "\n"))
+    assert!(done, "the control needs a line that starts with `{prefix}` in:\n{text}");
+    lines.join("\n") + "\n"
 }
 
-/// The guide without the first line that starts with `prefix`.
-fn without_line(prefix: &str) -> Guide {
-    with_line(prefix, |_| "<!-- removed -->".to_string())
-}
-
-fn appended(extra: &str) -> Guide {
-    Guide::parse(&format!("{}\n{extra}\n", load().text))
+/// `text` without the first line that starts with `prefix`.
+fn without_line(text: &str, prefix: &str) -> String {
+    edited_line(text, prefix, |_| "<!-- removed -->".to_string())
 }
 
 fn assert_clean(problems: Vec<String>) {
@@ -131,6 +76,90 @@ fn assert_problem(problems: &[String], containing: &str) {
     );
 }
 
+/// The first option, with its command, that `wanted` accepts.
+fn find_option(wanted: impl Fn(&CliOption) -> bool) -> (String, CliOption) {
+    assert_some!(
+        facts::commands()
+            .into_iter()
+            .flat_map(|(command, options)| options.into_iter().map(move |o| (command.clone(), o)))
+            .find(|(_, option)| wanted(option))
+    )
+}
+
+/// True when the table row `line` documents `option`: its first cell shows the option.
+fn row_documents(line: &str, option: &CliOption) -> bool {
+    let Some(cell) = line.split('|').nth(1) else {
+        return false;
+    };
+    let cell = cell.replace('`', "");
+    if option.positional {
+        cell.contains(&option.key())
+    } else {
+        cell.split(|c: char| !(c.is_alphanumeric() || c == '-'))
+            .any(|w| w == option.key())
+    }
+}
+
+/// `text` with the row of `option` in the section of `command` changed by `edit`.
+fn edit_row(text: &str, command: &str, option: &CliOption, edit: impl Fn(&str) -> String) -> String {
+    let heading = format!("### resume {command}\n");
+    let start = assert_some!(text.find(&heading));
+    let end = text[start + 1..].find("\n### ").map_or(text.len(), |i| start + 1 + i);
+    let section = &text[start..end];
+    let row = assert_some!(
+        section
+            .lines()
+            .find(|l| l.starts_with("| ") && row_documents(l, option))
+    )
+    .to_string();
+    let edited = section.replacen(&row, &edit(&row), 1);
+    format!("{}{edited}{}", &text[..start], &text[end..])
+}
+
+// ---- the guide itself ---------------------------------------------------------------------------------
+
+#[test]
+fn the_guide_exists_and_starts_with_the_two_aboutme_lines() {
+    let text = guide_text();
+    let first_two: Vec<&str> = text.lines().take(2).map(str::trim_end).collect();
+    assert!(
+        first_two
+            .iter()
+            .all(|l| l.starts_with("<!-- ABOUTME:") && l.ends_with("-->")),
+        "the first two lines are `<!-- ABOUTME: ... -->`, as in every file of the project: {first_two:?}"
+    );
+}
+
+#[test]
+fn a_guide_with_windows_line_endings_gets_the_same_verdicts() {
+    let crlf = Guide::parse(&guide_text().replace('\n', "\r\n"));
+    assert_clean(checks::code_tables(&crlf));
+    assert_clean(checks::required_headings(&crlf));
+    assert_clean(checks::markdown_examples(&crlf));
+}
+
+#[test]
+fn the_extractors_and_facts_see_what_the_repository_has() {
+    // Sanity only: a change to the CLI or the styles is caught by the checks, which compare with these facts.
+    assert!(!facts::commands().is_empty() && !facts::global_options().is_empty());
+    assert!(facts::commands().values().flatten().any(|o| o.positional));
+    assert!(facts::commands().values().flatten().any(|o| o.short.is_some()));
+    assert!(facts::commands().values().flatten().any(|o| o.repeatable));
+    assert!(
+        facts::commands()
+            .values()
+            .flatten()
+            .any(|o| !o.values.is_empty() && o.default.is_some())
+    );
+    assert!(facts::every_short_option().contains(&'h'));
+    assert!(facts::built_in_styles().contains(&"pragmatic".to_string()));
+    assert!(facts::components().contains("render-sections") && !facts::components().contains("_has-link"));
+    assert!(facts::bundled_families().contains("carlito"));
+    assert!(facts::font_roles().contains("body"));
+    assert!(facts::theme_keys_by_style()["pragmatic"].contains("spacing.section"));
+    assert!(checks::env_vars_read_by_the_program().contains("RESUME_FONT_PATH"));
+}
+
 // ---- headings and planned sections -------------------------------------------------------------------
 
 #[test]
@@ -139,21 +168,29 @@ fn the_guide_has_every_required_heading_in_order_and_none_is_empty() {
 }
 
 #[test]
-fn a_missing_a_repeated_or_an_empty_heading_is_caught() {
+fn a_missing_a_repeated_an_empty_or_a_misplaced_heading_is_caught() {
+    let clean = synthetic::headings();
+    assert_clean(checks::required_headings(&Guide::parse(&clean)));
+    let body = "A first line.\n\nA second line.\n\nA third line.\n\n";
     assert_problem(
-        &checks::required_headings(&mutated("\n## Fonts\n", "\n## Typefaces\n")),
+        &checks::required_headings(&Guide::parse(&replaced(&clean, "## Fonts\n", "## Typefaces\n"))),
         "no `## Fonts` heading",
     );
     assert_problem(
-        &checks::required_headings(&appended("## Fonts\n\nagain")),
+        &checks::required_headings(&Guide::parse(&format!("{clean}## Fonts\n\n{body}"))),
         "more than once",
     );
-    let emptied = {
-        let g = load();
-        let h = g.heading(2, "Fonts").expect("Fonts");
-        Guide::parse(&format!("{}## Fonts\n\n{}", &g.text[..h.start], &g.text[h.end..]))
-    };
-    assert_problem(&checks::required_headings(&emptied), "`Fonts`");
+    assert_problem(
+        &checks::required_headings(&Guide::parse(&replaced(
+            &clean,
+            &format!("## Fonts\n\n{body}"),
+            "## Fonts\n\n",
+        ))),
+        "`Fonts`",
+    );
+    let moved = replaced(&clean, &format!("## Quick start\n\n{body}"), "");
+    let moved = format!("{moved}## Quick start\n\n{body}");
+    assert_problem(&checks::required_headings(&Guide::parse(&moved)), "out of order");
 }
 
 #[test]
@@ -163,28 +200,65 @@ fn the_planned_sections_are_stubs_that_claim_nothing_and_name_a_witness() {
 
 #[test]
 fn a_planned_section_fails_when_its_feature_has_arrived_or_it_claims_something() {
-    let arrived = mutated("witness=build:--tags", "witness=build:--paper");
-    assert_problem(&checks::planned_sections(&arrived), "now exists");
-    let command = mutated("witness=command:watch", "witness=command:build");
-    assert_problem(&checks::planned_sections(&command), "now exists");
+    let planned = |witness: &str, extra: &str| Guide::parse(&synthetic::planned("Annotations", witness, extra));
+    let (command, _) = find_option(|_| true);
+    let global = format!("option:--{}", facts::global_options()[0].name);
+
+    assert_clean(checks::planned_sections(&planned("command:no-such-command", "")));
+    assert_clean(checks::planned_sections(&planned("option:--no-such-option", "")));
     assert_problem(
-        &checks::planned_sections(&mutated("witness=build:--tags", "")),
+        &checks::planned_sections(&planned(&format!("command:{command}"), "")),
+        "now exists",
+    );
+    assert_problem(&checks::planned_sections(&planned(&global, "")), "now exists");
+    assert_problem(
+        &checks::planned_sections(&Guide::parse(&replaced(
+            &synthetic::planned("Annotations", "command:x", ""),
+            "witness=command:x",
+            "",
+        ))),
         "witness=KIND:VALUE",
     );
     assert_problem(
-        &checks::planned_sections(&mutated("witness=build:--tags", "witness=nonsense")),
+        &checks::planned_sections(&planned("nonsense", "")),
         "is not `command:NAME`",
     );
-    let with_example = mutated(
-        "## Annotations\n",
-        "## Annotations\n\n```markdown unchecked\n# x\n```\n",
+    assert_problem(
+        &checks::planned_sections(&planned("command:x", "```markdown unchecked\n# x\n```\n")),
+        "fenced block",
     );
-    assert_problem(&checks::planned_sections(&with_example), "fenced block");
-    let with_option = mutated("## Annotations\n", "## Annotations\n\nUse `--tags` to pick.\n");
-    assert_problem(&checks::planned_sections(&with_option), "names an option");
+    assert_problem(
+        &checks::planned_sections(&planned("command:x", "Use `--tags` to pick.\n")),
+        "names an option",
+    );
+    assert_problem(
+        &checks::planned_sections(&planned("command:x", &"A line.\n\n".repeat(10))),
+        "longer than 14 lines",
+    );
+    assert_problem(
+        &checks::planned_sections(&Guide::parse("<!-- guide:planned x witness=command:x -->\n")),
+        "outside any section",
+    );
+}
+
+#[test]
+fn a_guide_whose_last_planned_section_has_been_written_is_clean() {
+    // The planned markers are the only thing that makes a section a stub: with none, nothing is planned.
+    assert_clean(checks::planned_sections(&Guide::parse(&synthetic::headings())));
+    assert_clean(checks::required_headings(&Guide::parse(&synthetic::headings())));
 }
 
 // ---- Markdown and shell examples ---------------------------------------------------------------------
+
+/// A small guide with one checked example of each mode, to break one thing at a time.
+fn examples() -> String {
+    "# Guide\n\n## Examples\n\n\
+A role with a pipe is [`role-separator`](#code-role-separator):\n\n\
+```markdown in-section expect=role-separator\n### Acme | Engineer | 2015 – 2017\n\n- Cut build time from 40 minutes to 9.\n```\n\n\
+A whole resume:\n\n\
+```markdown resume expect=none\n# Ada Lovelace\n\nLondon, UK · ada@example.com\n\n## Experience\n\n### Acme · Engineer · 2015 – 2017\n\n- Cut build time from 40 minutes to 9.\n```\n"
+        .to_string()
+}
 
 #[test]
 fn every_markdown_example_produces_exactly_the_findings_the_guide_says() {
@@ -192,33 +266,45 @@ fn every_markdown_example_produces_exactly_the_findings_the_guide_says() {
 }
 
 #[test]
-fn a_wrong_expectation_a_missing_mode_or_a_missing_link_is_caught() {
-    let wrong = mutated("markdown resume expect=none", "markdown resume expect=weak-opener");
-    assert_problem(&checks::markdown_examples(&wrong), "documented as producing");
-    let no_mode = mutated("markdown resume expect=none", "markdown expect=none");
-    assert_problem(&checks::markdown_examples(&no_mode), "needs exactly one of");
-    let no_expect = mutated("markdown resume expect=none", "markdown resume");
-    assert_problem(&checks::markdown_examples(&no_expect), "needs `expect=");
-    let two = appended("```markdown unchecked\nx\n```\n\n```markdown unchecked\ny\n```");
-    assert_problem(&checks::markdown_examples(&two), "at most one");
-}
-
-#[test]
-fn an_example_whose_findings_are_not_linked_in_the_paragraph_before_it_is_caught() {
-    let guide = load();
-    let linked = guide
-        .fences
-        .iter()
-        .find(|f| !f.links_before.is_empty() && f.info.contains("expect=") && !f.info.contains("expect=none"))
-        .expect("an example that expects a finding, with its links");
-    let url = linked
-        .links_before
-        .iter()
-        .find(|l| l.starts_with("#code-"))
-        .expect("a code link")
-        .clone();
-    let broken = Guide::parse(&guide.text.replacen(&format!("]({url})"), "](#fonts)", 1));
-    assert_problem(&checks::markdown_examples(&broken), "must link");
+fn a_wrong_expectation_a_missing_mode_a_missing_link_or_a_disguised_fence_is_caught() {
+    let clean = examples();
+    assert_clean(checks::markdown_examples(&Guide::parse(&clean)));
+    let wrong = replaced(&clean, "expect=none", "expect=weak-opener");
+    assert_problem(
+        &checks::markdown_examples(&Guide::parse(&wrong)),
+        "documented as producing",
+    );
+    let no_mode = replaced(&clean, "markdown resume expect=none", "markdown expect=none");
+    assert_problem(
+        &checks::markdown_examples(&Guide::parse(&no_mode)),
+        "needs exactly one of",
+    );
+    let no_expect = replaced(&clean, "markdown resume expect=none", "markdown resume");
+    assert_problem(&checks::markdown_examples(&Guide::parse(&no_expect)), "needs `expect=");
+    let two = format!("{clean}\n```markdown unchecked\nx\n```\n\n```markdown unchecked\ny\n```\n");
+    assert_problem(&checks::markdown_examples(&Guide::parse(&two)), "at most one");
+    let unlinked = replaced(&clean, "(#code-role-separator)", "(#fonts)");
+    assert_problem(&checks::markdown_examples(&Guide::parse(&unlinked)), "must link");
+    for spelling in ["md", "Markdown", "MD"] {
+        let disguised = replaced(
+            &clean,
+            "```markdown in-section expect=role-separator",
+            &format!("```{spelling} in-section expect=none"),
+        );
+        assert_problem(
+            &checks::markdown_examples(&Guide::parse(&disguised)),
+            "documented as producing",
+        );
+    }
+    let comma = replaced(
+        &clean,
+        "```markdown in-section expect=role-separator",
+        "```markdown,in-section expect=none",
+    );
+    assert_problem(
+        &checks::markdown_examples(&Guide::parse(&comma)),
+        "needs exactly one of",
+    );
 }
 
 #[test]
@@ -227,14 +313,24 @@ fn every_shell_example_is_accepted_by_the_program() {
 }
 
 #[test]
-fn a_shell_example_with_a_renamed_option_is_caught() {
+fn a_shell_example_with_a_renamed_option_or_a_foreign_command_is_caught() {
+    // A command that needs no arguments, so the only difference between the two lines is the option.
+    let command = assert_some!(
+        facts::commands()
+            .into_iter()
+            .find(|(_, options)| options.iter().all(|o| !o.positional))
+            .map(|(name, _)| name)
+    );
+    let fence = |line: &str| Guide::parse(&format!("# Guide\n\n```sh\n{line}\n```\n"));
+    assert_clean(checks::shell_examples(&fence(&format!("resume {command} # a comment"))));
     assert_problem(
-        &checks::shell_examples(&mutated("--paper a4", "--papre a4")),
+        &checks::shell_examples(&fence(&format!("resume {command} --no-such-option"))),
         "is not accepted",
     );
+    assert_problem(&checks::shell_examples(&fence("ls -l")), "must start with `resume `");
     assert_problem(
-        &checks::shell_examples(&appended("```sh\nls -l\n```")),
-        "must start with `resume `",
+        &checks::shell_examples(&fence(&format!("resume {command} | cat"))),
+        "free of quotes, pipes",
     );
 }
 
@@ -251,19 +347,52 @@ fn the_typst_sources_read_only_keys_that_a_theme_defines() {
 }
 
 #[test]
-fn a_removed_a_misspelled_or_a_mis_attributed_theme_key_is_caught() {
-    assert_problem(
-        &checks::theme_keys(&without_line("| `bullet.indent` |")),
-        "`bullet.indent`",
+fn a_typst_read_of_an_undefined_key_is_caught_in_every_style_and_in_the_components() {
+    let defined: std::collections::BTreeSet<String> = facts::theme_keys_by_style().into_values().flatten().collect();
+    for (name, _) in checks::typst_sources() {
+        let mut sources = checks::typst_sources();
+        for (n, text) in &mut sources {
+            if *n == name {
+                text.push_str("\n#let extra = theme.skills.colgap\n");
+            }
+        }
+        assert_problem(
+            &checks::theme_reads_problems(&sources, &defined),
+            &format!("{name} reads `theme.skills.colgap`"),
+        );
+    }
+    let nothing = vec![("styles/x/style.typ".to_string(), "#let x = 1".to_string())];
+    assert_problem(&checks::theme_reads_problems(&nothing, &defined), "reads no theme key");
+}
+
+#[test]
+fn what_a_typst_source_reads_from_the_theme_is_read_exactly() {
+    let reads = checks::theme_read_paths(
+        "// theme.commented.out\n#let a = theme.size.body\n#let b = theme.fonts.display.preferred + theme.fonts.display\n#let c = theme.at(\"gutter\", default: 0pt)\n#let d = mytheme.size.name\n",
     );
-    let typo = with_line("| `spacing.section` |", |l| {
-        l.replacen("spacing.section", "spacing.sectoin", 1)
-    });
-    let problems = checks::theme_keys(&typo);
-    assert_problem(&problems, "documents theme key `spacing.sectoin`");
-    assert_problem(&problems, "`spacing.section`");
-    let only_mono = with_line("| `header.gap` |", |l| l.replace("mono", "pragmatic"));
-    assert_problem(&checks::theme_keys(&only_mono), "Styles column");
+    let reads: Vec<&str> = reads.iter().map(String::as_str).collect();
+    assert_eq!(reads, ["fonts.<role>", "fonts.<role>.preferred", "size.body"]);
+}
+
+#[test]
+fn a_removed_a_misspelled_or_a_mis_attributed_theme_key_is_caught() {
+    let clean = synthetic::theme_keys();
+    assert_clean(checks::theme_keys(&Guide::parse(&clean)));
+    let row = assert_some!(clean.lines().find(|l| l.starts_with("| `size.body`"))).to_string();
+    assert_problem(
+        &checks::theme_keys(&Guide::parse(&without_line(&clean, "| `size.body`"))),
+        "`size.body`",
+    );
+    let typo = clean.replacen(&row, &row.replace("size.body", "size.bdoy"), 1);
+    let problems = checks::theme_keys(&Guide::parse(&typo));
+    assert_problem(&problems, "documents theme key `size.bdoy`");
+    assert_problem(&problems, "`size.body`");
+    let not_all = assert_some!(clean.lines().find(|l| l.starts_with("| `") && !l.ends_with("| all |"))).to_string();
+    let (head, _) = assert_some!(not_all.rsplit_once(" | "));
+    let claims_all = clean.replacen(&not_all, &format!("{head} | all |"), 1);
+    assert_problem(&checks::theme_keys(&Guide::parse(&claims_all)), "Styles column");
+    let no_column = replaced(&clean, "| Key | Unit | Styles |", "| Key | Unit | Where |");
+    assert_problem(&checks::theme_keys(&Guide::parse(&no_column)), "`Styles` column");
 }
 
 #[test]
@@ -273,14 +402,14 @@ fn every_shared_component_has_a_row() {
 
 #[test]
 fn a_missing_or_an_invented_component_is_caught() {
+    let clean = synthetic::components();
+    assert_clean(checks::components(&Guide::parse(&clean)));
     assert_problem(
-        &checks::components(&without_line("| `render-sections` |")),
+        &checks::components(&Guide::parse(&without_line(&clean, "| `render-sections` |"))),
         "`render-sections`",
     );
-    let invented = with_line("| `render-sections` |", |l| {
-        l.replacen("render-sections", "render-everything", 1)
-    });
-    assert_problem(&checks::components(&invented), "does not define");
+    let invented = replaced(&clean, "| `render-sections` |", "| `render-everything` |");
+    assert_problem(&checks::components(&Guide::parse(&invented)), "does not define");
 }
 
 #[test]
@@ -290,9 +419,71 @@ fn every_built_in_style_has_a_section_and_no_other_does() {
 
 #[test]
 fn a_renamed_style_section_is_caught() {
-    let problems = checks::styles(&mutated("#### mono", "#### monoo"));
-    assert_problem(&problems, "`#### mono`");
-    assert_problem(&problems, "`monoo`");
+    let clean = synthetic::styles();
+    assert_clean(checks::styles(&Guide::parse(&clean)));
+    let name = &facts::built_in_styles()[0];
+    let problems = checks::styles(&Guide::parse(&replaced(
+        &clean,
+        &format!("#### {name}\n"),
+        &format!("#### {name}x\n"),
+    )));
+    assert_problem(&problems, &format!("`#### {name}`"));
+    assert_problem(&problems, &format!("`{name}x`"));
+}
+
+#[test]
+fn every_built_in_style_readme_and_the_guide_are_linked_from_where_a_reader_looks() {
+    let readme = std::fs::read_to_string(root().join("README.md")).unwrap_or_default();
+    assert_clean(checks::reading_list(&load(), &readme));
+}
+
+#[test]
+fn a_style_readme_or_the_guide_link_that_is_missing_is_caught() {
+    let styles = facts::built_in_styles();
+    let links: String = styles
+        .iter()
+        .map(|s| format!("- [{s}](../styles/{s}/README.md)\n"))
+        .collect();
+    let clean = format!("## Where to read more\n\n{links}");
+    let readme = "See [guide](docs/User-Guide.md).";
+    assert_clean(checks::reading_list(&Guide::parse(&clean), readme));
+    let missing = replaced(
+        &clean,
+        &format!("(../styles/{}/README.md)", styles[0]),
+        "(../README.md)",
+    );
+    assert_problem(
+        &checks::reading_list(&Guide::parse(&missing), readme),
+        &format!("../styles/{}/README.md", styles[0]),
+    );
+    assert_problem(
+        &checks::reading_list(&Guide::parse(&clean), "No link."),
+        "must link docs/User-Guide.md",
+    );
+}
+
+#[test]
+fn every_environment_variable_the_program_reads_is_documented() {
+    assert_clean(checks::environment_variables(
+        &load(),
+        &checks::env_vars_read_by_the_program(),
+    ));
+}
+
+#[test]
+fn an_undocumented_environment_variable_is_caught() {
+    let read: std::collections::BTreeSet<String> = ["NO_COLOR", "TERM"].map(String::from).into();
+    let documented = Guide::parse(&synthetic::environment(&["NO_COLOR", "TERM"]));
+    assert_clean(checks::environment_variables(&documented, &read));
+    let partial = Guide::parse(&synthetic::environment(&["NO_COLOR"]));
+    assert_problem(
+        &checks::environment_variables(&partial, &read),
+        "does not document `TERM`",
+    );
+    assert_problem(
+        &checks::environment_variables(&documented, &std::collections::BTreeSet::new()),
+        "the scan may be broken",
+    );
 }
 
 // ---- commands and options ----------------------------------------------------------------------------
@@ -303,38 +494,114 @@ fn every_command_and_option_is_documented_with_its_short_form_values_and_default
 }
 
 #[test]
-fn a_missing_command_option_default_or_value_is_caught() {
-    assert_problem(
-        &checks::commands(&mutated("### resume licenses", "### resume license")),
-        "resume licenses",
-    );
-    assert_problem(&checks::commands(&without_line("| `--font-path")), "--font-path");
-    let default = with_line("| `--paper", |l| l.replace("`letter`", "`legal`"));
-    assert_problem(&checks::commands(&default), "default `letter`");
-    let value = with_line("| `--paper", |l| l.replace("`a4`", "`a5`"));
-    assert_problem(&checks::commands(&value), "value `a4`");
-    let short = with_line("| `-o, --out", |l| l.replace("-o, ", ""));
-    assert_problem(&checks::commands(&short), "short form `-o`");
-    let repeat = with_line("| `--font-path", |l| l.replace("repeat", "again"));
-    assert_problem(&checks::commands(&repeat), "repeatable");
+fn the_synthetic_commands_guide_is_clean() {
+    assert_clean(checks::commands(&Guide::parse(&synthetic::commands())));
 }
 
 #[test]
-fn documenting_an_option_that_does_not_exist_is_caught() {
-    let guide = with_line("| `--paper", |l| {
-        format!("{l}\n| `--debounce <DURATION>` | `150ms` | wait before rebuilding |")
-    });
-    assert_problem(&checks::commands(&guide), "--debounce");
-    assert_problem(
-        &checks::commands(&mutated(
-            "### Planned commands\n",
-            "### Planned commands\n\nUse `--open` to see it.\n",
-        )),
-        "--open",
+fn a_missing_command_a_missing_option_or_a_missing_value_is_caught() {
+    let clean = synthetic::commands();
+    let (command, _) = find_option(|_| true);
+    let renamed = replaced(
+        &clean,
+        &format!("### resume {command}\n"),
+        &format!("### resume {command}x\n"),
     );
+    let problems = checks::commands(&Guide::parse(&renamed));
+    assert_problem(&problems, &format!("resume {command}"));
+    assert_problem(&problems, &format!("resume {command}x"));
+
+    let (command, option) = find_option(|o| !o.positional);
+    let dropped = edit_row(&clean, &command, &option, |_| {
+        "| `--zzz-unrelated-row` | x | x |".to_string()
+    });
+    assert_problem(
+        &checks::commands(&Guide::parse(&dropped)),
+        &format!("`{}` is not documented", option.key()),
+    );
+
+    let (command, option) = find_option(|o| !o.values.is_empty());
+    let value = &option.values[0];
+    let lost = edit_row(&clean, &command, &option, |row| {
+        row.replace(&format!("`{value}`"), value)
+    });
+    assert_problem(&checks::commands(&Guide::parse(&lost)), &format!("value `{value}`"));
+}
+
+#[test]
+fn a_default_that_changed_is_caught_even_when_the_values_still_list_it() {
+    let clean = synthetic::commands();
+    // The case that matters: an enumeration whose default moved to another of its own values.
+    let (command, option) = find_option(|o| o.default.is_some() && o.values.len() > 1);
+    let default = assert_some!(option.default.clone());
+    let other = assert_some!(option.values.iter().find(|v| **v != default)).clone();
+    let drifted = edit_row(&clean, &command, &option, |row| {
+        row.replace(&format!("default `{default}`"), &format!("default `{other}`"))
+    });
+    assert_problem(&checks::commands(&Guide::parse(&drifted)), "must state its default");
+
+    let (command, option) = find_option(|o| o.default.is_some());
+    let default = assert_some!(option.default.clone());
+    let unstated = edit_row(&clean, &command, &option, |row| {
+        row.replace(&format!("default `{default}`"), "usually the first")
+    });
+    assert_problem(&checks::commands(&Guide::parse(&unstated)), "must state its default");
+
+    let (command, option) = find_option(|o| o.default.is_none() && !o.positional);
+    let invented = edit_row(&clean, &command, &option, |row| {
+        row.replacen(" | what it does |", " | default `x` | what it does |", 1)
+    });
+    assert_problem(&checks::commands(&Guide::parse(&invented)), "but the option has none");
+}
+
+#[test]
+fn a_short_form_that_is_missing_or_does_not_exist_is_caught() {
+    let clean = synthetic::commands();
+    let (command, option) = find_option(|o| o.short.is_some());
+    let short = assert_some!(option.short);
+    let missing = edit_row(&clean, &command, &option, |row| row.replace(&format!("-{short}, "), ""));
+    assert_problem(
+        &checks::commands(&Guide::parse(&missing)),
+        &format!("short form `-{short}`"),
+    );
+
+    let (command, option) = find_option(|o| o.short.is_none() && !o.positional);
+    let invented = edit_row(&clean, &command, &option, |row| row.replacen("| `", "| `-z, ", 1));
+    assert_problem(&checks::commands(&Guide::parse(&invented)), "shows `-z`");
+
+    let prose = format!("{clean}\nPress `-q` to be quiet.\n");
+    assert_problem(&checks::commands(&Guide::parse(&prose)), "mentions `-q`");
+    let real = format!("{clean}\nPress `-h` for help.\n");
+    assert_clean(checks::commands(&Guide::parse(&real)));
+}
+
+#[test]
+fn a_repeatable_option_and_a_documented_option_that_does_not_exist_are_caught() {
+    let clean = synthetic::commands();
+    let (command, option) = find_option(|o| o.repeatable && !o.positional);
+    let again = edit_row(&clean, &command, &option, |row| row.replace("repeatable", "again"));
+    assert_problem(&checks::commands(&Guide::parse(&again)), "repeatable");
+
+    let (command, option) = find_option(|o| !o.positional);
+    let invented = edit_row(&clean, &command, &option, |row| {
+        format!("{row}\n| `--debounce <DURATION>` | `150ms` | wait |")
+    });
+    assert_problem(&checks::commands(&Guide::parse(&invented)), "--debounce");
+    let prose = format!("{clean}\nUse `--open` to see it.\n");
+    assert_problem(&checks::commands(&Guide::parse(&prose)), "--open");
 }
 
 // ---- diagnostics: the generated appendix and the links ---------------------------------------------------
+
+/// A guide holding exactly the generated block, as `bless_guide_tables` would write it.
+fn generated() -> String {
+    format!(
+        "# Guide\n\n{}\n\n{}{}\n",
+        checks::START,
+        checks::render_code_tables(),
+        checks::END
+    )
+}
 
 #[test]
 fn the_code_tables_are_what_the_code_generates() {
@@ -343,13 +610,18 @@ fn the_code_tables_are_what_the_code_generates() {
 
 #[test]
 fn a_changed_severity_a_removed_row_or_a_missing_marker_is_caught() {
-    assert_problem(&checks::code_tables(&mutated("| warning |", "| note |")), "out of date");
+    let clean = generated();
+    assert_clean(checks::code_tables(&Guide::parse(&clean)));
     assert_problem(
-        &checks::code_tables(&without_line("| <a id=\"code-role-separator\">")),
+        &checks::code_tables(&Guide::parse(&replaced(&clean, "| warning |", "| note |"))),
         "out of date",
     );
     assert_problem(
-        &checks::code_tables(&mutated("<!-- guide:generated codes -->", "")),
+        &checks::code_tables(&Guide::parse(&without_line(&clean, "| <a id=\"code-role-separator\">"))),
+        "out of date",
+    );
+    assert_problem(
+        &checks::code_tables(&Guide::parse(&replaced(&clean, checks::START, ""))),
         "marker",
     );
 }
@@ -360,16 +632,35 @@ fn every_link_in_the_guide_goes_somewhere() {
 }
 
 #[test]
-fn a_link_to_no_code_no_heading_or_no_file_is_caught() {
+fn a_link_to_no_code_no_heading_no_file_or_nothing_is_caught() {
+    let base = "# Guide\n\n## Real heading\n\nText.\n\n";
+    assert_clean(checks::links(&Guide::parse(&format!(
+        "{base}[a](#real-heading) [b](#code-period-hyphen) [c](../README.md)\n"
+    ))));
     assert_problem(
-        &checks::links(&appended("[x](#code-no-such-code)")),
+        &checks::links(&Guide::parse(&format!("{base}[x](#code-no-such-code)\n"))),
         "names no diagnostic code",
     );
     assert_problem(
-        &checks::links(&appended("[x](#no-such-heading)")),
+        &checks::links(&Guide::parse(&format!("{base}[x](#no-such-heading)\n"))),
         "points at no heading",
     );
-    assert_problem(&checks::links(&appended("[x](../nowhere/at-all.md)")), "does not exist");
+    assert_problem(
+        &checks::links(&Guide::parse(&format!("{base}[x](../nowhere/at-all.md)\n"))),
+        "does not exist",
+    );
+    assert_problem(
+        &checks::links(&Guide::parse(&format!("{base}[x](../styles)\n"))),
+        "does not exist",
+    );
+    assert_problem(&checks::links(&Guide::parse(&format!("{base}[x]()\n"))), "no target");
+}
+
+#[test]
+fn links_are_counted_without_the_parser_outside_fences_and_code_spans() {
+    let text = "[a](#x) and `[not](#a-link)` and ``[nor](#this)`` and [b](#y)\n\n```md\n[c](#in-a-fence)\n```\n\n| t |\n|---|\n| [d](#z) |\n";
+    assert_eq!(checks::links_in_text(text), 3);
+    assert_eq!(Guide::parse(text).links.len(), 3);
 }
 
 #[test]
@@ -379,25 +670,40 @@ fn the_fonts_section_covers_the_roles_fields_families_codes_and_variables() {
 
 #[test]
 fn a_fonts_section_that_loses_a_role_a_family_or_a_code_link_is_caught() {
-    let g = load();
-    let fonts = g.heading(2, "Fonts").expect("Fonts");
-    let without = |from: &str, to: &str| {
-        let body = g.body(fonts).replace(from, to);
-        Guide::parse(&format!("{}{}{}", &g.text[..fonts.start], body, &g.text[fonts.end..]))
-    };
-    assert_problem(&checks::fonts(&without("`mono`", "mono")), "role `mono`");
-    assert_problem(&checks::fonts(&without("Carlito", "the free font")), "carlito");
+    let clean = synthetic::fonts();
+    assert_clean(checks::fonts(&Guide::parse(&clean)));
+    let role = assert_some!(facts::font_roles().into_iter().next());
     assert_problem(
-        &checks::fonts(&without("(#code-font-missing)", "(#fonts)")),
+        &checks::fonts(&Guide::parse(&replaced(&clean, &format!("`{role}`"), &role))),
+        &format!("role `{role}`"),
+    );
+    let family = assert_some!(facts::bundled_families().into_iter().next());
+    assert_problem(
+        &checks::fonts(&Guide::parse(&replaced(
+            &clean,
+            &format!("- {family}:"),
+            "- the free font:",
+        ))),
+        &family,
+    );
+    assert_problem(
+        &checks::fonts(&Guide::parse(&replaced(&clean, "(#code-font-missing)", "(#fonts)"))),
         "font-missing",
     );
     assert_problem(
-        &checks::fonts(&without("RESUME_FONT_PATH", "the variable")),
+        &checks::fonts(&Guide::parse(&replaced(&clean, "RESUME_FONT_PATH", "the variable"))),
         "RESUME_FONT_PATH",
     );
 }
 
 // ---- no personal content -----------------------------------------------------------------------------
+
+/// A small guide with one example resume, as clean as the real guide's.
+fn personal_base(extra: &str) -> String {
+    format!(
+        "# Guide\n\nAsk ada@example.com or see [Ada](https://github.com/ada) and [Typst](https://typst.app/docs).\nCall +44 20 7946 0000.\n\n```markdown resume expect=none\n# Ada Lovelace\n\nLondon, UK · ada@example.com\n\n## Experience\n\n### Acme · Engineer · 2015 – 2017\n\n- Cut build time from 40 minutes to 9.\n```\n\n{extra}\n"
+    )
+}
 
 #[test]
 fn the_guide_holds_only_synthetic_names_companies_addresses_and_numbers() {
@@ -405,38 +711,48 @@ fn the_guide_holds_only_synthetic_names_companies_addresses_and_numbers() {
 }
 
 #[test]
-fn an_email_a_link_a_phone_number_a_name_or_a_company_that_is_not_synthetic_is_caught() {
+fn an_email_an_address_a_phone_number_a_name_or_a_company_that_is_not_synthetic_is_caught() {
+    assert_clean(checks::no_personal_content(&Guide::parse(&personal_base(""))));
+    let problems = |extra: &str| checks::no_personal_content(&Guide::parse(&personal_base(extra)));
+    assert_problem(&problems("Write to jane.doe@gmail.com."), "jane.doe@gmail.com");
+    assert_problem(&problems("[me](https://www.linkedin.com/in/jane)"), "linkedin");
+    assert_problem(&problems("See linkedin.com/in/jane for more."), "linkedin.com");
     assert_problem(
-        &checks::no_personal_content(&appended("Write to jane.doe@gmail.com.")),
-        "jane.doe@gmail.com",
+        &problems("[me](https://github.com/jordanquill)"),
+        "github.com/jordanquill",
     );
-    assert_problem(
-        &checks::no_personal_content(&appended("[me](https://www.linkedin.com/in/jane)")),
-        "linkedin",
-    );
-    assert_problem(
-        &checks::no_personal_content(&appended("Call +1 415 555 0123.")),
-        "phone-like",
-    );
-    let name = mutated("# Ada Lovelace", "# Jane Doe");
-    assert_problem(&checks::no_personal_content(&name), "Jane Doe");
-    let company = appended(
-        "```markdown resume expect=none\n# Ada Lovelace\n\nLondon\n\n## Experience\n\n### Secretco · 2020 – 2022\n```",
-    );
-    assert_problem(&checks::no_personal_content(&company), "Secretco");
+    assert_problem(&problems("See github.com/jordanquill."), "github.com/jordanquill");
+    assert_problem(&problems("Call +1 415 555 0123."), "phone-like");
+    assert_problem(&problems("Call 415-555-2671."), "phone-like");
+    assert_clean(problems("The code is at https://github.com/ada/analytical-engine."));
+    assert_clean(problems("Call 415-555-0142, a number reserved for fiction."));
+    let name = replaced(&personal_base(""), "# Ada Lovelace", "# Jane Doe");
+    assert_problem(&checks::no_personal_content(&Guide::parse(&name)), "Jane Doe");
+    for separator in ["·", "|"] {
+        let company = replaced(
+            &personal_base(""),
+            "### Acme · Engineer",
+            &format!("### Secretco {separator} Engineer"),
+        );
+        assert_problem(&checks::no_personal_content(&Guide::parse(&company)), "Secretco");
+    }
+    let disguised = replaced(&personal_base(""), "```markdown resume", "```Markdown resume");
+    let disguised = replaced(&disguised, "# Ada Lovelace", "# Jane Doe");
+    assert_problem(&checks::no_personal_content(&Guide::parse(&disguised)), "Jane Doe");
 }
 
 /// Reads the owner's real baselines at run time and fails if anything private from them is in the guide.
-/// No private string is committed: the details are read from the files named by `RESUME_BASELINES`.
+/// No private string is committed: the details are read from the files named by `RESUME_BASELINES`, and only
+/// counts are printed.
 ///
-/// Run with `RESUME_BASELINES=~/Documents/vrm/my/job/drafts cargo test --test guide -- --ignored`.
+/// Run with `RESUME_BASELINES=<directory of baseline resumes> cargo test --test guide -- --ignored`.
 #[test]
 #[ignore = "reads the real resumes from RESUME_BASELINES"]
 fn the_guide_contains_nothing_from_the_real_baselines() {
     let Some(dir) = std::env::var_os("RESUME_BASELINES") else {
         panic!(
             "set RESUME_BASELINES to the directory holding the real resumes, for example: \
-             RESUME_BASELINES=~/Documents/vrm/my/job/drafts cargo test --test guide -- --ignored"
+             RESUME_BASELINES=<directory> cargo test --test guide -- --ignored"
         );
     };
     let details = checks::private_details(std::path::Path::new(&dir));
@@ -445,76 +761,122 @@ fn the_guide_contains_nothing_from_the_real_baselines() {
         "the baselines gave only {} details: is the directory right?",
         details.len()
     );
-    let guide = load().text.to_lowercase();
-    let leaked: Vec<&String> = details.iter().filter(|d| guide.contains(&d.to_lowercase())).collect();
+    let text = guide_text().to_lowercase();
+    let digits: String = text.chars().filter(char::is_ascii_digit).collect();
+    let leaked = details
+        .iter()
+        .filter(|d| {
+            let d = d.to_lowercase();
+            text.contains(&d) || (d.chars().all(|c| c.is_ascii_digit()) && digits.contains(&d))
+        })
+        .count();
     // The detail itself is not printed: it is private, and a log can be shared.
-    assert!(
-        leaked.is_empty(),
-        "{} private detail(s) from the baselines are in docs/User-Guide.md",
-        leaked.len()
+    assert_eq!(
+        leaked, 0,
+        "{leaked} private detail(s) from the baselines are in docs/User-Guide.md"
     );
 }
 
+/// A directory with one real-looking baseline in a subdirectory.
+fn baseline_dir(text: &str) -> tempfile::TempDir {
+    let dir = assert_ok!(tempfile::tempdir());
+    let nested = dir.path().join("drafts");
+    assert_ok!(std::fs::create_dir_all(&nested));
+    assert_ok!(std::fs::write(nested.join("r.md"), text));
+    dir
+}
+
+const BASELINE: &str = "# Jordan Quill\n\nHarbor City, Qland · jq@private.test · +1 (415) 555-0123 · [site](https://jq.private.test/me) · [code](https://github.com/jquill)\n\n## Experience\n\n### Hidden Works · Lead · 2020 – 2022\n\n**Secret Project · 2021 – 2022**\n\n- Did a thing.\n\n### Quiet Labs | Engineer | 2018 – 2020\n";
+
 #[test]
-fn the_private_details_reader_finds_names_companies_addresses_and_hosts() {
-    let dir = tempfile::tempdir().expect("a temporary directory");
-    std::fs::write(
-        dir.path().join("r.md"),
-        "# Jordan Quill\n\nHere · jq@private.test · [site](https://jq.private.test/me)\n\n## Experience\n\n### Hidden Works · Lead · 2020 – 2022\n",
-    )
-    .expect("a file is written");
+fn the_private_details_reader_finds_what_a_real_resume_holds() {
+    let dir = baseline_dir(BASELINE);
     let details = checks::private_details(dir.path());
-    for want in ["Jordan Quill", "Hidden Works", "jq@private.test", "jq.private.test"] {
+    for want in [
+        "Jordan Quill",
+        "Hidden Works",
+        "Quiet Labs",
+        "Secret Project",
+        "jq@private.test",
+        "jq.private.test",
+        "jq.private.test/me",
+        "github.com/jquill",
+        "Harbor City, Qland",
+        "14155550123",
+    ] {
         assert!(details.contains(want), "{want} in {details:?}");
     }
 }
 
 #[test]
-fn a_public_host_that_a_resume_links_to_is_not_a_private_detail() {
-    let dir = tempfile::tempdir().expect("a temporary directory");
-    std::fs::write(
-        dir.path().join("r.md"),
-        "# Jordan Quill\n\nHere · [code](https://github.com/jq) · [site](https://jq.private.test)\n\n## Experience\n\n### Hidden Works · 2020 – 2022\n",
-    )
-    .expect("a file is written");
+fn a_public_host_or_a_synthetic_detail_is_not_a_private_detail() {
+    let dir = baseline_dir(BASELINE);
     let details = checks::private_details(dir.path());
     assert!(!details.contains("github.com"), "{details:?}");
+    let synthetic = baseline_dir(
+        "# Ada Lovelace\n\nLondon, UK · ada@example.com\n\n## Experience\n\n### Acme · Engineer · 2015 – 2017\n",
+    );
+    let details = checks::private_details(synthetic.path());
     assert!(
-        details.contains("jq.private.test"),
-        "a private host still counts: {details:?}"
+        !details.contains("Acme") && !details.contains("London, UK"),
+        "{details:?}"
     );
 }
 
 // ---- the example style compiles ----------------------------------------------------------------------
 
 #[test]
-fn the_style_the_guide_shows_compiles_and_renders_a_page() {
+fn the_style_the_guide_shows_compiles_with_every_theme_that_fits_the_components() {
     use resume::model::StyleName;
     use resume::model::options::Paper;
     use resume::style::StyleSource;
     use resume::typeset::{RenderOptions, Typesetter};
 
     let guide = load();
-    let fence = guide
-        .fences
-        .iter()
-        .find(|f| f.info.split_whitespace().collect::<Vec<_>>() == ["typst", "style"])
-        .expect("a ```typst style fence under `### Writing a style`");
-    let dir = tempfile::tempdir().expect("a temporary directory");
-    for (from, to) in [
-        ("styles/lib/components.typ", "lib/components.typ"),
-        ("styles/pragmatic/theme.typ", "mine/theme.typ"),
-    ] {
-        let target = dir.path().join(to);
-        std::fs::create_dir_all(target.parent().expect("a parent")).expect("a directory");
-        std::fs::write(target, facts::read(from)).expect("a file is written");
+    let fence = assert_some!(
+        guide
+            .fences
+            .iter()
+            .find(|f| f.info.split_whitespace().collect::<Vec<_>>() == ["typst", "style"])
+    );
+    let fitting = checks::styles_whose_theme_fits_the_components();
+    assert!(
+        fitting.len() >= 2 && fitting.contains("pragmatic"),
+        "the themes that fit the components: {fitting:?}"
+    );
+    let heading = assert_some!(guide.heading(3, "Writing a style"));
+    for style in &fitting {
+        assert!(
+            guide.body(heading).contains(&format!("`{style}`")),
+            "`### Writing a style` must name `{style}`, whose theme the example can use"
+        );
+        let dir = assert_ok!(tempfile::tempdir());
+        for (from, to) in [
+            (
+                "styles/lib/components.typ".to_string(),
+                "lib/components.typ".to_string(),
+            ),
+            (format!("styles/{style}/theme.typ"), "mine/theme.typ".to_string()),
+        ] {
+            let target = dir.path().join(to);
+            assert_ok!(std::fs::create_dir_all(assert_some!(target.parent())));
+            assert_ok!(std::fs::write(target, facts::read(from)));
+        }
+        assert_ok!(std::fs::write(dir.path().join("mine/style.typ"), &fence.body));
+        let style_source = assert_ok!(StyleSource::directory(
+            dir.path(),
+            assert_ok!(StyleName::try_new("mine"))
+        ));
+        let compiled = Typesetter::new(common::bundled_fonts())
+            .compile(&common::full_resume(), &style_source, RenderOptions::new(Paper::Letter))
+            .unwrap_or_else(|e| {
+                panic!(
+                    "the style in the guide (line {}) does not compile with the `{style}` theme: {e}",
+                    fence.line
+                )
+            });
+        assert!(compiled.page_count() >= 1);
     }
-    std::fs::write(dir.path().join("mine/style.typ"), &fence.body).expect("the style is written");
-    let style = StyleSource::directory(dir.path(), StyleName::try_new("mine").expect("a style name")).expect("a style");
-    let compiled = Typesetter::new(common::bundled_fonts())
-        .compile(&common::full_resume(), &style, RenderOptions::new(Paper::Letter))
-        .unwrap_or_else(|e| panic!("the style in the guide (line {}) does not compile: {e}", fence.line));
-    assert!(compiled.page_count() >= 1);
 }
 
 // ---- keeping the generated block current ---------------------------------------------------------------
@@ -525,10 +887,10 @@ fn the_style_the_guide_shows_compiles_and_renders_a_page() {
 #[test]
 #[ignore = "rewrites docs/User-Guide.md; run it by name after a code changes"]
 fn bless_guide_tables() {
-    let text = std::fs::read_to_string(guide_path()).expect("the guide");
+    let text = guide_text();
     let (start, end) = checks::generated_block(&text).unwrap_or_else(|e| panic!("{e}: add both markers first"));
     let updated = format!("{}\n\n{}{}", &text[..start], checks::render_code_tables(), &text[end..]);
     if updated != text {
-        std::fs::write(guide_path(), updated).expect("the guide is written");
+        assert_ok!(std::fs::write(guide_path(), updated));
     }
 }

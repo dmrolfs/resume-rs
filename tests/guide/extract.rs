@@ -1,10 +1,16 @@
 //! ABOUTME: Reads the structure of a Markdown guide: headings, fenced blocks, tables, links, and `guide:` markers.
 //! ABOUTME: Checks compare these hooks with the code, never the wording, so a prose edit changes nothing here.
 
+use std::collections::HashMap;
 use std::ops::Range;
+use std::sync::LazyLock;
 
+use claims::assert_ok;
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use regex::Regex;
+
+static MARKER: LazyLock<Regex> = LazyLock::new(|| assert_ok!(Regex::new(r"(?s)<!--\s*guide:(\S+)\s*(.*?)\s*-->")));
+static ANCHOR: LazyLock<Regex> = LazyLock::new(|| assert_ok!(Regex::new(r#"<a id="([^"]+)">"#)));
 
 /// A heading and the text that belongs to it, up to the next heading of the same or a higher level.
 #[derive(Debug, Clone)]
@@ -26,6 +32,19 @@ pub struct Fence {
     pub start: usize,
     /// The targets of the links in the paragraph that ends right before the fence, if one does.
     pub links_before: Vec<String>,
+}
+
+impl Fence {
+    /// The info string's words, lowercase.
+    pub fn words(&self) -> Vec<String> {
+        self.info.split_whitespace().map(str::to_lowercase).collect()
+    }
+
+    /// The language: the first word of the info string, lowercase, up to a comma. Empty when there is none.
+    pub fn language(&self) -> String {
+        let first = self.words().into_iter().next().unwrap_or_default();
+        first.split(',').next().unwrap_or_default().to_string()
+    }
 }
 
 /// A table: the header cells, and each row's cells with code spans written between backticks.
@@ -52,7 +71,7 @@ pub struct Link {
     pub start: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Guide {
     pub text: String,
     pub headings: Vec<Heading>,
@@ -69,180 +88,240 @@ pub fn line_of(text: &str, offset: usize) -> usize {
     text[..offset.min(text.len())].matches('\n').count() + 1
 }
 
-/// The anchor GitHub gives a heading: lowercase letters and digits, spaces and hyphens as hyphens.
+/// The anchor GitHub gives a heading, before it makes duplicates unique: lowercase, letters and digits kept
+/// (in any script), spaces and hyphens as hyphens, other punctuation dropped.
 pub fn slug(heading: &str) -> String {
     heading
         .chars()
-        .filter_map(|c| match c {
-            c if c.is_alphanumeric() => Some(c.to_ascii_lowercase()),
-            ' ' | '-' => Some('-'),
-            '_' => Some('_'),
-            _ => None,
+        .flat_map(|c| match c {
+            c if c.is_alphanumeric() => c.to_lowercase().collect::<Vec<_>>(),
+            ' ' | '-' => vec!['-'],
+            '_' => vec!['_'],
+            _ => Vec::new(),
         })
         .collect()
 }
 
-impl Guide {
-    pub fn parse(text: &str) -> Self {
-        let marker = Regex::new(r"(?s)<!--\s*guide:(\S+)\s*(.*?)\s*-->").expect("a valid regex");
-        let anchor = Regex::new(r#"<a id="([^"]+)">"#).expect("a valid regex");
-        let mut guide = Self {
-            text: text.to_string(),
-            headings: Vec::new(),
-            fences: Vec::new(),
-            tables: Vec::new(),
-            markers: Vec::new(),
-            links: Vec::new(),
-            anchors: anchor.captures_iter(text).map(|c| c[1].to_string()).collect(),
-        };
+/// What is open while the events of a document go by.
+#[derive(Default)]
+struct Open {
+    heading: Option<(usize, usize, String)>, // level, start, text so far
+    fence: Option<(String, usize, String)>,  // info, start, body so far
+    table: Option<Table>,
+    row: Option<Vec<String>>,
+    cell: Option<String>,
+    in_head: bool,
+    paragraph_links: Vec<String>,
+    links_before_next: Vec<String>,
+    just_after_paragraph: bool,
+}
 
-        let mut heading: Option<(usize, usize, String)> = None; // level, start, text so far
-        let mut fence: Option<(String, usize, String)> = None; // info, start, body so far
-        let mut table: Option<Table> = None;
-        let mut row: Option<Vec<String>> = None;
-        let mut cell: Option<String> = None;
-        let mut in_head = false;
-        let mut paragraph_links: Vec<String> = Vec::new();
-        let mut links_before_next: Vec<String> = Vec::new();
-        let mut just_after_paragraph = false;
+/// Reads a document's events into a [`Guide`].
+struct Collector<'t> {
+    text: &'t str,
+    guide: Guide,
+    open: Open,
+    slugs: HashMap<String, usize>,
+}
 
-        for (event, range) in Parser::new_ext(text, Options::ENABLE_TABLES).into_offset_iter() {
-            match event {
-                Event::Start(Tag::Heading { level, .. }) => {
-                    heading = Some((level as usize, range.start, String::new()));
-                    just_after_paragraph = false;
-                }
-                Event::End(TagEnd::Heading(_)) => {
-                    if let Some((level, start, text_so_far)) = heading.take() {
-                        guide.headings.push(Heading {
-                            level,
-                            slug: slug(&text_so_far),
-                            text: text_so_far,
-                            line: line_of(text, start),
-                            start,
-                            end: text.len(),
-                        });
-                    }
-                }
-                Event::Start(Tag::Paragraph) => paragraph_links.clear(),
-                Event::End(TagEnd::Paragraph) => {
-                    links_before_next = std::mem::take(&mut paragraph_links);
-                    just_after_paragraph = true;
-                }
-                Event::Start(Tag::CodeBlock(kind)) => {
-                    let info = match kind {
-                        CodeBlockKind::Fenced(info) => info.to_string(),
-                        CodeBlockKind::Indented => String::new(),
-                    };
-                    fence = Some((info, range.start, String::new()));
-                    if !just_after_paragraph {
-                        links_before_next.clear();
-                    }
-                    just_after_paragraph = false;
-                }
-                Event::End(TagEnd::CodeBlock) => {
-                    if let Some((info, start, body)) = fence.take() {
-                        guide.fences.push(Fence {
-                            info,
-                            body,
-                            line: line_of(text, start),
-                            start,
-                            links_before: std::mem::take(&mut links_before_next),
-                        });
-                    }
-                }
-                Event::Start(Tag::Table(_)) => {
-                    table = Some(Table {
-                        header: Vec::new(),
-                        rows: Vec::new(),
-                        start: range.start,
-                    });
-                    just_after_paragraph = false;
-                }
-                Event::End(TagEnd::Table) => guide.tables.extend(table.take()),
-                Event::Start(Tag::TableHead) => {
-                    in_head = true;
-                    row = Some(Vec::new());
-                }
-                Event::End(TagEnd::TableHead) => {
-                    if let (Some(t), Some(r)) = (table.as_mut(), row.take()) {
-                        t.header = r;
-                    }
-                    in_head = false;
-                }
-                Event::Start(Tag::TableRow) => row = Some(Vec::new()),
-                Event::End(TagEnd::TableRow) => {
-                    if let (Some(t), Some(r), false) = (table.as_mut(), row.take(), in_head) {
-                        t.rows.push(r);
-                    }
-                }
-                Event::Start(Tag::TableCell) => cell = Some(String::new()),
-                Event::End(TagEnd::TableCell) => {
-                    if let (Some(r), Some(c)) = (row.as_mut(), cell.take()) {
-                        r.push(c.trim().to_string());
-                    }
-                }
-                Event::Start(Tag::Link { dest_url, .. }) => {
-                    paragraph_links.push(dest_url.to_string());
-                    guide.links.push(Link {
-                        url: dest_url.to_string(),
-                        line: line_of(text, range.start),
-                        start: range.start,
-                    });
-                }
-                Event::Code(code) => {
-                    if let Some((_, _, t)) = heading.as_mut() {
-                        t.push_str(&code);
-                    }
-                    if let Some(c) = cell.as_mut() {
-                        c.push('`');
-                        c.push_str(&code);
-                        c.push('`');
-                    }
-                }
-                Event::Text(t) => {
-                    if let Some((_, _, body)) = fence.as_mut() {
-                        body.push_str(&t);
-                    } else if let Some((_, _, h)) = heading.as_mut() {
-                        h.push_str(&t);
-                    } else if let Some(c) = cell.as_mut() {
-                        c.push_str(&t);
-                    }
-                }
-                Event::SoftBreak | Event::HardBreak => {
-                    if let Some(c) = cell.as_mut() {
-                        c.push(' ');
-                    }
-                }
-                Event::Html(html) => {
-                    for m in marker.captures_iter(&html) {
-                        let at = range.start + m.get(0).map_or(0, |g| g.start());
-                        guide.markers.push(Marker {
-                            kind: m[1].to_string(),
-                            args: m[2].to_string(),
-                            line: line_of(text, at),
-                            start: at,
-                        });
-                    }
-                }
-                _ => {}
-            }
+impl<'t> Collector<'t> {
+    fn new(text: &'t str) -> Self {
+        Self {
+            text,
+            guide: Guide {
+                text: text.to_string(),
+                anchors: ANCHOR.captures_iter(text).map(|c| c[1].to_string()).collect(),
+                ..Guide::default()
+            },
+            open: Open::default(),
+            slugs: HashMap::new(),
         }
+    }
 
-        // A section runs to the next heading of the same or a higher level.
-        let ends: Vec<usize> = (0..guide.headings.len())
+    fn event(&mut self, event: Event<'_>, range: Range<usize>) {
+        match event {
+            Event::Start(Tag::Heading { level, .. }) => {
+                self.open.heading = Some((level as usize, range.start, String::new()));
+                self.open.just_after_paragraph = false;
+            }
+            Event::End(TagEnd::Heading(_)) => self.end_heading(),
+            Event::Start(Tag::Paragraph) => self.open.paragraph_links.clear(),
+            Event::End(TagEnd::Paragraph) => {
+                self.open.links_before_next = std::mem::take(&mut self.open.paragraph_links);
+                self.open.just_after_paragraph = true;
+            }
+            Event::Start(Tag::CodeBlock(kind)) => self.start_fence(&kind, range.start),
+            Event::End(TagEnd::CodeBlock) => self.end_fence(),
+            Event::Start(tag @ (Tag::Table(_) | Tag::TableHead | Tag::TableRow | Tag::TableCell)) => {
+                self.start_table_part(&tag, range.start);
+            }
+            Event::End(tag @ (TagEnd::Table | TagEnd::TableHead | TagEnd::TableRow | TagEnd::TableCell)) => {
+                self.end_table_part(tag);
+            }
+            Event::Start(Tag::Link { dest_url, .. }) => {
+                self.open.paragraph_links.push(dest_url.to_string());
+                self.guide.links.push(Link {
+                    url: dest_url.to_string(),
+                    line: line_of(self.text, range.start),
+                    start: range.start,
+                });
+            }
+            Event::Code(code) => {
+                if let Some((_, _, t)) = self.open.heading.as_mut() {
+                    t.push_str(&code);
+                }
+                if let Some(c) = self.open.cell.as_mut() {
+                    c.push('`');
+                    c.push_str(&code);
+                    c.push('`');
+                }
+            }
+            Event::Text(t) => self.text_event(&t),
+            Event::SoftBreak | Event::HardBreak => {
+                if let Some(c) = self.open.cell.as_mut() {
+                    c.push(' ');
+                }
+            }
+            Event::Html(html) => self.html_event(&html, range.start),
+            _ => {}
+        }
+    }
+
+    fn text_event(&mut self, t: &str) {
+        if let Some((_, _, body)) = self.open.fence.as_mut() {
+            body.push_str(t);
+        } else if let Some((_, _, h)) = self.open.heading.as_mut() {
+            h.push_str(t);
+        } else if let Some(c) = self.open.cell.as_mut() {
+            c.push_str(t);
+        }
+    }
+
+    fn html_event(&mut self, html: &str, start: usize) {
+        for m in MARKER.captures_iter(html) {
+            let at = start + m.get(0).map_or(0, |g| g.start());
+            self.guide.markers.push(Marker {
+                kind: m[1].to_string(),
+                args: m[2].to_string(),
+                line: line_of(self.text, at),
+                start: at,
+            });
+        }
+    }
+
+    fn end_heading(&mut self) {
+        let Some((level, start, text)) = self.open.heading.take() else {
+            return;
+        };
+        // GitHub makes a repeated heading's anchor unique with `-1`, `-2`, and so on.
+        let base = slug(&text);
+        let seen = self.slugs.entry(base.clone()).or_insert(0);
+        let unique = if *seen == 0 { base } else { format!("{base}-{seen}") };
+        *seen += 1;
+        self.guide.headings.push(Heading {
+            level,
+            slug: unique,
+            text,
+            line: line_of(self.text, start),
+            start,
+            end: self.text.len(),
+        });
+    }
+
+    fn start_fence(&mut self, kind: &CodeBlockKind<'_>, start: usize) {
+        let info = match kind {
+            CodeBlockKind::Fenced(info) => info.to_string(),
+            CodeBlockKind::Indented => String::new(),
+        };
+        self.open.fence = Some((info, start, String::new()));
+        if !self.open.just_after_paragraph {
+            self.open.links_before_next.clear();
+        }
+        self.open.just_after_paragraph = false;
+    }
+
+    fn end_fence(&mut self) {
+        if let Some((info, start, body)) = self.open.fence.take() {
+            self.guide.fences.push(Fence {
+                info,
+                body,
+                line: line_of(self.text, start),
+                start,
+                links_before: std::mem::take(&mut self.open.links_before_next),
+            });
+        }
+    }
+
+    fn start_table_part(&mut self, tag: &Tag<'_>, start: usize) {
+        match tag {
+            Tag::Table(_) => {
+                self.open.table = Some(Table {
+                    header: Vec::new(),
+                    rows: Vec::new(),
+                    start,
+                });
+                self.open.just_after_paragraph = false;
+            }
+            Tag::TableHead => {
+                self.open.in_head = true;
+                self.open.row = Some(Vec::new());
+            }
+            Tag::TableRow => self.open.row = Some(Vec::new()),
+            Tag::TableCell => self.open.cell = Some(String::new()),
+            _ => {}
+        }
+    }
+
+    fn end_table_part(&mut self, tag: TagEnd) {
+        match tag {
+            TagEnd::Table => self.guide.tables.extend(self.open.table.take()),
+            TagEnd::TableHead => {
+                if let (Some(t), Some(r)) = (self.open.table.as_mut(), self.open.row.take()) {
+                    t.header = r;
+                }
+                self.open.in_head = false;
+            }
+            TagEnd::TableRow => {
+                if let (Some(t), Some(r), false) = (self.open.table.as_mut(), self.open.row.take(), self.open.in_head) {
+                    t.rows.push(r);
+                }
+            }
+            TagEnd::TableCell => {
+                if let (Some(r), Some(c)) = (self.open.row.as_mut(), self.open.cell.take()) {
+                    r.push(c.trim().to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// A section runs to the next heading of the same or a higher level.
+    fn close_sections(mut self) -> Guide {
+        let ends: Vec<usize> = (0..self.guide.headings.len())
             .map(|i| {
-                let level = guide.headings[i].level;
-                guide.headings[i + 1..]
+                let level = self.guide.headings[i].level;
+                self.guide.headings[i + 1..]
                     .iter()
                     .find(|h| h.level <= level)
-                    .map_or(text.len(), |h| h.start)
+                    .map_or(self.text.len(), |h| h.start)
             })
             .collect();
-        for (heading, end) in guide.headings.iter_mut().zip(ends) {
+        for (heading, end) in self.guide.headings.iter_mut().zip(ends) {
             heading.end = end;
         }
-        guide
+        self.guide
+    }
+}
+
+impl Guide {
+    /// Reads `text`, with Windows line endings read as `\n`, so a guide edited on Windows is the same guide.
+    pub fn parse(text: &str) -> Self {
+        let text = text.replace("\r\n", "\n");
+        let mut collector = Collector::new(&text);
+        for (event, range) in Parser::new_ext(&text, Options::ENABLE_TABLES).into_offset_iter() {
+            collector.event(event, range);
+        }
+        collector.close_sections()
     }
 
     pub fn heading(&self, level: usize, text: &str) -> Option<&Heading> {
@@ -268,21 +347,6 @@ impl Guide {
     pub fn markers_in(&self, range: Range<usize>) -> impl Iterator<Item = &Marker> {
         self.markers.iter().filter(move |m| range.contains(&m.start))
     }
-
-    /// The text of a section without its fenced blocks, which hold examples and not the guide's own words.
-    pub fn prose(&self, heading: &Heading) -> String {
-        let mut out = String::new();
-        let mut at = heading.start;
-        for fence in self.fences_in(Self::range(heading)) {
-            out.push_str(&self.text[at..fence.start]);
-            let after = self.text[fence.start..]
-                .find("\n```")
-                .map_or(fence.start, |i| fence.start + i);
-            at = (after + 4).min(heading.end);
-        }
-        out.push_str(&self.text[at..heading.end]);
-        out
-    }
 }
 
 /// The text of a table cell without its backticks: ``` `spacing.section` ``` is `spacing.section`.
@@ -293,6 +357,7 @@ pub fn plain(cell: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use claims::assert_some;
 
     const SAMPLE: &str = "# Title\n\n## One\n\nSee [`role-separator`](#code-role-separator) for it.\n\n```markdown resume expect=none\n# A\n```\n\n### Sub\n\n| Key | What |\n|---|---|\n| `spacing.section` | gap |\n| `size.body` | text |\n\n<!-- guide:planned rsm-141.22 witness=build:--tags -->\n\n## Two\n\n<a id=\"code-x\"></a> text\n";
 
@@ -313,7 +378,7 @@ mod tests {
                 (2, "Two", "two")
             ]
         );
-        let one = guide.heading(2, "One").expect("heading One");
+        let one = assert_some!(guide.heading(2, "One"));
         assert_eq!(one.line, 3);
         assert!(
             guide.body(one).contains("### Sub"),
@@ -371,10 +436,27 @@ mod tests {
     }
 
     #[test]
-    fn prose_leaves_out_fenced_blocks() {
-        let guide = Guide::parse(SAMPLE);
-        let one = guide.heading(2, "One").expect("heading One");
-        let prose = guide.prose(one);
-        assert!(prose.contains("See [`role-separator`]") && !prose.contains("# A"));
+    fn a_guide_with_windows_line_endings_is_the_same_guide() {
+        let crlf = SAMPLE.replace('\n', "\r\n");
+        let (a, b) = (Guide::parse(SAMPLE), Guide::parse(&crlf));
+        assert_eq!(a.text, b.text);
+        assert_eq!(a.fences[0].body, b.fences[0].body);
+        assert_eq!(a.tables[0].rows, b.tables[0].rows);
+    }
+
+    #[test]
+    fn a_heading_slug_follows_github_for_other_scripts_and_repeats() {
+        assert_eq!(slug("Café: a Guide, 2 – Ü"), "café-a-guide-2--ü");
+        let guide = Guide::parse("## Same\n\n## Same\n\n## Same\n");
+        let slugs: Vec<_> = guide.headings.iter().map(|h| h.slug.as_str()).collect();
+        assert_eq!(slugs, ["same", "same-1", "same-2"]);
+    }
+
+    #[test]
+    fn a_tilde_fence_is_a_fence_and_its_language_is_lowercase() {
+        let guide = Guide::parse("~~~Markdown,Resume expect=none\nx\n~~~\n");
+        assert_eq!(guide.fences.len(), 1);
+        assert_eq!(guide.fences[0].language(), "markdown");
+        assert_eq!(guide.fences[0].words(), ["markdown,resume", "expect=none"]);
     }
 }

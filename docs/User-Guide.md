@@ -7,13 +7,15 @@
 
 This guide is for the person using the tool. It says what the tool does and how to ask for it. Why it is built that way, and how, is in the [architecture notes](../ref/Resume-RS-Architecture.md), which are for people changing the tool.
 
+The advice behind the checks comes from the book *The Tech Resume Inside Out*, which this guide calls "the book" after this.
+
 How to read it: start with the [quick start](#quick-start), then [writing your resume](#writing-your-resume). Come back to [the commands](#commands) and [the styles](#styles) when you need them. A line like `period-hyphen` in this guide is the name of a finding; it links to [the list of every finding](#appendix-diagnostic-codes), and `resume doctor --explain period-hyphen` explains it in your terminal.
 
 Two conventions help when you read. A section marked **Planned, not available yet** describes work that has not been done; nothing in it works today. And every example in a `markdown` block on this page is checked by the project's tests: it produces exactly the findings the text says it does.
 
 ## Quick start
 
-Save this as `Resume.md`. It is a whole resume, small enough to read at a glance, and it builds as written.
+This guide assumes the `resume` program is on your path; the [README](../README.md) says how to get it. Save this as `Resume.md`. It is a whole resume, small enough to read at a glance, and it builds as written.
 
 ```markdown resume expect=none
 # Ada Lovelace
@@ -55,9 +57,9 @@ What each line does, in order:
 3. `doctor --fix` makes them.
 4. `build` writes `out/Resume.pdf`.
 5. `--style mono --paper a4` builds the same resume in another built-in style, on A4 paper.
-6. `--fonts bundled --max-pages 2` uses only the fonts inside the program, so the PDF is the same on any machine, and fails if the resume needs more than two pages.
+6. `--fonts bundled --max-pages 2` uses only the fonts inside the program, so the PDF does not depend on the machine, and fails if the resume needs more than two pages.
 7. `export-style` copies a built-in style into `my-styles` so you can edit it.
-8. `--styles-dir my-styles` builds with your copy.
+8. `--styles-dir my-styles` names a directory of styles, not one style; `--style pragmatic` then picks your copy from it.
 9. `doctor --explain` explains one finding, with an example.
 
 Something went wrong? See [troubleshooting](#troubleshooting).
@@ -66,13 +68,13 @@ Something went wrong? See [troubleshooting](#troubleshooting).
 
 A resume is a Markdown file with a small number of conventions. The program reads these conventions, not general Markdown: anything it cannot represent is reported, never dropped silently.
 
-Here is a whole resume that uses every convention. The comment lines explain each part. Comments on their own lines are ignored when the PDF is built, so they are safe to leave in.
+Here is a whole resume that uses every convention. Its page break forces a second page, so a build of it warns that the last page is nearly empty; that is the example's doing, not a problem with the convention. The comment lines explain each part. Comments on their own lines are ignored when the PDF is built, so they are safe to leave in.
 
 ```markdown resume expect=none
 <!-- The name: exactly one `#` heading. It is the title of the PDF and the text of the footer. -->
 # Ada Lovelace
 
-<!-- The contact line: the paragraph right after the name. Separate the items with ` · `. Keep it to four. -->
+<!-- The contact line: the paragraph right after the name. Separate the items with ` · `. Keep it short. -->
 London, UK · +44 20 7946 0000 · ada@example.com · [GitHub](https://github.com/ada)
 
 <!-- A section: `##`. A resume is a list of sections. -->
@@ -126,13 +128,13 @@ Builds mechanical computers for scientific customers.
 
 **The name** is the one first-level heading, `# Your Name`. A second `#` heading, or none, is an error: see [`missing-name`](#code-missing-name) and [`duplicate-name`](#code-duplicate-name).
 
-**The contact line** is the paragraph right after the name. Separate the items with ` · ` (a middle dot with a space on each side; Option+Shift+9 on a Mac). The book recommends at most four, and `doctor` warns above that with [`too-many-contact-items`](#code-too-many-contact-items). Links need an `http`, `https`, or `mailto` address.
+**The contact line** is the paragraph right after the name. Separate the items with ` · ` (a middle dot with a space on each side; Option+Shift+9 on a Mac, Alt+0183 on Windows, or copy it from an example here). The book recommends a short line, and `doctor` warns when it is too long with [`too-many-contact-items`](#code-too-many-contact-items). Links need an `http`, `https`, or `mailto` address.
 
 **Sections** are `## Title`. Everything up to the next `##` belongs to the section. Only the name and the contact line may come before the first section.
 
 **Roles** are `### Company · Title · Period`, or `### Company · Period` when there is no title. Each part needs text, and the separator is exactly ` · `. A period is recognized by a four-digit year in it.
 
-**The description** is the first paragraph after a role line, if it is not an era. It is the one line that says what the company does.
+**The description** is the first paragraph after a role line, if it is not an era. It is the one line that says what the company does. (The theme keys call it the blurb.)
 
 **Eras** show progress inside one employer. An era is a paragraph that is only bold text: `**Name · Period**`. Bullets after it belong to it until the next era, role, or section.
 
@@ -160,7 +162,7 @@ A role whose parts are separated by `|` instead of ` · ` is [`role-separator`](
 - Cut build time from 40 minutes to 9.
 ```
 
-Dates joined by a hyphen are [`period-hyphen`](#code-period-hyphen), a warning with a mechanical fix:
+Dates joined by a hyphen (or an em dash) are [`period-hyphen`](#code-period-hyphen), a warning with a mechanical fix:
 
 ```markdown in-section expect=period-hyphen
 ### Acme · Engineer · 2015 - 2017
@@ -186,7 +188,7 @@ A bold line that looks like an era but has prose after it is [`era-shape`](#code
 - Cut build time from 40 minutes to 9.
 ```
 
-A label with its colon outside the bold is [`mid-sentence-bold`](#code-mid-sentence-bold), a warning `doctor --fix` repairs:
+A label with its colon outside the bold is [`mid-sentence-bold`](#code-mid-sentence-bold), a warning `doctor --fix` repairs. This example sits directly under the section heading, not in a role; inside a role, the bullet would also be reported as unquantified:
 
 ```markdown in-section expect=mid-sentence-bold
 - **Languages**: Rust, Java, Scala
@@ -194,7 +196,7 @@ A label with its colon outside the bold is [`mid-sentence-bold`](#code-mid-sente
 
 ### What is not supported
 
-The program tells you rather than guessing. These are errors, not silent omissions: block quotes, code blocks, tables, headings below `###`, numbered lists, and a bullet with more than one paragraph. Images are dropped with a warning, because the book advises against photos. An input larger than 1 MiB is rejected with [`input-limit`](#code-input-limit).
+The program tells you rather than guessing. These are errors, not silent omissions: block quotes, code blocks, tables, headings below `###`, numbered lists, and a bullet with more than one paragraph. Images are dropped with a warning, because the book advises against photos. An input larger than the size limit is rejected with [`input-limit`](#code-input-limit).
 
 ## Checking your resume
 
@@ -213,48 +215,57 @@ resume doctor Resume.md --style mono --max-pages 3
 resume check Resume.md --format json
 ```
 
-**`doctor --fix`** applies the changes that are mechanical and keep the meaning, such as replacing a hyphen with an en dash or moving a colon inside a bold label. It never rewrites your words. Add `--dry-run` to see the diff first. A finding that can be fixed this way is marked `fixable` in the report.
+**`doctor --fix`** applies the changes that are mechanical and keep the meaning, such as replacing a hyphen with an en dash or moving a colon inside a bold label. It never changes what the resume says: before writing, it checks that the fixed file reads as the same resume. Add `--dry-run` to see the diff first. A finding that can be fixed this way is marked `fixable` in the report.
 
-**`doctor --explain CODE`** prints what a finding means, why it matters (with the book's reasoning), how to fix it, and a before-and-after example. Every example it prints is one that really produces its code.
+**`doctor --explain CODE`** prints what a finding means, the reason for it, how to fix it, and usually a before-and-after example. The code is written exactly as the report shows it, in lowercase. Every example it prints is one that really produces its code; the one for `font-fallback-metric` needs `--format json`, because that note is not shown in a human report.
 
-**`--format json`** writes each finding as one JSON object per line on standard output, for scripts. Operational problems (a file that cannot be read, an unknown style) are still plain lines on standard error with exit code 1, so standard output stays machine-readable.
+**Where output goes.** A human report is written to standard error, so `resume check Resume.md > report.txt` leaves the file empty. With `--format json`, each finding is one JSON object per line on standard output, for scripts. A JSON finding has the fields `type` (always `diagnostic`), `severity`, `code`, `category`, `message`, `file`, `line`, `column`, `end_line`, `end_column`, `hints`, and `fixable`. Operational problems (a file that cannot be read, an unknown style) are still plain lines on standard error with exit code 1, so standard output stays machine-readable.
 
 **Exit codes.** 0 means success, and warnings are allowed. 1 means an error finding, a failed build, or an operational error such as an unreadable file. 2 means the command line itself was wrong.
 
 ## Fonts
 
-A style names fonts by **role**, not by file. Every built-in style has a `body` role and a `mono` role, and a third role for its display type:
+A style names fonts by **font role** (not to be confused with a role in your resume, which is a job), not by file. A style's `theme.typ` lists the font roles it uses. Every built-in style has a `body` role and a `mono` role, and a third role for its display type:
 
 - `body`: the text of the resume.
 - `mono`: inline code.
 - `display`: the name and the headings, in `pragmatic` and `mono`.
 - `label`: the name and the section labels, in `experienced`.
 
-Each role has three fields in the style's theme, described in [the theme keys](#theme-keys):
+Each font role has three fields in the style's theme (the `theme.typ` file, described under [Customizing a style](#customizing-a-style) and in [the theme keys](#theme-keys)):
 
 - `preferred`: the font the template itself uses, such as Calibri. It is used when it is installed.
 - `fallback`: a free font bundled inside the program, used when the preferred one is not installed.
 - `metric-compatible`: `true` when the fallback has the same character widths as the preferred font, so lines break in the same places either way.
 
-The bundled fallbacks are Carlito (for Calibri), Gelasio (for Georgia), Arimo (for Arial), and TeX Gyre Pagella (for Book Antiqua). A style that prefers Calibri and falls back to Carlito produces the same line breaks and the same page count on a machine that has Calibri and on one that does not: the difference is only in the shapes of the letters. TeX Gyre Pagella is the exception. Its character widths differ from Book Antiqua's by about 2% on average, so the `experienced` style, which sets its name and labels in it, can break those lines differently when Book Antiqua is not installed. The style says so with `metric-compatible: false`, and a build reports [`font-fallback-layout`](#code-font-fallback-layout).
+The bundled fallbacks are Carlito (for Calibri), Gelasio (for Georgia), Arimo (for Arial), and TeX Gyre Pagella (for Book Antiqua). DejaVu Sans Mono is bundled for the `mono` role. A style that prefers Calibri and falls back to Carlito produces the same line breaks and the same page count on a machine that has Calibri and on one that does not: the difference is only in the shapes of the letters. TeX Gyre Pagella is the exception. Its character widths differ a little from Book Antiqua's, so the `experienced` style, which sets its name and labels in it, can break those lines differently when Book Antiqua is not installed. The style says so with `metric-compatible: false`, and a build reports [`font-fallback-layout`](#code-font-fallback-layout).
 
 **Which fonts may be used** is up to you:
 
-- `--fonts auto` (the default) uses the bundled fonts, then any in `--font-path` and in the `RESUME_FONT_PATH` environment variable, then the fonts installed on the machine.
-- `--fonts bundled` uses only the bundled fonts. The PDF no longer depends on the machine: the same input gives the same bytes on macOS and Windows. Use it when you want to be sure.
+- `--fonts auto` (the default) uses the bundled fonts, then any in `--font-path` and in the `RESUME_FONT_PATH` environment variable, then the fonts installed on the machine (on a Mac, this includes the fonts of Microsoft Office).
+- `--fonts bundled` uses only the bundled fonts. The PDF no longer depends on the machine: the same input gives the same bytes on macOS and Windows, which the project's tests compare on both. `--font-path` and `RESUME_FONT_PATH` are ignored then, and `--font-path` is refused. Use it when you want to be sure.
 - `--font-path <DIR>` adds a directory of font files. Give it more than once for more directories.
 
-After a build, the `fonts:` line says what was used, for example `body Carlito (fallback for Calibri)`. Three findings describe the situation:
+After a build, the `fonts:` line says which font each role uses, and where it came from:
 
-- [`font-fallback-metric`](#code-font-fallback-metric) is a note: a bundled font stands in and the layout is unchanged. Nothing to do.
+- `Calibri (system)`: installed on the machine.
+- `Calibri (application)`: installed with an application, such as Microsoft Office on a Mac.
+- `Calibri (font-path)`: found in a directory you gave with `--font-path` or `RESUME_FONT_PATH`.
+- `Carlito (fallback for Calibri)`: the bundled stand-in for a preferred font that is not installed.
+- `DejaVu Sans Mono (bundled)`: a bundled font that the style asks for by name.
+- `MISSING (neither A nor B)`: neither the preferred font nor its fallback was found.
+
+Three findings describe the situation:
+
+- [`font-fallback-metric`](#code-font-fallback-metric) is a note: a bundled font stands in and the layout is unchanged. Nothing to do. A human report does not show it, because the `fonts:` line already says so; `--format json` includes it.
 - [`font-fallback-layout`](#code-font-fallback-layout) is a warning: the stand-in has different widths, so lines may break differently. Install the preferred font or check the page count.
 - [`font-missing`](#code-font-missing) is an error: neither the preferred font nor its fallback is available, which means the style's font list was edited wrongly.
 
-**Licenses.** The bundled fonts are free fonts under the SIL Open Font License, and the program carries a notice for each. `resume licenses` prints them. They are also in [`fonts/LICENSES.md`](../fonts/LICENSES.md).
+**Licenses.** The bundled fonts are free to embed. Most are under the SIL Open Font License; TeX Gyre Pagella is under the GUST Font License. The program carries a notice for each, and `resume licenses` prints them. They are also in [`fonts/LICENSES.md`](../fonts/LICENSES.md).
 
 ## Styles
 
-A style decides how a resume looks. The content never changes between styles. The program has three built-in styles, and you can make your own.
+A style decides how a resume looks. The content never changes between styles. The program has built-in styles, listed below, and you can make your own.
 
 ### Built-in styles
 
@@ -292,21 +303,21 @@ A style has two files you edit:
 
 ### Theme keys
 
-Every value a built-in theme sets is listed here. A theme is a Typst dictionary, and `spacing.section` means the `section` entry of `spacing`. Lengths are in Typst units: `pt` (points), `in` (inches), `em` (a multiple of the font size). The **Styles** column says which built-in styles have the key. The styles do not all have the same keys: `experienced` keeps its page margins in `page-margin` and has no `margin`, for example.
+Every value a built-in theme sets is listed here. A theme is a Typst dictionary, and `spacing.section` means the `section` entry of `spacing`. Lengths are in Typst units, such as `pt` (points), `in` (inches), and `em` (a multiple of the font size). The **Styles** column says which built-in styles have the key. The styles do not all have the same keys: `experienced` keeps its page margins in `page-margin` and has no `margin`, for example.
 
 | Key | Unit | What it controls | Styles |
 |---|---|---|---|
-| `fonts.<role>.preferred` | font name | The template's own font for the role, used when installed. The roles are `body`, `mono`, and `display` or `label`. In `pragmatic` and `mono`, set `display` to Georgia, with Gelasio as its fallback, for a serif look. | all |
+| `fonts.<role>.preferred` | font name | The template's own font for the role, used when installed. The roles are `body`, `mono`, and `display` or `label`. | all |
 | `fonts.<role>.fallback` | font name | The bundled font used when the preferred one is not installed. | all |
 | `fonts.<role>.metric-compatible` | `true` or `false` | Whether the fallback has the preferred font's character widths. When `false`, `doctor` warns that lines may break differently. | all |
 | `size.body` | length | The size of the text. | all |
 | `size.name` | length | The size of the name. | all |
 | `size.heading` | length | The size of the section titles. | mono, pragmatic |
-| `size.role` | length | The size of the role line: title, company, and period. | all |
+| `size.role` | length | The size of the role line's title and company. In `experienced`, the dates are set with `size.period`. | all |
 | `size.contact` | length | The size of the contact items. | mono, pragmatic |
 | `size.footer` | length | The size of the footer text. | all |
 | `color.text` | color | The color of the text. | all |
-| `color.accent` | color | The color of section titles and the rule under them. | all |
+| `color.accent` | color | The color of section titles and the rule under them. | mono, pragmatic |
 | `color.link` | color | The color of links. They are also underlined. | all |
 | `color.muted` | color | The color of the footer. | all |
 | `margin.x` | length | The left and right page margins. | mono, pragmatic |
@@ -332,7 +343,7 @@ Every value a built-in theme sets is listed here. A theme is a Typst dictionary,
 | `bullet.gap` | length | The space between the bullet and its text. | all |
 | `header.name-gap` | length | The least clear space between the name and either side of the header. When the name and the wider side do not fit with that space, the name moves to a line of its own. | pragmatic |
 | `header.stacked-gap` | length | The space under the name when it has moved to its own line. | pragmatic |
-| `header.gap` | length | The space between the name and the contact line, beyond the 17 pt that the two lines' own heights give. | mono |
+| `header.gap` | length | The space between the name and the contact line, beyond what the two lines' own heights give. With a 24 pt name and an 11 pt contact line, 0 pt puts their baselines 17 pt apart. | mono |
 | `color.label` | color | The color of the section labels in the gutter. | experienced |
 | `size.label` | length | The size of the section labels. | experienced |
 | `size.label-min` | length | The smallest a label is set when one word of it is wider than the gutter. A word that is still too wide at this size is broken between letters. | experienced |
@@ -349,7 +360,9 @@ Every value a built-in theme sets is listed here. A theme is a Typst dictionary,
 | `spacing.name-below` | length | The space under the name. | experienced |
 | `spacing.skill-row` | length | The space between the rows of a skills table. | experienced |
 
-Changing `line.top` and `line.bottom` changes the page count and where lines break. Everything else changes only the look.
+Any size, margin, or spacing can change the page count and where lines break, so pass `--max-pages` after editing them. Spacing between blocks does not add up: when two blocks meet, the larger space wins, so a small change to a smaller space can do nothing. `line.top` and `line.bottom` are fixed lengths rather than font measurements, so a fallback font gives the same line positions as the preferred one.
+
+For a serif look in `pragmatic` or `mono`, set the `display` role's `preferred` font to Georgia and its `fallback` to Gelasio.
 
 ### Shared components
 
@@ -411,7 +424,7 @@ This is the smallest useful style. It centers the name and then lets the shared 
 #render-sections(theme, resume)
 ```
 
-It needs a `theme.typ` beside it, which you can copy from a built-in style, and the shared `lib/components.typ`. `export-style` gives you both.
+It needs a `theme.typ` beside it, and the shared `lib/components.typ`. `export-style` gives you both. Copy the theme from `pragmatic` or `mono`: `render-sections` and `resume-document` read the keys those two share, which is what the **Styles** column of the theme keys marks, and Typst names the first missing key if a theme lacks one. The `experienced` theme has a different set of keys, so it does not work with this example.
 
 Typst has its own reference, which is the place to learn how to arrange things on a page: [text](https://typst.app/docs/reference/text/text/), [block](https://typst.app/docs/reference/layout/block/), [grid](https://typst.app/docs/reference/layout/grid/), [lists](https://typst.app/docs/reference/model/list/), [set rules](https://typst.app/docs/reference/styling/#set-rules), and [show rules](https://typst.app/docs/reference/styling/#show-rules).
 
@@ -423,17 +436,17 @@ resume [--dry-run] [--format FORMAT] [--color COLOR] COMMAND
 
 ### Global options
 
-These work with every command.
+These work with every command, and so do `-h` and `--help` (a command's usage) and `-V` and `--version` (the version).
 
 | Option | Values and default | What it does |
 |---|---|---|
-| `--dry-run` | a switch | Shows what would be written and writes nothing. For `build` it still compiles and runs every check, so the exit code is a real build's. For `doctor --fix` it prints the diff. For `export-style` it lists the files. `styles`, `check`, and `licenses` write nothing and ignore it. |
+| `--dry-run` | a switch | Shows what would be written and writes nothing. For `build` it still compiles and runs every check, so the exit code is a real build's. For `doctor --fix` it prints the diff. For `export-style` it lists the files. `styles`, `check`, `licenses`, and `doctor` without `--fix` write nothing and ignore it. |
 | `--format <FORMAT>` | `human` or `json`; default `human` | How findings are written: for people, or as JSON lines on standard output. `styles`, `licenses`, and `export-style` have no findings and ignore it. |
-| `--color <COLOR>` | `auto`, `always`, or `never`; default `auto` | When to color the output. `auto` colors only on an interactive terminal, and `NO_COLOR` is respected. |
+| `--color <COLOR>` | `auto`, `always`, or `never`; default `auto` | When to color the output. `auto` colors only on an interactive terminal, and turns color off when `NO_COLOR` is set to something or `TERM` is `dumb`. `always` and `never` override both. |
 
 ### resume build
 
-Typesets one or more resumes into PDFs. The PDF is named after the input file and written to the output directory, which is created if it does not exist. If the resume has format errors, nothing is written. If it compiles but a layout check fails, such as the page limit, the PDF is still written so you can see what overflowed, and the command exits 1. With several files, each is built and each gets its own summary line; one failing never skips the others.
+Typesets one or more resumes into PDFs. The PDF is named after the input file and written to the output directory, which is created if it does not exist. If the resume has format errors, nothing is written. If it compiles but a layout check fails, such as the page limit, the PDF is still written so you can see what overflowed, and the command exits 1. With several files, each is built and each gets its own summary line; one failing never skips the others. Two inputs with the same file name, such as `Resume.md` and `sub/Resume.md`, would write the same PDF, so `build` refuses them with exit code 2: rename one or build them separately.
 
 ```sh
 resume build Resume.md
@@ -447,7 +460,7 @@ resume build Resume.md Other.md --out pdfs
 | `-s, --style <NAME>` | default `pragmatic` | The style to render with. |
 | `--styles-dir <DIR>` | none | A directory of styles to use besides the built-in ones. A style here wins over a built-in of the same name. |
 | `--paper <PAPER>` | `letter` or `a4`; default `letter` | The paper size. |
-| `--max-pages <N>` | 1 to 20 | Fail when the resume needs more pages than this. |
+| `--max-pages <N>` | a number of pages | Fail when the resume needs more pages than this. |
 | `--fonts <FONTS>` | `auto` or `bundled`; default `auto` | Which fonts may be used. See [Fonts](#fonts). |
 | `--font-path <DIR>` | none; repeatable | A directory of fonts to use when `--fonts` is `auto`. Give it more than once. It cannot be combined with `--fonts bundled`. |
 
@@ -467,15 +480,15 @@ resume doctor --explain role-separator
 | `-s, --style <NAME>` | default `pragmatic` | The style to render with. |
 | `--styles-dir <DIR>` | none | A directory of styles to use besides the built-in ones. |
 | `--paper <PAPER>` | `letter` or `a4`; default `letter` | The paper size. |
-| `--max-pages <N>` | 1 to 20 | Report a layout error when the resume needs more pages than this. |
+| `--max-pages <N>` | a number of pages | Report a layout error when the resume needs more pages than this. |
 | `--fonts <FONTS>` | `auto` or `bundled`; default `auto` | Which fonts may be used. |
 | `--font-path <DIR>` | none; repeatable | A directory of fonts to use when `--fonts` is `auto`. |
 | `--fix` | a switch | Apply the changes that are mechanical and keep the meaning, to the files themselves. Add `--dry-run` to see the diff and change nothing. |
-| `--explain <CODE>` | a finding's code | Explain a finding by its code, with an example, and exit. |
+| `--explain <CODE>` | a finding's code | Explain a finding by its code, with an example, and exit. It cannot be combined with files or `--fix`. |
 
 ### resume check
 
-The same report as `doctor`, which can never change a file. It has the options of `doctor` except `--fix` and `--explain`. Use it in a script or a pre-commit hook.
+The same report as `doctor`, which can never change a file. Its options are those of `doctor` without `--fix` and `--explain`. Use it in a script or a pre-commit hook.
 
 ```sh
 resume check Resume.md --format json
@@ -488,7 +501,7 @@ resume check Resume.md --format json
 | `-s, --style <NAME>` | default `pragmatic` | The style to render with. |
 | `--styles-dir <DIR>` | none | A directory of styles to use besides the built-in ones. |
 | `--paper <PAPER>` | `letter` or `a4`; default `letter` | The paper size. |
-| `--max-pages <N>` | 1 to 20 | Report a layout error when the resume needs more pages than this. |
+| `--max-pages <N>` | a number of pages | Report a layout error when the resume needs more pages than this. |
 | `--fonts <FONTS>` | `auto` or `bundled`; default `auto` | Which fonts may be used. |
 | `--font-path <DIR>` | none; repeatable | A directory of fonts to use when `--fonts` is `auto`. |
 
@@ -517,7 +530,7 @@ resume export-style mono my-styles
 |---|---|---|
 | `<NAME>` | a built-in style | The built-in style to copy. |
 | `<DIR>` | a directory | Where to copy it. The style goes to `DIR/NAME/` and what styles share to `DIR/lib/`. |
-| `--force` | a switch | Replace files that already exist. Without it, nothing is written when any file exists. |
+| `--force` | a switch | Replace files that already exist, including any edits you made to an earlier copy. Without it, nothing is written when any file exists. |
 
 ### resume licenses
 
@@ -532,45 +545,50 @@ resume licenses
 <!-- guide:planned rsm-141.12 witness=command:watch -->
 <!-- guide:planned rsm-141.12 witness=command:export -->
 
-**Planned, not available yet** (rsm-141.12). A `watch` command that rebuilds when the file changes, and an `export` command that writes the resume data and the style for use with Typst's own tools. Neither exists today; the commands above are the whole program.
+**Planned, not available yet.** Two more commands are planned. Neither exists today; the commands above are the whole program.
 
 ### Environment variables
 
-`RESUME_FONT_PATH` adds font directories, like `--font-path`. `NO_COLOR` turns off color, like `--color never`. Nothing is read from the current directory unless you ask: styles come from `--styles-dir`, and there is no configuration file.
+- `RESUME_FONT_PATH` adds font directories, like `--font-path`. It is a list separated by `:` on macOS and Linux and by `;` on Windows, and it is ignored with `--fonts bundled`.
+- `NO_COLOR`, when set and not empty, turns off color with `--color auto`. `--color always` overrides it.
+- `TERM`, when it is `dumb`, also turns off color with `--color auto`.
+
+Nothing else is read from the environment. Nothing is read from the current directory unless you ask: styles come from `--styles-dir`, and there is no configuration file.
+
 
 ## Annotations
 
-<!-- guide:planned rsm-141.22 witness=build:--tags -->
+<!-- guide:planned rsm-141.22 witness=option:--tags -->
 
-**Planned, not available yet** (epic rsm-141.22). Annotations will let one baseline resume produce several tailored resumes, by marking which items are essential and which suit which kind of job. This section will describe the syntax and the options of `build` that use it. Until then, a comment in your resume is ignored.
+**Planned, not available yet.** Annotations are planned as a way to produce several tailored resumes from one baseline. Nothing in this section works today. Until then, a comment in your resume is ignored.
 
 ## Profiles and position specs
 
-<!-- guide:planned rsm-141.23 witness=build:--spec -->
+<!-- guide:planned rsm-141.23 witness=option:--spec -->
 
-**Planned, not available yet** (epic rsm-141.23). A profile will be a reusable set of choices for a kind of position, and a position spec the choices for one application, so that a tailored resume can be rebuilt exactly. This section will describe both file formats and how they combine. Until then, nothing reads such files.
+**Planned, not available yet.** Profiles and position specs are planned. Nothing in this section works today, and nothing reads such files.
 
 ## Troubleshooting
 
-**`build` says the style is unknown.** [`unknown-style`](#code-unknown-style): the name is in neither `--styles-dir` nor the built-in styles. Run `resume styles` to see the names, and check the spelling.
+**`build` says the style is unknown.** The name is in neither `--styles-dir` nor the built-in styles. Run `resume styles` to see the names, and check the spelling. `resume check` reports the same problem as [`unknown-style`](#code-unknown-style).
 
-**The resume needs more pages than you want.** [`page-limit-exceeded`](#code-page-limit-exceeded) appears when you pass `--max-pages`. Cut content, or choose a style with tighter spacing. The PDF is still written so you can see where it overflows. If the last page is less than 15% full, [`sparse-last-page`](#code-sparse-last-page) says so: trimming a little may bring the resume back to one fewer page.
+**The resume needs more pages than you want.** [`page-limit-exceeded`](#code-page-limit-exceeded) appears when you pass `--max-pages`. Cut content, or choose a style with tighter spacing. The PDF is still written so you can see where it overflows. If the last page is nearly empty, [`sparse-last-page`](#code-sparse-last-page) says so: trimming a little may bring the resume back to one fewer page.
 
-**A role or era heading sits at the foot of a page.** [`heading-near-page-bottom`](#code-heading-near-page-bottom) means a heading starts in the bottom 8% of a page. The built-in styles never leave a heading alone there, because it moves to the next page with its first bullet, but it can still sit close to the foot with only a line or two under it. Add a page break before it, or tighten the text above so it moves up. A style of your own that does not use the shared components can strand a heading completely, which this finding also catches.
+**A role or era heading sits at the foot of a page.** [`heading-near-page-bottom`](#code-heading-near-page-bottom) means a heading starts near the foot of a page. The built-in styles never leave a heading alone there, because it moves to the next page with its first bullet, but it can still sit close to the foot with only a line or two under it. Add a page break before it, or tighten the text above so it moves up. A style of your own that keeps the shared components' markers but drops their keep-with-next behavior can strand a heading, and this finding catches that. A style with no markers is not checked at all.
 
 **One block is taller than a page.** [`content-overflows-page`](#code-content-overflows-page): a single bullet, longer than a whole page, cannot be kept whole. Shorten it.
 
-**The fonts are not the ones you expected.** Look at the `fonts:` line after a build, and see [Fonts](#fonts). A note, [`font-fallback-metric`](#code-font-fallback-metric), is normal and harmless; a warning, [`font-fallback-layout`](#code-font-fallback-layout), means the page count may change.
+**The fonts are not the ones you expected.** Look at the `fonts:` line after a build, and see [Fonts](#fonts). The note [`font-fallback-metric`](#code-font-fallback-metric) is normal and harmless, and only `--format json` shows it; a warning, [`font-fallback-layout`](#code-font-fallback-layout), means the page count may change.
 
-**`build` cannot write the PDF.** [`output-not-writable`](#code-output-not-writable): the `--out` path is a file, or is read-only. Choose another directory with `-o`. On Windows, a PDF that is open in a viewer cannot be replaced; close it and build again.
+**`build` cannot write the PDF.** The `--out` path is a file, or is read-only; `resume check` reports it as [`output-not-writable`](#code-output-not-writable). Choose another directory with `-o`. On Windows, a PDF that is open in a viewer cannot be replaced; close it and build again.
 
-**A style you edited fails.** [`typst-error`](#code-typst-error) carries Typst's own message with the line in your style. [`style-missing-main`](#code-style-missing-main) means the style directory has no `style.typ`.
+**A style you edited fails.** [`typst-error`](#code-typst-error) carries Typst's own message with the line in your style. A style directory with no `style.typ` is an error from `build`, and `resume check` reports it as [`style-missing-main`](#code-style-missing-main).
 
 **You are not sure what a finding means.** `resume doctor --explain CODE` explains any of them.
 
 ## Appendix: diagnostic codes
 
-Every finding has a stable code. The tables below are generated from the program, so they are always current. Each says how serious a finding is by default and what it means; `resume doctor --explain CODE` gives the reasoning and an example.
+Every finding has a stable code. The tables below are generated from the program, and a test fails when they drift from it. Each says how serious a finding is by default and what it means; `resume doctor --explain CODE` gives the reasoning and an example.
 
 <!-- guide:generated codes -->
 
@@ -657,6 +675,6 @@ The environment: styles, fonts, and the output location. `doctor` and `check` re
 ## Where to read more
 
 - [The architecture notes](../ref/Resume-RS-Architecture.md): why the program is built the way it is. For people changing it.
-- [The pragmatic style's README](../styles/pragmatic/README.md) and [the mono style's README](../styles/mono/README.md): how each differs from the template it follows, and why.
+- [The pragmatic style's README](../styles/pragmatic/README.md), [the mono style's README](../styles/mono/README.md), and [the experienced style's README](../styles/experienced/README.md): how each differs from the template it follows, and why.
 - [Font licenses](../fonts/LICENSES.md): the notices for the bundled fonts.
 - [The Typst reference](https://typst.app/docs/reference/): everything about writing a style.

@@ -4,6 +4,8 @@
 use std::collections::BTreeSet;
 
 use pretty_assertions::assert_eq;
+use resume::cli::Cli;
+use resume::diagnostics::Severity;
 use resume::diagnostics::code::{Category, DiagnosticCode};
 use strum::IntoEnumIterator;
 
@@ -22,6 +24,11 @@ enum Kind {
     ThemeLine,
 }
 
+/// Decides how an example is checked, from the code's category and the shape of its `before`.
+///
+/// Layout and Setup examples are a `resume ...` command line or, when they do not start with `resume `, one line of
+/// a style's `theme.typ`. A Layout or Setup example that is neither (a resume fragment, say) would be run as a theme
+/// line and fail with a message about fonts: give it a `resume ...` command, or extend this function.
 fn kind_of(code: DiagnosticCode, before: &str) -> Kind {
     match code.category() {
         Category::Format | Category::Content => Kind::Markdown,
@@ -60,6 +67,34 @@ fn markdown_reports(piece: &str, code: &str) -> bool {
         .any(|text| markdown_codes(text).contains(code))
 }
 
+/// True when `code`, as the report names it, is an error by default.
+fn is_error(code: &str) -> bool {
+    DiagnosticCode::iter().any(|c| c.to_string() == code && c.default_severity() == Severity::Error)
+}
+
+/// The error codes among `codes`.
+fn errors_in(codes: &BTreeSet<String>) -> BTreeSet<String> {
+    codes.iter().filter(|c| is_error(c)).cloned().collect()
+}
+
+/// For each of the surroundings of `before` that reports `code`, the errors `after` adds there. The fix is clean
+/// when some such surrounding gets no new error: the piece may only make sense inside a role, say.
+fn new_errors_by_surrounding(before: &str, after: &str, code: &str) -> Vec<Vec<String>> {
+    let (befores, afters) = (surroundings(before), surroundings(after));
+    befores
+        .iter()
+        .zip(&afters)
+        .filter(|(text, _)| markdown_codes(text).contains(code))
+        .map(|(before_text, after_text)| {
+            let had = errors_in(&markdown_codes(before_text));
+            errors_in(&markdown_codes(after_text))
+                .difference(&had)
+                .cloned()
+                .collect()
+        })
+        .collect()
+}
+
 fn finding_codes(json_lines: &str) -> BTreeSet<String> {
     json_lines
         .lines()
@@ -81,7 +116,9 @@ fn command_codes(work: &Workspace, resume_md: &std::path::Path, command: &str) -
             other => other.to_string(),
         })
         .collect();
-    args.extend(["--format".to_string(), "json".to_string()]);
+    if !args.iter().any(|arg| arg == "--format") {
+        args.extend(["--format".to_string(), "json".to_string()]);
+    }
     // The examples do not depend on installed fonts, and scanning them is slow and differs between machines.
     if !args.iter().any(|arg| arg == "--fonts") {
         args.extend(["--fonts".to_string(), "bundled".to_string()]);
@@ -121,8 +158,18 @@ fn theme_line_codes(line: &str) -> BTreeSet<String> {
     finding_codes(&run.stdout)
 }
 
-/// The examples whose `after` cannot be run: its fix is to install fonts, which a test cannot do.
-const AFTER_NEEDS_INSTALLED_FONTS: [DiagnosticCode; 1] = [DiagnosticCode::FontFallbackMetric];
+/// The examples whose `after` is parsed but not run. `font-fallback-metric`'s fix is `--font-path <DIR>`, which the
+/// harness cannot run: it forces `--fonts bundled` so results do not depend on the machine, and the command line
+/// refuses `--font-path` together with `--fonts bundled`. The note also never appears on a machine that has the
+/// preferred font installed, so there is no run whose output could show it gone.
+const AFTER_IS_ONLY_PARSED: [DiagnosticCode; 1] = [DiagnosticCode::FontFallbackMetric];
+
+/// Why a command example is not accepted by the command line, or `None` when it is.
+fn command_line_problem(command: &str) -> Option<String> {
+    Cli::try_parse_validated(command.split_whitespace())
+        .err()
+        .map(|e| e.to_string().lines().next().unwrap_or_default().to_string())
+}
 
 #[test]
 fn every_example_reproduces_its_code_and_its_fix_removes_it() {
@@ -136,11 +183,39 @@ fn every_example_reproduces_its_code_and_its_fix_removes_it() {
         };
         let id = code.to_string();
         let (reproduces, fixed) = match kind_of(code, before) {
-            Kind::Markdown => (markdown_reports(before, &id), !markdown_reports(after, &id)),
-            Kind::Command => (
-                command_codes(&work, &resume_md, before).contains(&id),
-                AFTER_NEEDS_INSTALLED_FONTS.contains(&code) || !command_codes(&work, &resume_md, after).contains(&id),
-            ),
+            Kind::Markdown => {
+                // The fix must not trade the finding for a new error where the finding was reproduced.
+                let by_surrounding = new_errors_by_surrounding(before, after, &id);
+                if !by_surrounding.is_empty() && by_surrounding.iter().all(|new| !new.is_empty()) {
+                    problems.push(format!(
+                        "{id}: the `after` example adds the error(s) {by_surrounding:?}: {after:?}"
+                    ));
+                }
+                (!by_surrounding.is_empty(), !markdown_reports(after, &id))
+            }
+            Kind::Command => {
+                for (which, command) in [("before", before), ("after", after)] {
+                    if let Some(why) = command_line_problem(command) {
+                        problems.push(format!(
+                            "{id}: the `{which}` command is not accepted ({why}): {command:?}"
+                        ));
+                    }
+                }
+                let reported = command_codes(&work, &resume_md, before);
+                let fixed = if AFTER_IS_ONLY_PARSED.contains(&code) {
+                    true
+                } else {
+                    let now = command_codes(&work, &resume_md, after);
+                    let new_errors: Vec<_> = errors_in(&now).difference(&errors_in(&reported)).cloned().collect();
+                    if !new_errors.is_empty() {
+                        problems.push(format!(
+                            "{id}: the `after` command adds the error(s) {new_errors:?}: {after:?}"
+                        ));
+                    }
+                    !now.contains(&id)
+                };
+                (reported.contains(&id), fixed)
+            }
             Kind::ThemeLine => (
                 theme_line_codes(before).contains(&id),
                 !theme_line_codes(after).contains(&id),
@@ -156,7 +231,11 @@ fn every_example_reproduces_its_code_and_its_fix_removes_it() {
             problems.push(format!("{id}: the `after` example still produces `{id}`: {after:?}"));
         }
     }
-    assert!(checked >= 30, "the check ran on only {checked} examples");
+    let with_examples = DiagnosticCode::iter().filter(|c| c.advice().example.is_some()).count();
+    assert!(
+        checked > 0 && checked == with_examples,
+        "the check ran on {checked} of {with_examples} examples"
+    );
     assert_eq!(
         problems,
         Vec::<String>::new(),
@@ -171,6 +250,16 @@ fn a_command_example_that_the_command_line_does_not_accept_fails_loudly() {
     let work = Workspace::new();
     let resume_md = work.file("resume.md", &workspace::fixture("full.md"));
     let _ = command_codes(&work, &resume_md, "resume doctor resume.md --no-such-option");
+}
+
+#[test]
+fn an_after_command_that_the_command_line_rejects_or_a_fix_that_adds_an_error_is_caught() {
+    assert!(command_line_problem("resume check resume.md --font-path ~/Fonts").is_none());
+    assert!(command_line_problem("resume check resume.md --font-pth ~/Fonts").is_some());
+    assert!(command_line_problem("complete nonsense (((").is_some());
+    let found = |piece: &str| errors_in(&markdown_codes(&surroundings(piece)[2]));
+    assert!(found("### Acme | Engineer | 2015 – 2017\n\n- Cut 40 to 9.").contains("role-separator"));
+    assert!(found("### Acme · Engineer · 2015 – 2017\n\n- Cut 40 to 9.").is_empty());
 }
 
 #[test]
