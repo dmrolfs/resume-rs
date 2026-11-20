@@ -169,6 +169,10 @@ rely on them, and on `resume check` never writing a file.
 Open an issue at <https://github.com/dmrolfs/resume-rs/issues> with the output of `resume --version`, the command you
 ran, and the report. Remove personal details from any text you paste: a resume holds a phone number and an address.
 
+## Using it
+
+Build and install the program from a checkout with `cargo install --path .` (it needs Rust 1.92 or later). The [User Guide](docs/User-Guide.md) says how to write a resume, check it, choose a style and a font, and what every command does.
+
 ## Development
 
 ```bash

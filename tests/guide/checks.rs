@@ -2,6 +2,8 @@
 //! ABOUTME: They read hooks (headings, table cells, fence info strings, markers) and compare sets, never wording.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
+use std::sync::LazyLock;
 
 use regex::Regex;
 use resume::cli::Cli;
@@ -9,10 +11,17 @@ use resume::diagnostics::DiagnosticCode;
 use resume::diagnostics::code::Category;
 use strum::IntoEnumIterator;
 
-use crate::extract::{Guide, Heading, plain};
+use crate::extract::{Fence, Guide, Heading, plain};
 use crate::facts::{self, CliOption};
 
+fn regex(pattern: &str) -> Regex {
+    Regex::new(pattern).unwrap_or_else(|e| panic!("`{pattern}` is not a valid pattern: {e}"))
+}
+
 /// The headings the guide must have, in order: `(level, text)`. Each exactly once.
+///
+/// `Annotations` and `Profiles and position specs` stay required after their features land: the stub is then
+/// replaced by the real section, and the `guide:planned` marker is deleted.
 pub const REQUIRED: [(usize, &str); 18] = [
     (2, "Quick start"),
     (2, "Writing your resume"),
@@ -26,7 +35,7 @@ pub const REQUIRED: [(usize, &str); 18] = [
     (3, "Writing a style"),
     (2, "Commands"),
     (3, "Global options"),
-    (3, "Planned commands"),
+    (3, "Environment variables"),
     (2, "Annotations"),
     (2, "Profiles and position specs"),
     (2, "Troubleshooting"),
@@ -43,8 +52,12 @@ fn section<'a>(guide: &'a Guide, level: usize, text: &str) -> Result<&'a Heading
         .ok_or_else(|| format!("the guide has no `{} {text}` heading", "#".repeat(level)))
 }
 
-fn words(info: &str) -> Vec<&str> {
-    info.split_whitespace().collect()
+/// The first table under `heading`, or the problem to report.
+fn first_table<'a>(guide: &'a Guide, heading: &Heading) -> Result<&'a crate::extract::Table, String> {
+    guide
+        .tables_in(Guide::range(heading))
+        .next()
+        .ok_or_else(|| format!("`{}` has no table", heading.text))
 }
 
 // ---- required headings and planned sections --------------------------------------------------------
@@ -83,26 +96,28 @@ pub fn required_headings(guide: &Guide) -> Vec<String> {
     problems
 }
 
-/// What a planned section's witness looks like: `build:--tags` (an option) or `command:watch` (a command).
+/// Whether a planned section's witness exists yet: `command:watch` (a command) or `option:--tags` (an option of
+/// any command, or a global one). `None` when the witness is not of either form.
 fn witness_exists(witness: &str) -> Option<bool> {
     let (kind, value) = witness.split_once(':')?;
     match kind {
         "command" => Some(facts::commands().contains_key(value)),
-        "build" => Some(
-            facts::commands()["build"]
+        "option" => Some(
+            facts::every_long_option()
                 .iter()
-                .any(|o| !o.positional && format!("--{}", o.name) == value),
+                .any(|name| format!("--{name}") == value),
         ),
         _ => None,
     }
 }
 
+/// A planned section is a stub: no examples, no option names, short, and it names a witness that does not exist yet.
+///
+/// When the witness appears, the feature has arrived: the section must be written and its marker deleted.
 pub fn planned_sections(guide: &Guide) -> Vec<String> {
+    static OPTION: LazyLock<Regex> = LazyLock::new(|| regex(r"`--[a-z]"));
     let mut problems = Vec::new();
-    let option = Regex::new(r"`--[a-z]").expect("a valid regex");
-    let mut seen = 0;
     for marker in guide.markers.iter().filter(|m| m.kind == "planned") {
-        seen += 1;
         let Some(heading) = guide
             .headings
             .iter()
@@ -119,7 +134,7 @@ pub fn planned_sections(guide: &Guide) -> Vec<String> {
                 heading.text
             ));
         }
-        if option.is_match(body) {
+        if OPTION.is_match(body) {
             problems.push(format!(
                 "`{}` is planned and names an option: it cannot, the option does not exist",
                 heading.text
@@ -141,15 +156,13 @@ pub fn planned_sections(guide: &Guide) -> Vec<String> {
                 args.first().unwrap_or(&"its bead")
             )),
             Some(Some(false)) => {}
-            Some(None) => problems.push(format!("line {}: the witness `{}` is not `command:NAME` or `build:--OPTION`", marker.line, witness.unwrap_or_default())),
+            Some(None) => problems.push(format!(
+                "line {}: the witness `{}` is not `command:NAME` or `option:--NAME`",
+                marker.line,
+                witness.unwrap_or_default()
+            )),
             None => problems.push(format!("line {}: a planned marker needs `witness=KIND:VALUE`", marker.line)),
         }
-    }
-    if seen == 0 {
-        problems.push(
-            "the guide has no planned section: Annotations and Profiles and position specs are still planned"
-                .to_string(),
-        );
     }
     problems
 }
@@ -161,26 +174,60 @@ pub fn codes_of(text: &str) -> BTreeSet<String> {
     let parsed = resume::markdown::parse("example.md", text);
     let mut codes: BTreeSet<String> = parsed.diagnostics().iter().map(|d| d.code.to_string()).collect();
     codes.extend(
-        resume::doctor::content::lint_parsed(&parsed, std::path::Path::new("example.md"))
+        resume::doctor::content::lint_parsed(&parsed, Path::new("example.md"))
             .iter()
             .map(|d| d.code.to_string()),
     );
     codes
 }
 
+/// The fences in `text` whose language is `languages`, counted line by line without the Markdown parser, so a
+/// parser that loses fences is noticed by comparing with what the extractor found.
+fn fence_lines_in(text: &str, languages: &[&str]) -> Vec<(usize, Vec<String>)> {
+    let mut found = Vec::new();
+    let mut open: Option<(usize, Vec<String>, bool)> = None;
+    for (i, line) in text.replace("\r\n", "\n").lines().enumerate() {
+        let trimmed = line.trim_start();
+        if !(trimmed.starts_with("```") || trimmed.starts_with("~~~")) {
+            if let Some((_, body, true)) = open.as_mut() {
+                body.push(line.to_string());
+            }
+            continue;
+        }
+        match open.take() {
+            Some((at, body, wanted)) => {
+                if wanted {
+                    found.push((at, body));
+                }
+            }
+            None => {
+                let language = trimmed
+                    .trim_start_matches(['`', '~'])
+                    .split(|c: char| c.is_whitespace() || c == ',')
+                    .next()
+                    .unwrap_or_default()
+                    .to_lowercase();
+                open = Some((i + 1, Vec::new(), languages.contains(&language.as_str())));
+            }
+        }
+    }
+    found
+}
+
+/// A fence that holds resume Markdown. `md` and any capitalization count, so a spelling cannot skip the check.
+fn is_markdown(fence: &Fence) -> bool {
+    matches!(fence.language().as_str(), "markdown" | "md")
+}
+
 pub fn markdown_examples(guide: &Guide) -> Vec<String> {
     let mut problems = Vec::new();
     let (mut checked, mut clean_resume, mut unchecked) = (0, 0, 0);
-    for fence in guide
-        .fences
-        .iter()
-        .filter(|f| words(&f.info).first() == Some(&"markdown"))
-    {
-        let info = words(&fence.info);
+    for fence in guide.fences.iter().filter(|f| is_markdown(f)) {
+        let info = fence.words();
         let at = format!("line {}", fence.line);
-        let mode: Vec<&&str> = info
+        let mode: Vec<&String> = info
             .iter()
-            .filter(|w| matches!(**w, "resume" | "in-section" | "unchecked"))
+            .filter(|w| matches!(w.as_str(), "resume" | "in-section" | "unchecked"))
             .collect();
         if mode.len() != 1 {
             problems.push(format!(
@@ -188,7 +235,7 @@ pub fn markdown_examples(guide: &Guide) -> Vec<String> {
             ));
             continue;
         }
-        if *mode[0] == "unchecked" {
+        if mode[0] == "unchecked" {
             unchecked += 1;
             if guide
                 .headings
@@ -211,14 +258,14 @@ pub fn markdown_examples(guide: &Guide) -> Vec<String> {
         } else {
             expect.split(',').map(str::to_string).collect()
         };
-        let text = if *mode[0] == "in-section" {
+        let text = if mode[0] == "in-section" {
             format!("{SECTION_PREAMBLE}{}", fence.body)
         } else {
             fence.body.clone()
         };
         let found = codes_of(&text);
         checked += 1;
-        if *mode[0] == "resume" && expected.is_empty() {
+        if mode[0] == "resume" && expected.is_empty() {
             clean_resume += 1;
         }
         if found != expected {
@@ -245,9 +292,11 @@ pub fn markdown_examples(guide: &Guide) -> Vec<String> {
                 .to_string(),
         );
     }
-    if checked < 5 {
+    let direct = fence_lines_in(&guide.text, &["markdown", "md"]).len();
+    if checked + unchecked != direct {
         problems.push(format!(
-            "only {checked} checked Markdown examples: the extractor may be broken, or the guide has lost its examples"
+            "the extractor found {} Markdown examples but the text has {direct}: it may be broken, or an example has no mode",
+            checked + unchecked
         ));
     }
     problems
@@ -256,7 +305,7 @@ pub fn markdown_examples(guide: &Guide) -> Vec<String> {
 pub fn shell_examples(guide: &Guide) -> Vec<String> {
     let mut problems = Vec::new();
     let mut lines = 0;
-    for fence in guide.fences.iter().filter(|f| words(&f.info).first() == Some(&"sh")) {
+    for fence in guide.fences.iter().filter(|f| f.language() == "sh") {
         for (i, line) in fence.body.lines().enumerate() {
             let command = line.split(" #").next().unwrap_or(line).trim();
             if command.is_empty() || command.starts_with('#') {
@@ -282,9 +331,18 @@ pub fn shell_examples(guide: &Guide) -> Vec<String> {
             }
         }
     }
-    if lines < 5 {
+    let direct: usize = fence_lines_in(&guide.text, &["sh"])
+        .iter()
+        .map(|(_, body)| {
+            body.iter()
+                .filter(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'))
+                .count()
+        })
+        .sum();
+    // Lines the checks refused above are counted there; every line must be either checked or reported.
+    if lines + problems.len() < direct {
         problems.push(format!(
-            "only {lines} checked shell lines: the extractor may be broken, or the guide has lost its examples"
+            "the extractor found {lines} shell command lines but the text has {direct}: it may be broken"
         ));
     }
     problems
@@ -297,8 +355,9 @@ pub fn theme_keys(guide: &Guide) -> Vec<String> {
         Ok(h) => h,
         Err(e) => return vec![e],
     };
-    let Some(table) = guide.tables_in(Guide::range(heading)).next() else {
-        return vec!["`### Theme keys` has no table".to_string()];
+    let table = match first_table(guide, heading) {
+        Ok(t) => t,
+        Err(e) => return vec![e],
     };
     let styles_column = table.header.iter().position(|h| h == "Styles");
     let by_style = facts::theme_keys_by_style();
@@ -315,12 +374,6 @@ pub fn theme_keys(guide: &Guide) -> Vec<String> {
         documented.insert(key, styles);
     }
     let mut problems = Vec::new();
-    if documented.len() < 30 {
-        problems.push(format!(
-            "only {} theme keys documented: the table may have lost its rows",
-            documented.len()
-        ));
-    }
     if styles_column.is_none() {
         problems.push("the theme table needs a `Styles` column".to_string());
     }
@@ -350,52 +403,83 @@ pub fn theme_keys(guide: &Guide) -> Vec<String> {
     problems
 }
 
-/// Every `theme.a.b` the Typst sources read must be a key some theme defines, or a prefix of one.
-pub fn theme_reads_are_defined() -> Vec<String> {
-    let read = Regex::new(r"(?:^|[^/\w.])theme((?:\.[a-z][a-z-]*)+)").expect("a valid regex");
-    let defined: BTreeSet<String> = facts::theme_keys_by_style().into_values().flatten().collect();
-    let mut problems = Vec::new();
-    let mut seen = 0;
-    for relative in [
-        "styles/lib/components.typ",
-        "styles/pragmatic/style.typ",
-        "styles/mono/style.typ",
-    ] {
-        // Comments are prose and mention `theme.typ`; only code reads keys.
-        let code: String = facts::read(relative)
-            .lines()
-            .map(|line| line.split("//").next().unwrap_or_default())
-            .collect::<Vec<_>>()
-            .join("\n");
-        for cap in read.captures_iter(&code) {
-            // `theme.at("gutter-reach", default: 0pt)` calls a method on the dictionary; it reads no key.
-            if code[cap.get(0).map_or(0, |m| m.end())..].starts_with('(') {
-                continue;
-            }
+/// The key paths a Typst source reads from `theme`, as the guide writes them (`fonts.<role>.preferred`).
+///
+/// `theme.at("x", default: ...)` calls a method and reads no key, and comments are prose.
+pub fn theme_read_paths(typst: &str) -> BTreeSet<String> {
+    static READ: LazyLock<Regex> = LazyLock::new(|| regex(r"(?:^|[^/\w.])theme((?:\.[a-z][a-z-]*)+)"));
+    let code: String = typst
+        .lines()
+        .map(|line| line.split("//").next().unwrap_or_default())
+        .collect::<Vec<_>>()
+        .join("\n");
+    READ.captures_iter(&code)
+        .filter(|cap| !code[cap.get(0).map_or(0, |m| m.end())..].starts_with('('))
+        .map(|cap| {
             let path = cap[1].trim_start_matches('.').to_string();
-            seen += 1;
-            let normalized = if path.starts_with("fonts.") {
+            if path.starts_with("fonts.") {
                 match path.splitn(3, '.').nth(2) {
                     Some(field) => format!("fonts.<role>.{field}"),
                     None => "fonts.<role>".to_string(),
                 }
             } else {
-                path.clone()
-            };
-            let known = defined
-                .iter()
-                .any(|d| d == &normalized || d.starts_with(&format!("{normalized}.")));
-            if !known {
-                problems.push(format!("{relative} reads `theme.{path}`, which no theme defines"));
+                path
             }
+        })
+        .collect()
+}
+
+/// True when a theme that defines `defined` has the key `path`, or keys below it.
+fn theme_has(defined: &BTreeSet<String>, path: &str) -> bool {
+    defined.iter().any(|d| d == path || d.starts_with(&format!("{path}.")))
+}
+
+/// Every key the Typst `sources` (name and text) read must be one some theme defines, or a prefix of one.
+pub fn theme_reads_problems(sources: &[(String, String)], defined: &BTreeSet<String>) -> Vec<String> {
+    let mut problems = Vec::new();
+    for (name, typst) in sources {
+        let reads = theme_read_paths(typst);
+        if reads.is_empty() {
+            problems.push(format!("{name} reads no theme key: the pattern may be broken"));
+        }
+        // A key the source builds itself (`gutter-reach: reach`) is derived from the theme, not defined by it.
+        let derived = |path: &str| !path.contains('.') && typst.contains(&format!("{path}:"));
+        for path in reads.iter().filter(|p| !theme_has(defined, p) && !derived(p)) {
+            problems.push(format!("{name} reads `theme.{path}`, which no theme defines"));
         }
     }
-    if seen < 30 {
-        problems.push(format!(
-            "only {seen} theme reads found in the Typst sources: the pattern may be broken"
-        ));
-    }
     problems
+}
+
+/// The Typst sources that read a theme: the shared components and each built-in style's `style.typ`.
+pub fn typst_sources() -> Vec<(String, String)> {
+    std::iter::once("styles/lib/components.typ".to_string())
+        .chain(
+            facts::built_in_styles()
+                .into_iter()
+                .map(|s| format!("styles/{s}/style.typ")),
+        )
+        .map(|name| {
+            let text = facts::read(&name);
+            (name, text)
+        })
+        .collect()
+}
+
+pub fn theme_reads_are_defined() -> Vec<String> {
+    let defined: BTreeSet<String> = facts::theme_keys_by_style().into_values().flatten().collect();
+    theme_reads_problems(&typst_sources(), &defined)
+}
+
+/// The built-in styles whose theme has every key the shared components read: the ones the guide's example style
+/// can borrow a `theme.typ` from.
+pub fn styles_whose_theme_fits_the_components() -> BTreeSet<String> {
+    let reads = theme_read_paths(&facts::read("styles/lib/components.typ"));
+    facts::theme_keys_by_style()
+        .into_iter()
+        .filter(|(_, keys)| reads.iter().all(|path| theme_has(keys, path)))
+        .map(|(name, _)| name)
+        .collect()
 }
 
 pub fn components(guide: &Guide) -> Vec<String> {
@@ -403,8 +487,9 @@ pub fn components(guide: &Guide) -> Vec<String> {
         Ok(h) => h,
         Err(e) => return vec![e],
     };
-    let Some(table) = guide.tables_in(Guide::range(heading)).next() else {
-        return vec!["`### Shared components` has no table".to_string()];
+    let table = match first_table(guide, heading) {
+        Ok(t) => t,
+        Err(e) => return vec![e],
     };
     let documented: BTreeSet<String> = table.rows.iter().map(|r| plain(&r[0])).collect();
     let defined = facts::components();
@@ -417,12 +502,6 @@ pub fn components(guide: &Guide) -> Vec<String> {
     for name in documented.difference(&defined) {
         problems.push(format!(
             "the table documents component `{name}`, which styles/lib/components.typ does not define"
-        ));
-    }
-    if documented.len() < 20 {
-        problems.push(format!(
-            "only {} components documented: the table may have lost its rows",
-            documented.len()
         ));
     }
     problems
@@ -450,11 +529,103 @@ pub fn styles(guide: &Guide) -> Vec<String> {
     problems
 }
 
+/// The guide's last section must link each built-in style's README, and the repository's README must link the
+/// guide, so neither a fourth style nor the guide itself is left undiscoverable.
+pub fn reading_list(guide: &Guide, root_readme: &str) -> Vec<String> {
+    let mut problems = Vec::new();
+    match section(guide, 2, "Where to read more") {
+        Ok(heading) => {
+            for style in facts::built_in_styles() {
+                let wanted = format!("../styles/{style}/README.md");
+                if !guide
+                    .links
+                    .iter()
+                    .any(|l| l.url == wanted && heading.start < l.start && l.start < heading.end)
+                {
+                    problems.push(format!("`## Where to read more` must link `{wanted}`"));
+                }
+            }
+        }
+        Err(e) => problems.push(e),
+    }
+    if !root_readme.contains("docs/User-Guide.md") {
+        problems.push("README.md must link docs/User-Guide.md".to_string());
+    }
+    problems
+}
+
+// ---- environment variables -------------------------------------------------------------------------
+
+/// The environment variables the program reads, from the string in each `var_os("NAME")` or `var("NAME")` of
+/// `src/`. Files named `*_tests.rs` hold test-only variables and are skipped.
+pub fn env_vars_read_by_the_program() -> BTreeSet<String> {
+    static READ: LazyLock<Regex> = LazyLock::new(|| regex(r#"\bvar(?:_os)?\(\s*"([A-Z][A-Z0-9_]*)"\s*\)"#));
+    fn walk(dir: &Path, found: &mut BTreeSet<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.filter_map(Result::ok) {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, found);
+            } else if path.extension().is_some_and(|e| e == "rs")
+                && !path
+                    .file_name()
+                    .is_some_and(|n| n.to_string_lossy().ends_with("_tests.rs"))
+            {
+                let text = std::fs::read_to_string(&path).unwrap_or_default();
+                found.extend(READ.captures_iter(&text).map(|c| c[1].to_string()));
+            }
+        }
+    }
+    let mut found = BTreeSet::new();
+    walk(&crate::root().join("src"), &mut found);
+    found
+}
+
+/// Every environment variable the program reads is named in backticks under `### Environment variables`.
+pub fn environment_variables(guide: &Guide, read: &BTreeSet<String>) -> Vec<String> {
+    let heading = match section(guide, 3, "Environment variables") {
+        Ok(h) => h,
+        Err(e) => return vec![e],
+    };
+    let body = guide.body(heading);
+    let mut problems: Vec<String> = read
+        .iter()
+        .filter(|name| !body.contains(&format!("`{name}")))
+        .map(|name| format!("`### Environment variables` does not document `{name}`, which the program reads"))
+        .collect();
+    if read.is_empty() {
+        problems.push("no environment variable found in src/: the scan may be broken".to_string());
+    }
+    problems
+}
+
 // ---- commands and options --------------------------------------------------------------------------
 
-/// The first cell of an option row, as the user types it, without backticks.
-fn key_of(cell: &str) -> String {
-    plain(cell)
+/// The default a row states, as `default `X``: every one of them, in the order written.
+fn stated_defaults(row_text: &str) -> Vec<String> {
+    static DEFAULT: LazyLock<Regex> = LazyLock::new(|| regex(r"(?i)\bdefault `([^`]+)`"));
+    DEFAULT.captures_iter(row_text).map(|c| c[1].to_string()).collect()
+}
+
+/// The short options a first cell shows: `-o, --out <DIR>` shows `o`.
+fn shown_shorts(cell: &str) -> BTreeSet<char> {
+    cell.split(|c: char| c.is_whitespace() || c == ',')
+        .filter_map(|token| {
+            let mut chars = token.strip_prefix('-')?.chars();
+            match (chars.next(), chars.next()) {
+                (Some(letter), None) if letter.is_ascii_alphabetic() => Some(letter),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// The long options a first cell shows: `-o, --out <DIR>` shows `--out`.
+fn shown_longs(cell: &str) -> Vec<String> {
+    cell.split(|c: char| !(c.is_alphanumeric() || c == '-'))
+        .filter(|w| w.starts_with("--") && w.len() > 2)
+        .map(str::to_string)
+        .collect()
 }
 
 fn check_option_rows(label: &str, options: &[CliOption], rows: &[Vec<String>]) -> Vec<String> {
@@ -462,28 +633,23 @@ fn check_option_rows(label: &str, options: &[CliOption], rows: &[Vec<String>]) -
     for option in options {
         let key = option.key();
         let Some(row) = rows.iter().find(|r| {
-            let cell = key_of(&r[0]);
+            let cell = plain(&r[0]);
             if option.positional {
                 cell.contains(&key)
             } else {
-                cell.split(|c: char| !(c.is_alphanumeric() || c == '-'))
-                    .any(|w| w == key)
+                shown_longs(&cell).contains(&key)
             }
         }) else {
             problems.push(format!("{label}: `{key}` is not documented: add a row to its table"));
             continue;
         };
-        let cell = key_of(&row[0]);
-        if let Some(short) = option.short {
-            // A whole token: `--out` contains `-o` and must not count as showing it.
-            let shown = cell
-                .split(|c: char| c.is_whitespace() || c == ',')
-                .any(|token| token == format!("-{short}"));
-            if !shown {
-                problems.push(format!(
-                    "{label}: the row for `{key}` should show its short form `-{short}`"
-                ));
-            }
+        let cell = plain(&row[0]);
+        if let Some(short) = option.short
+            && !shown_shorts(&cell).contains(&short)
+        {
+            problems.push(format!(
+                "{label}: the row for `{key}` should show its short form `-{short}`"
+            ));
         }
         let text = row.join(" ");
         for value in &option.values {
@@ -493,10 +659,17 @@ fn check_option_rows(label: &str, options: &[CliOption], rows: &[Vec<String>]) -
                 ));
             }
         }
-        if let Some(default) = option.default.as_ref().filter(|d| !text.contains(&format!("`{d}`"))) {
-            problems.push(format!(
-                "{label}: the row for `{key}` must name its default `{default}` in backticks"
-            ));
+        // The default is the one the row states as ``default `X` ``, not any value that is also listed.
+        let stated = stated_defaults(&text);
+        match (&option.default, stated.as_slice()) {
+            (Some(default), [only]) if only == default => {}
+            (Some(default), _) => problems.push(format!(
+                "{label}: the row for `{key}` must state its default as ``default `{default}` `` (it states {stated:?})"
+            )),
+            (None, []) => {}
+            (None, _) => problems.push(format!(
+                "{label}: the row for `{key}` states a default {stated:?}, but the option has none"
+            )),
         }
         if option.repeatable && !option.positional && !text.contains("repeat") {
             problems.push(format!(
@@ -505,16 +678,26 @@ fn check_option_rows(label: &str, options: &[CliOption], rows: &[Vec<String>]) -
         }
     }
     // A row for an option the command does not have documents something that does not exist.
-    let keys: BTreeSet<String> = options.iter().map(CliOption::key).collect();
     for row in rows {
-        for word in key_of(&row[0])
-            .split(|c: char| !(c.is_alphanumeric() || c == '-'))
-            .filter(|w| w.starts_with("--"))
-        {
-            if !keys.contains(word) {
+        let cell = plain(&row[0]);
+        let longs = shown_longs(&cell);
+        for word in &longs {
+            if !options.iter().any(|o| &o.key() == word) {
                 problems.push(format!(
                     "{label}: the guide documents `{word}`, which this command does not have"
                 ));
+            }
+        }
+        // And a short form must be the one the long option has.
+        for long in &longs {
+            if let Some(option) = options.iter().find(|o| &o.key() == long) {
+                let shown = shown_shorts(&cell);
+                let wanted: BTreeSet<char> = option.short.into_iter().collect();
+                for extra in shown.difference(&wanted) {
+                    problems.push(format!(
+                        "{label}: the row for `{long}` shows `-{extra}`, which it does not have"
+                    ));
+                }
             }
         }
     }
@@ -566,24 +749,24 @@ pub fn commands(guide: &Guide) -> Vec<String> {
         Err(e) => problems.push(e),
     }
 
-    // No `--option` anywhere in the Commands section may be one that does not exist.
+    // No `--option` or `-x` anywhere in the Commands section may be one that does not exist.
+    static LONG: LazyLock<Regex> = LazyLock::new(|| regex(r"`(--[a-z][a-z-]*)"));
+    static SHORT: LazyLock<Regex> = LazyLock::new(|| regex(r"`-([A-Za-z])`"));
     let every = facts::every_long_option();
-    let long = Regex::new(r"`(--[a-z][a-z-]*)").expect("a valid regex");
-    for cap in long.captures_iter(guide.body(commands_heading)) {
+    let shorts = facts::every_short_option();
+    let body = guide.body(commands_heading);
+    for cap in LONG.captures_iter(body) {
         let name = &cap[1];
         if !every.contains(name.trim_start_matches("--")) {
             problems.push(format!("the Commands section mentions `{name}`, which no command has"));
         }
     }
-
-    // A planned command is allowed only with a marker that names a witness, and only while it does not exist.
-    if let Ok(planned) = section(guide, 3, "Planned commands") {
-        let markers: Vec<_> = guide
-            .markers_in(Guide::range(planned))
-            .filter(|m| m.kind == "planned")
-            .collect();
-        if markers.is_empty() {
-            problems.push("`### Planned commands` has no `guide:planned` marker".to_string());
+    for cap in SHORT.captures_iter(body) {
+        let letter = cap[1].chars().next().unwrap_or_default();
+        if !shorts.contains(&letter) {
+            problems.push(format!(
+                "the Commands section mentions `-{letter}`, which no command has"
+            ));
         }
     }
     problems
@@ -591,8 +774,8 @@ pub fn commands(guide: &Guide) -> Vec<String> {
 
 // ---- diagnostics: the generated appendix and the links to codes ----------------------------------------
 
-const START: &str = "<!-- guide:generated codes -->";
-const END: &str = "<!-- /guide:generated -->";
+pub const START: &str = "<!-- guide:generated codes -->";
+pub const END: &str = "<!-- /guide:generated -->";
 
 /// What the appendix between the markers must say, from the code.
 pub fn render_code_tables() -> String {
@@ -658,6 +841,25 @@ pub fn code_tables(guide: &Guide) -> Vec<String> {
     vec!["the diagnostic code tables are out of date with the code (a code was added, removed, or changed). Regenerate them with: cargo test --test guide -- --ignored bless_guide_tables".to_string()]
 }
 
+/// How many links the text has, counted without the Markdown parser: `](` outside fenced blocks and code spans.
+pub fn links_in_text(text: &str) -> usize {
+    static DOUBLE_SPAN: LazyLock<Regex> = LazyLock::new(|| regex(r"``.+?``"));
+    static SPAN: LazyLock<Regex> = LazyLock::new(|| regex(r"`[^`\n]*`"));
+    let mut outside = String::new();
+    let mut in_fence = false;
+    for line in text.replace("\r\n", "\n").lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            in_fence = !in_fence;
+        } else if !in_fence {
+            outside.push_str(line);
+            outside.push('\n');
+        }
+    }
+    let outside = DOUBLE_SPAN.replace_all(&outside, "");
+    SPAN.replace_all(&outside, "").matches("](").count()
+}
+
 pub fn links(guide: &Guide) -> Vec<String> {
     let mut problems = Vec::new();
     let codes: BTreeSet<String> = DiagnosticCode::iter().map(|c| c.to_string()).collect();
@@ -673,9 +875,11 @@ pub fn links(guide: &Guide) -> Vec<String> {
             if !slugs.contains(target) && !anchors.contains(target) {
                 problems.push(format!("{at}: the link `{}` points at no heading", link.url));
             }
+        } else if link.url.is_empty() {
+            problems.push(format!("{at}: a link with no target"));
         } else if !link.url.contains("://") && !link.url.starts_with("mailto:") {
             let path = link.url.split('#').next().unwrap_or_default();
-            if !crate::root().join("docs").join(path).exists() {
+            if path.is_empty() || !crate::root().join("docs").join(path).is_file() {
                 problems.push(format!(
                     "{at}: the link `{}` points at a file that does not exist",
                     link.url
@@ -683,8 +887,12 @@ pub fn links(guide: &Guide) -> Vec<String> {
             }
         }
     }
-    if guide.links.len() < 10 {
-        problems.push(format!("only {} links: the extractor may be broken", guide.links.len()));
+    let direct = links_in_text(&guide.text);
+    if guide.links.len() != direct {
+        problems.push(format!(
+            "the extractor found {} links but the text has {direct}: it may be broken",
+            guide.links.len()
+        ));
     }
     problems
 }
@@ -737,34 +945,95 @@ pub fn fonts(guide: &Guide) -> Vec<String> {
 
 /// The companies a guide example may name: those of the synthetic fixtures, and a few invented ones.
 pub fn allowed_companies() -> BTreeSet<String> {
-    let role = Regex::new(r"(?m)^### ([^\n·]+?) ·").expect("a valid regex");
-    let mut allowed: BTreeSet<String> = ["Acme", "Acme Corp", "Globex", "Initech", "Example Corp"]
-        .map(str::to_string)
-        .into();
-    let dir = crate::root().join("tests/fixtures");
-    for entry in std::fs::read_dir(dir).expect("fixtures").filter_map(Result::ok) {
-        if entry.path().extension().is_some_and(|e| e == "md") {
-            let text = std::fs::read_to_string(entry.path()).unwrap_or_default();
-            allowed.extend(role.captures_iter(&text).map(|c| c[1].trim().to_string()));
-        }
-    }
+    let mut allowed: BTreeSet<String> = [
+        "Acme",
+        "Acme Corp",
+        "Globex",
+        "Initech",
+        "Example Corp",
+        "Analytical Engines Ltd",
+        "Babbage & Co",
+        "University of London",
+    ]
+    .map(str::to_string)
+    .into();
+    allowed.extend(fixture_text().lines().filter_map(role_company).map(str::to_string));
     allowed
 }
 
+/// All the text of the synthetic fixtures: nothing in it is private, so a detail found there is not a leak.
+fn fixture_text() -> String {
+    let mut all = String::new();
+    let dir = crate::root().join("tests/fixtures");
+    for entry in std::fs::read_dir(dir).into_iter().flatten().filter_map(Result::ok) {
+        if entry.path().extension().is_some_and(|e| e == "md") {
+            all.push_str(&std::fs::read_to_string(entry.path()).unwrap_or_default());
+            all.push('\n');
+        }
+    }
+    all
+}
+
+/// The company of a role line `### Company · Title · Period` or `### Company | Title | Period`.
+fn role_company(line: &str) -> Option<&str> {
+    let rest = line.strip_prefix("### ")?;
+    let end = rest.find(['·', '|'])?;
+    Some(rest[..end].trim())
+}
+
 /// Hosts a link in the guide may have: reserved example domains and the documentation the guide points to.
-const ALLOWED_HOSTS: [&str; 6] = [
-    "example.com",
-    "example.org",
-    "example.net",
-    "typst.app",
+/// `github.com` is not here: the guide may link only the synthetic `github.com/ada`.
+const ALLOWED_HOSTS: [&str; 5] = ["example.com", "example.org", "example.net", "typst.app", "docs.rs"];
+
+/// The one GitHub address the guide may show: the synthetic user's.
+const ALLOWED_GITHUB: &str = "github.com/ada";
+
+/// Public names the guide may use, such as the product whose fonts a Mac may have installed. A resume that names
+/// one as an employer has not leaked anything when the guide names it too.
+const PUBLIC_NAMES: [&str; 1] = ["Microsoft"];
+
+/// Sites where the host is public but the path is a person: only `host/path` is private there.
+const PROFILE_HOSTS: [&str; 6] = [
     "github.com",
-    "docs.rs",
+    "gitlab.com",
+    "linkedin.com",
+    "twitter.com",
+    "x.com",
+    "medium.com",
 ];
 
+fn host_is_allowed(host: &str) -> bool {
+    ALLOWED_HOSTS
+        .iter()
+        .any(|allowed| host == *allowed || host.ends_with(&format!(".{allowed}")))
+}
+
+/// True when `address` (`github.com/ada`, `github.com/ada/repo`) is the synthetic GitHub user's.
+fn is_synthetic_github(address: &str) -> bool {
+    address == ALLOWED_GITHUB || address.starts_with(&format!("{ALLOWED_GITHUB}/"))
+}
+
+/// Fails when the guide contains something that looks like a real person's details.
+///
+/// What it checks: email addresses (only `example.*` hosts), web addresses with or without `https://` (only the
+/// example domains, the documentation hosts, and `github.com/ada`), phone-like numbers (only the reserved
+/// `+44 20 7946 0xxx` and `555-01xx` ranges), and, inside the example resumes, the name (only Ada Lovelace) and
+/// the company of every role line, written with `·` or `|` (only the fixtures' companies and a few invented ones).
+///
+/// What it cannot see: a real name, school, city, street address, or project written in prose, in a bullet, in an
+/// era line, or in a contact line. `private_details` and the ignored baseline test cover the owner's own resumes
+/// for those; for anyone else's details, review is the check.
 pub fn no_personal_content(guide: &Guide) -> Vec<String> {
+    static EMAIL: LazyLock<Regex> = LazyLock::new(|| regex(r"[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)"));
+    static ADDRESS: LazyLock<Regex> = LazyLock::new(|| {
+        regex(r"(?i)\b((?:[a-z0-9-]+\.)+(?:com|org|net|io|dev|me|app|co|ai|us|uk|de|ca|edu))\b(/[A-Za-z0-9_.~-]+)?")
+    });
+    static PHONE: LazyLock<Regex> = LazyLock::new(|| regex(r"\+?\(?\d[\d ()\-.]{7,}\d"));
+    static RESERVED: LazyLock<Regex> = LazyLock::new(|| regex(r"^\+44 20 7946 0\d{3}$|555-01\d\d$"));
+    static NAME: LazyLock<Regex> = LazyLock::new(|| regex(r"(?m)^# (.+)$"));
+
     let mut problems = Vec::new();
-    let email = Regex::new(r"[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)").expect("a valid regex");
-    for cap in email.captures_iter(&guide.text) {
+    for cap in EMAIL.captures_iter(&guide.text) {
         let host = cap[1].to_lowercase();
         if !["example.com", "example.org", "example.net"].iter().any(|h| host == *h) {
             problems.push(format!(
@@ -773,24 +1042,24 @@ pub fn no_personal_content(guide: &Guide) -> Vec<String> {
             ));
         }
     }
-    let url = Regex::new(r"https?://([A-Za-z0-9.-]+)").expect("a valid regex");
-    for cap in url.captures_iter(&guide.text) {
+    let without_emails = EMAIL.replace_all(&guide.text, "");
+    for cap in ADDRESS.captures_iter(&without_emails) {
         let host = cap[1].to_lowercase();
-        let ok = ALLOWED_HOSTS
-            .iter()
-            .any(|allowed| host == *allowed || host.ends_with(&format!(".{allowed}")));
+        let address = format!(
+            "{host}{}",
+            cap.get(2).map_or(String::new(), |m| m.as_str().to_lowercase())
+        );
+        let ok = host_is_allowed(&host) || (host == "github.com" && is_synthetic_github(&address));
         if !ok {
             problems.push(format!(
-                "the guide links to `{}`: only reserved example domains and documentation hosts are allowed",
+                "the guide has the address `{}`: only reserved example domains, documentation hosts, and github.com/ada are allowed",
                 &cap[0]
             ));
         }
     }
-    let phone = Regex::new(r"\+?\(?\d[\d ()\-.]{7,}\d").expect("a valid regex");
-    let reserved = Regex::new(r"^\+44 20 7946 0\d{3}$|555-01\d\d$").expect("a valid regex");
-    for m in phone.find_iter(&guide.text) {
+    for m in PHONE.find_iter(&guide.text) {
         let digits = m.as_str().chars().filter(char::is_ascii_digit).count();
-        if digits >= 9 && !reserved.is_match(m.as_str()) {
+        if digits >= 9 && !RESERVED.is_match(m.as_str()) {
             problems.push(format!(
                 "the guide has the phone-like number `{}`: use +44 20 7946 0xxx",
                 m.as_str()
@@ -798,13 +1067,11 @@ pub fn no_personal_content(guide: &Guide) -> Vec<String> {
         }
     }
     let companies = allowed_companies();
-    let role = Regex::new(r"(?m)^### ([^\n·]+?) ·").expect("a valid regex");
-    let name = Regex::new(r"(?m)^# (.+)$").expect("a valid regex");
     for fence in guide.fences.iter().filter(|f| {
-        let w = words(&f.info);
-        w.first() == Some(&"markdown") && (w.contains(&"resume") || w.contains(&"in-section"))
+        let w = f.words();
+        is_markdown(f) && (w.iter().any(|x| x == "resume") || w.iter().any(|x| x == "in-section"))
     }) {
-        for cap in name.captures_iter(&fence.body) {
+        for cap in NAME.captures_iter(&fence.body) {
             if cap[1].trim() != "Ada Lovelace" {
                 problems.push(format!(
                     "line {}: an example resume is named `{}`: use Ada Lovelace",
@@ -813,8 +1080,7 @@ pub fn no_personal_content(guide: &Guide) -> Vec<String> {
                 ));
             }
         }
-        for cap in role.captures_iter(&fence.body) {
-            let company = cap[1].trim();
+        for company in fence.body.lines().filter_map(role_company) {
             if !companies.contains(company) {
                 problems.push(format!(
                     "line {}: an example names the company `{company}`, which is not in tests/fixtures or the invented list: if it is invented, add it to `allowed_companies`",
@@ -826,32 +1092,74 @@ pub fn no_personal_content(guide: &Guide) -> Vec<String> {
     problems
 }
 
-/// The private details of real resumes, found in `dir`, that must never appear in the guide.
-pub fn private_details(dir: &std::path::Path) -> BTreeSet<String> {
-    let email = Regex::new(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}").expect("a valid regex");
-    let url = Regex::new(r"https?://([A-Za-z0-9.-]+)").expect("a valid regex");
-    let role = Regex::new(r"(?m)^### ([^\n·]+?) ·").expect("a valid regex");
-    let name = Regex::new(r"(?m)^# (.+)$").expect("a valid regex");
-    let mut details = BTreeSet::new();
-    for entry in std::fs::read_dir(dir)
-        .expect("the baselines directory")
-        .filter_map(Result::ok)
-    {
-        if entry.path().extension().is_none_or(|e| e != "md") {
-            continue;
+/// The private details of the real resumes in `dir` (`.md` files, searched in subdirectories too) that must never
+/// appear in the guide: names, companies, era names, emails, web addresses with the user's path, phone numbers
+/// (as digits only), and the places in contact lines. Details that also occur in the synthetic fixtures, or are
+/// public documentation hosts, are not private and are left out. Returns the details; callers print only counts.
+pub fn private_details(dir: &Path) -> BTreeSet<String> {
+    static EMAIL: LazyLock<Regex> = LazyLock::new(|| regex(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"));
+    static ADDRESS: LazyLock<Regex> =
+        LazyLock::new(|| regex(r"(?i)(?:https?://)?((?:[a-z0-9-]+\.)+[a-z]{2,})(/[A-Za-z0-9_.~-]+)?"));
+    static PHONE: LazyLock<Regex> = LazyLock::new(|| regex(r"\+?\(?\d[\d ()\-.]{7,}\d"));
+    static NAME: LazyLock<Regex> = LazyLock::new(|| regex(r"(?m)^# (.+)$"));
+    static ERA: LazyLock<Regex> = LazyLock::new(|| regex(r"(?m)^\*\*([^*·\n]+?)\s*·"));
+
+    fn collect(dir: &Path, texts: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).into_iter().flatten().filter_map(Result::ok) {
+            let path = entry.path();
+            if path.is_dir() {
+                collect(&path, texts);
+            } else if path.extension().is_some_and(|e| e == "md") {
+                texts.extend(std::fs::read_to_string(&path).ok());
+            }
         }
-        let text = std::fs::read_to_string(entry.path()).unwrap_or_default();
-        details.extend(name.captures_iter(&text).map(|c| c[1].trim().to_string()));
-        details.extend(role.captures_iter(&text).map(|c| c[1].trim().to_string()));
-        details.extend(email.find_iter(&text).map(|m| m.as_str().to_string()));
-        details.extend(url.captures_iter(&text).map(|c| c[1].to_lowercase()));
     }
-    // A public host the guide itself links to (github.com, typst.app) is not private, however often a resume uses it.
+    let mut texts = Vec::new();
+    collect(dir, &mut texts);
+
+    let mut details = BTreeSet::new();
+    for text in &texts {
+        details.extend(NAME.captures_iter(text).map(|c| c[1].trim().to_string()));
+        details.extend(text.lines().filter_map(role_company).map(str::to_string));
+        details.extend(ERA.captures_iter(text).map(|c| c[1].trim().to_string()));
+        details.extend(EMAIL.find_iter(text).map(|m| m.as_str().to_string()));
+        details.extend(PHONE.find_iter(text).filter_map(|m| {
+            let digits: String = m.as_str().chars().filter(char::is_ascii_digit).collect();
+            (digits.len() >= 9).then_some(digits)
+        }));
+        let without_emails = EMAIL.replace_all(text, "");
+        for cap in ADDRESS.captures_iter(&without_emails) {
+            let host = cap[1].to_lowercase();
+            if host_is_allowed(&host) {
+                continue;
+            }
+            let on_profile_site = PROFILE_HOSTS
+                .iter()
+                .any(|p| host == *p || host.ends_with(&format!(".{p}")));
+            if !on_profile_site {
+                details.insert(host.clone());
+            }
+            if let Some(path) = cap.get(2) {
+                details.insert(format!("{host}{}", path.as_str().to_lowercase()));
+            }
+        }
+        // The contact line is the paragraph right after the name: its items without a link, a number, or an address.
+        if let Some(after_name) = text.split_once('\n').map(|(_, rest)| rest.trim_start()) {
+            let contact = after_name.lines().next().unwrap_or_default();
+            details.extend(
+                contact
+                    .split(" · ")
+                    .map(str::trim)
+                    .filter(|item| !item.contains(['@', '[', '/', '(']) && !item.chars().any(|c| c.is_ascii_digit()))
+                    .map(str::to_string),
+            );
+        }
+    }
+    let synthetic = fixture_text().to_lowercase();
     details.retain(|d| {
-        !ALLOWED_HOSTS
-            .iter()
-            .any(|host| d == host || d.ends_with(&format!(".{host}")))
+        d.chars().count() >= 4
+            && !synthetic.contains(&d.to_lowercase())
+            && !PUBLIC_NAMES.iter().any(|name| name.eq_ignore_ascii_case(d))
     });
-    details.retain(|d| d.chars().count() >= 4);
     details
 }
