@@ -747,6 +747,32 @@ mod tests {
     }
 
     #[test]
+    fn every_layout_finding_has_the_severity_of_its_code() {
+        let pages = [full_page(), page(Some(759.24 + 100.0)), page(Some(60.0))];
+        let probes = [role(0, "Acme", 1, 715.0)];
+        let fonts = [
+            fallback("body", Metrics::Different),
+            fallback("display", Metrics::Compatible),
+            FontResolution::Missing {
+                role: "mono".into(),
+                preferred: "A".into(),
+                fallback: "B".into(),
+            },
+        ];
+        let report = LayoutReport::from_input(&LayoutInput {
+            pages: &pages,
+            probes: &probes,
+            fonts: &fonts,
+            fonts_mode: FontsMode::Auto,
+            max_pages: Some(assert_ok!(PageLimit::try_new(2))),
+        });
+        assert!(report.diagnostics.len() >= 6, "{:?}", report.diagnostics);
+        for d in &report.diagnostics {
+            assert_eq!(d.severity, d.code.default_severity(), "{}", d.code);
+        }
+    }
+
+    #[test]
     fn findings_come_in_a_fixed_order() {
         let pages = [full_page(), page(Some(759.24 + 100.0)), page(Some(60.0))];
         let probes = [role(0, "Acme", 1, 715.0)];

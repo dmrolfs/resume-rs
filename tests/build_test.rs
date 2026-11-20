@@ -442,25 +442,42 @@ fn the_summary_marker_is_green_when_it_worked_and_red_when_it_did_not() {
 
 #[test]
 fn commands_never_touch_the_file_system_directly() {
-    // Every write goes through `output::Writer`, so `--dry-run` cannot be bypassed by a new command. Reading
-    // is fine.
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/commands");
-    for entry in assert_ok!(fs::read_dir(&dir)) {
-        let path = assert_ok!(entry).path();
-        let source = assert_ok!(fs::read_to_string(&path));
-        for forbidden in [
-            "fs::write",
-            "File::create",
-            "create_dir",
-            "OpenOptions",
-            "fs::copy",
-            "fs::rename",
-        ] {
-            assert!(
-                !source.contains(forbidden),
-                "{} writes the file system directly with `{forbidden}`",
-                path.display()
-            );
+    // Every write goes through `output::Writer`, so `--dry-run` cannot be bypassed by a new command, and
+    // `doctor --fix` and `check` cannot write behind the Writer's back. Reading is fine. This is a guard on
+    // the source text, not a proof: it cannot see a helper elsewhere that a command calls.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut scanned = 0;
+    for dir in ["commands", "doctor"] {
+        for entry in assert_ok!(fs::read_dir(root.join(dir))) {
+            let path = assert_ok!(entry).path();
+            let source = assert_ok!(fs::read_to_string(&path));
+            // Tests in these files may build their own fixtures.
+            let production = source.split("#[cfg(test)]\nmod tests").next().unwrap_or("");
+            scanned += 1;
+            for forbidden in [
+                "fs::write",
+                "File::create",
+                "create_dir",
+                "OpenOptions",
+                "fs::copy",
+                "fs::rename",
+                "fs::remove",
+                "hard_link",
+                "set_permissions",
+                "tempfile",
+                "NamedTempFile",
+                "File::options",
+            ] {
+                assert!(
+                    !production.contains(forbidden),
+                    "{} writes the file system directly with `{forbidden}`",
+                    path.display()
+                );
+            }
         }
     }
+    assert!(
+        scanned >= 10,
+        "the scan found only {scanned} files; did the layout move?"
+    );
 }

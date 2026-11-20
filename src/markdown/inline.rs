@@ -58,14 +58,20 @@ pub(crate) fn label_and_content(
     src: &Source<'_>,
     sink: &mut Sink<'_>,
 ) -> (Option<Vec<Inline>>, Vec<Inline>) {
-    let label_children = split_label(nodes).filter(|(children, _)| !label_is_empty(children));
-    let Some((children, rest)) = label_children else {
+    let Some((children, rest)) = split_bullet_label(nodes) else {
         return (None, convert_run(nodes, Run::Bullet, src, sink));
     };
     let mut label = convert_run(children, Run::Nested, src, sink);
     strip_trailing_colon(&mut label);
     let content = convert_run(rest, Run::Paragraph, src, sink);
     ((!label.is_empty()).then_some(label), content)
+}
+
+/// The children of a bullet's leading `**Label:**` and the nodes after it, or `None` when it has no label.
+///
+/// The one place that decides what a label is, so the model and the outline cannot disagree about it.
+pub(crate) fn split_bullet_label(nodes: &[InlineNode]) -> Option<(&[InlineNode], &[InlineNode])> {
+    split_label(nodes).filter(|(children, _)| !label_is_empty(children))
 }
 
 /// True when a label's text is only colons and whitespace, so the bold run is not a label at all.

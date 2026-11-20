@@ -3,7 +3,6 @@
 
 use std::fs;
 use std::path::Path;
-use std::sync::Arc;
 use std::time::Instant;
 
 use snafu::ResultExt;
@@ -14,13 +13,10 @@ use super::{BuildLine, Env, Io, Outcome};
 use crate::cli::{BuildArgs, Cli};
 use crate::diagnostics::{Diagnostic, DiagnosticCode, Sources, Summary};
 use crate::error::{Error, ReadInputSnafu};
-use crate::layout::LayoutReport;
-use crate::markdown::{Parsed, parse};
+use crate::markdown::Parsed;
 use crate::model::options::OutputFormat;
 use crate::output::{Overwrite, Planned, WriteMode, Writer, Written};
-use crate::style::{self, StyleSource};
-use crate::typeset::fonts::FontSet;
-use crate::typeset::{RenderOptions, Typesetter};
+use crate::pipeline::{Rendered, Session, Skip};
 
 /// The result being presented, including an operational failure after findings were computed.
 struct BuildResult<'a> {
@@ -42,9 +38,7 @@ struct Job<'a> {
     args: &'a BuildArgs,
     format: OutputFormat,
     cwd: &'a Path,
-    style: StyleSource,
-    fonts: Arc<FontSet>,
-    typesetter: Typesetter,
+    session: Session,
     writer: Writer,
 }
 
@@ -82,23 +76,13 @@ impl<'a> Job<'a> {
     /// Resolves the style and builds the font set once, so an unknown style or an unreadable font directory
     /// fails the whole run before any file is touched.
     fn prepare(cli: &Cli, args: &'a BuildArgs, env: &'a Env) -> Result<Self, Error> {
-        let render = &args.render;
-        let style = style::resolve(&render.style, render.styles_dir.as_deref())?;
-        let builder = render
-            .font_path
-            .iter()
-            .fold(FontSet::builder().mode(render.fonts), |builder, dir| {
-                builder.font_path(dir)
-            })
-            .env_paths(env.resume_font_path.as_deref());
-        let fonts = Arc::new(builder.build()?);
+        // `build` can do nothing without a style or fonts, unlike `doctor`, which reports them.
+        let session = Session::open(&args.render, env.resume_font_path.as_deref()).require_ready()?;
         Ok(Self {
             args,
             format: cli.format,
             cwd: &env.cwd,
-            style,
-            typesetter: Typesetter::new(Arc::clone(&fonts)),
-            fonts,
+            session,
             writer: Writer::new(if cli.dry_run {
                 WriteMode::DryRun
             } else {
@@ -124,22 +108,18 @@ impl<'a> Job<'a> {
 
     fn attempt(&self, file: &Path, started: Instant, out: &mut Reporter<'_, '_>) -> Result<Outcome, Error> {
         let text = fs::read_to_string(file).context(ReadInputSnafu { path: file })?;
-        let parsed = parse(file, &text);
+        let assessment = self.session.assess(file, &text, &self.args.render);
         let mut sources = out.sources();
         sources.insert(file, &text);
-        let Some(resume) = parsed.valid() else {
-            return Ok(self.without_pdf(file, &parsed, &sources, started, out));
-        };
-
-        let compiled = match self
-            .typesetter
-            .compile(resume, &self.style, RenderOptions::new(self.args.render.paper))
-        {
-            Ok(compiled) => compiled,
-            Err(error) => {
+        let parsed = &assessment.parsed;
+        let (compiled, layout) = match &assessment.rendered {
+            Rendered::Skipped(Skip::FormatErrors) => return Ok(self.without_pdf(file, parsed, &sources, started, out)),
+            // `prepare` required a ready session, so a setup failure cannot get here.
+            Rendered::Skipped(Skip::Setup) => unreachable!("build requires a ready session before any file"),
+            Rendered::Failed(error) => {
                 let findings: Vec<&Diagnostic> = parsed.diagnostics().iter().collect();
                 return Ok(self.present(
-                    BuildResult::failed(self.shown(file), &error),
+                    BuildResult::failed(self.shown(file), error),
                     started,
                     &findings,
                     &[],
@@ -147,24 +127,26 @@ impl<'a> Job<'a> {
                     out,
                 ));
             }
+            Rendered::LayoutFailed { compiled, error } => {
+                for style_file in compiled.sources() {
+                    sources.insert(&style_file.path, &style_file.text);
+                }
+                let findings: Vec<&Diagnostic> = parsed.diagnostics().iter().chain(compiled.warnings()).collect();
+                return Ok(self.present(
+                    BuildResult::failed(self.shown(file), error),
+                    started,
+                    &findings,
+                    &[],
+                    &sources,
+                    out,
+                ));
+            }
+            Rendered::Laid { compiled, layout } => (compiled, layout),
         };
         for style_file in compiled.sources() {
             sources.insert(&style_file.path, &style_file.text);
         }
         let mut findings: Vec<&Diagnostic> = parsed.diagnostics().iter().chain(compiled.warnings()).collect();
-        let layout = match LayoutReport::of(&compiled, &self.fonts, self.args.render.max_pages) {
-            Ok(layout) => layout,
-            Err(error) => {
-                return Ok(self.present(
-                    BuildResult::failed(self.shown(file), &error),
-                    started,
-                    &findings,
-                    &[],
-                    &sources,
-                    out,
-                ));
-            }
-        };
         findings.extend(&layout.diagnostics);
         let target = self.args.out.join(BuildArgs::pdf_name(file));
         // Delivery can fail after diagnostics exist. Present both rather than discarding the findings.
@@ -189,7 +171,7 @@ impl<'a> Job<'a> {
             }
         };
         let path = self.shown(&target);
-        let style = self.style.name().as_ref() as &str;
+        let style = self.style_name();
         let pages = compiled.page_count();
         let built = match written {
             Written::Wrote { .. } => Built::Wrote { path, style, pages },
@@ -212,6 +194,11 @@ impl<'a> Job<'a> {
             &sources,
             out,
         ))
+    }
+
+    /// The name of the style in use; the session was checked ready before any file was built.
+    fn style_name(&self) -> &str {
+        self.session.style().map_or("", |style| style.name().as_ref())
     }
 
     /// The input has errors, so there is no model to typeset: say so, and show the findings.

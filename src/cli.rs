@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use clap::error::ErrorKind;
 use clap::{Args, CommandFactory, Parser, Subcommand};
 
+use crate::diagnostics::DiagnosticCode;
 use crate::model::StyleName;
 use crate::model::options::{ColorMode, FontsMode, OutputFormat, PageLimit, Paper};
 
@@ -43,6 +44,10 @@ pub struct Cli {
 pub enum Command {
     /// Typeset one or more Markdown resumes into PDFs.
     Build(BuildArgs),
+    /// Check resumes, explain what is wrong with them and why it matters, and fix what is safe to fix.
+    Doctor(DoctorArgs),
+    /// The same report as `doctor`, which can never change a file; for scripts and hooks.
+    Check(CheckArgs),
     /// List the styles that can be chosen.
     Styles(StylesArgs),
     /// Copy a built-in style to a directory, to edit it.
@@ -89,6 +94,80 @@ pub struct BuildArgs {
 
     #[command(flatten)]
     pub render: RenderArgs,
+}
+
+/// What `doctor` and `check` assess, shared so the two reports cannot drift apart.
+#[derive(Debug, Args)]
+pub struct AssessArgs {
+    /// The directory `build` would write the PDFs to; it is checked, never written.
+    #[arg(short, long, default_value = "out", value_name = "DIR")]
+    pub out: PathBuf,
+
+    #[command(flatten)]
+    pub render: RenderArgs,
+}
+
+/// Arguments of `resume check`: no `--fix` and no `--explain`, so it cannot change a file by construction.
+#[derive(Debug, Args)]
+pub struct CheckArgs {
+    /// The Markdown resumes to check.
+    #[arg(required = true, value_name = "FILE")]
+    pub files: Vec<PathBuf>,
+
+    #[command(flatten)]
+    pub assess: AssessArgs,
+}
+
+/// Arguments of `resume doctor`.
+#[derive(Debug, Args)]
+pub struct DoctorArgs {
+    /// The Markdown resumes to check; not needed with `--explain`.
+    #[arg(required_unless_present = "explain", value_name = "FILE")]
+    pub files: Vec<PathBuf>,
+
+    #[command(flatten)]
+    pub assess: AssessArgs,
+
+    /// Apply the fixes that are safe: each keeps what the resume says and only changes how it is written.
+    #[arg(long, conflicts_with = "explain")]
+    pub fix: bool,
+
+    /// Explain a finding by its code, like `rustc --explain`, and exit.
+    #[arg(long, value_name = "CODE", conflicts_with_all = ["files", "fix"], value_parser = parse_code)]
+    pub explain: Option<DiagnosticCode>,
+}
+
+/// Reads a `--explain` argument, and for one that is not a code names the codes it is close to.
+fn parse_code(text: &str) -> Result<DiagnosticCode, String> {
+    use std::str::FromStr as _;
+    use strum::IntoEnumIterator as _;
+    if let Ok(code) = DiagnosticCode::from_str(text) {
+        return Ok(code);
+    }
+    let wanted = text.to_lowercase();
+    let mut close: Vec<(f64, DiagnosticCode)> = DiagnosticCode::iter()
+        .map(|code| {
+            let name = code.to_string();
+            // A prefix such as `period` matches every `period-*` code.
+            let score = if name.starts_with(&wanted) {
+                1.0
+            } else {
+                strsim::jaro_winkler(&wanted, &name)
+            };
+            (score, code)
+        })
+        .filter(|(score, _)| *score >= 0.85)
+        .collect();
+    close.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let names: Vec<String> = close.iter().take(3).map(|(_, code)| format!("`{code}`")).collect();
+    Err(if names.is_empty() {
+        format!("`{text}` is not a diagnostic code; every code is printed in the output of `resume check`")
+    } else {
+        format!(
+            "`{text}` is not a diagnostic code; did you mean {}?",
+            names.join(" or ")
+        )
+    })
 }
 
 /// The options that decide how a resume is rendered, shared by the commands that render.
@@ -142,6 +221,12 @@ impl Cli {
                 build.render.validate()?;
                 build.validate_outputs()
             }
+            // No PDF is written, so two inputs with the same name are fine.
+            Command::Doctor(doctor) => {
+                doctor.assess.render.validate()?;
+                doctor.validate_fix_inputs()
+            }
+            Command::Check(check) => check.assess.render.validate(),
             Command::Styles(_) | Command::ExportStyle(_) | Command::Licenses => Ok(()),
         }
     }
@@ -160,6 +245,33 @@ impl RenderArgs {
             return Err(usage_error(
                 "--font-path has no effect with --fonts bundled; use --fonts auto, or drop --font-path",
             ));
+        }
+        Ok(())
+    }
+}
+
+impl DoctorArgs {
+    /// `--fix` plans every file from the text it read, so the same file twice would be fixed twice from the same
+    /// original and the second write would fail. Compared by path as written; a link to the same file is caught
+    /// when the write finds the file changed.
+    fn validate_fix_inputs(&self) -> Result<(), clap::Error> {
+        if !self.fix {
+            return Ok(());
+        }
+        let mut seen: Vec<PathBuf> = Vec::new();
+        for file in &self.files {
+            // `components` keeps a leading `./`, which names the same file.
+            let normalized: PathBuf = file
+                .components()
+                .filter(|part| !matches!(part, std::path::Component::CurDir))
+                .collect();
+            if seen.contains(&normalized) {
+                return Err(usage_error(format!(
+                    "{} is given twice; with --fix each file is fixed once",
+                    file.display()
+                )));
+            }
+            seen.push(normalized);
         }
         Ok(())
     }
@@ -345,6 +457,109 @@ mod tests {
     #[test]
     fn inputs_with_different_names_are_accepted() {
         assert_ok!(parse(&["build", "a/One.md", "b/Two.md"]));
+    }
+
+    // ========================================================================
+    // doctor and check
+    // ========================================================================
+
+    fn doctor_of(cli: &Cli) -> &DoctorArgs {
+        match &cli.command {
+            Command::Doctor(doctor) => doctor,
+            other => panic!("expected `doctor`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn doctor_and_check_take_files_and_the_render_options() {
+        let cli = cli(&["doctor", "a.md", "b.md", "--style", "mono", "-o", "pdfs"]);
+        let doctor = doctor_of(&cli);
+        assert_eq!(doctor.files, [PathBuf::from("a.md"), PathBuf::from("b.md")]);
+        assert_eq!(doctor.assess.out, PathBuf::from("pdfs"));
+        assert_eq!(doctor.assess.render.style.as_ref() as &str, "mono");
+        assert!(!doctor.fix && doctor.explain.is_none());
+        let Command::Check(check) = self::cli(&["check", "a.md"]).command else {
+            panic!("expected `check`")
+        };
+        assert_eq!(check.assess.out, PathBuf::from("out"));
+    }
+
+    #[test]
+    fn check_rejects_fix_and_explain_as_usage_errors() {
+        for args in [
+            &["check", "a.md", "--fix"][..],
+            &["check", "--explain", "period-hyphen"][..],
+        ] {
+            let err = assert_err!(parse(args));
+            assert_eq!(err.kind(), ErrorKind::UnknownArgument, "{args:?}: {err}");
+        }
+    }
+
+    #[test]
+    fn check_and_doctor_need_a_file_unless_explaining() {
+        assert_eq!(
+            assert_err!(parse(&["check"])).kind(),
+            ErrorKind::MissingRequiredArgument
+        );
+        assert_eq!(
+            assert_err!(parse(&["doctor"])).kind(),
+            ErrorKind::MissingRequiredArgument
+        );
+        assert_ok!(parse(&["doctor", "--explain", "period-hyphen"]));
+    }
+
+    #[test]
+    fn explain_takes_a_known_code_alone() {
+        let cli = cli(&["doctor", "--explain", "period-hyphen"]);
+        assert_eq!(doctor_of(&cli).explain, Some(DiagnosticCode::PeriodHyphen));
+        for args in [
+            &["doctor", "a.md", "--explain", "period-hyphen"][..],
+            &["doctor", "--explain", "period-hyphen", "--fix"][..],
+        ] {
+            assert_eq!(assert_err!(parse(args)).kind(), ErrorKind::ArgumentConflict, "{args:?}");
+        }
+    }
+
+    #[test]
+    fn an_unknown_code_is_a_usage_error_that_suggests_the_close_ones() {
+        let err = assert_err!(parse(&["doctor", "--explain", "periods-hyphen"]));
+        assert_eq!(err.kind(), ErrorKind::ValueValidation);
+        assert!(err.to_string().contains("did you mean `period-hyphen`"), "{err}");
+        let prefix = assert_err!(parse(&["doctor", "--explain", "period"])).to_string();
+        for code in ["period-hyphen", "period-unparseable", "period-end-before-start"] {
+            assert!(prefix.contains(code) || code == "period-end-before-start", "{prefix}");
+        }
+        let far = assert_err!(parse(&["doctor", "--explain", "zzzzzz"])).to_string();
+        assert!(
+            far.contains("is not a diagnostic code") && !far.contains("did you mean"),
+            "{far}"
+        );
+    }
+
+    #[test]
+    fn explain_accepts_every_code() {
+        use strum::IntoEnumIterator;
+        for code in DiagnosticCode::iter() {
+            assert_eq!(assert_ok!(parse_code(&code.to_string())), code);
+        }
+    }
+
+    #[test]
+    fn fix_rejects_the_same_file_twice_but_other_commands_do_not() {
+        let err = assert_err!(parse(&["doctor", "a.md", "./a.md", "--fix"]));
+        assert_eq!(err.kind(), ErrorKind::ArgumentConflict, "{err}");
+        assert_ok!(parse(&["doctor", "a.md", "a.md"]));
+        assert_ok!(parse(&["check", "a.md", "a.md"]));
+        assert_ok!(parse(&["doctor", "a/Resume.md", "b/Resume.md", "--fix"]));
+    }
+
+    #[test]
+    fn doctor_and_check_share_the_font_usage_rule_but_not_the_output_name_rule() {
+        for command in ["doctor", "check"] {
+            let err = assert_err!(parse(&[command, "a.md", "--fonts", "bundled", "--font-path", "x"]));
+            assert_eq!(err.kind(), ErrorKind::ArgumentConflict, "{command}: {err}");
+            assert_ok!(parse(&[command, "a/Resume.md", "b/resume.md"]));
+        }
     }
 
     // ========================================================================

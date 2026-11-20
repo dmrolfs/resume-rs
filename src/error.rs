@@ -95,6 +95,10 @@ pub enum Error {
     #[snafu(display("{} already exists", path.display()))]
     OutputExists { path: PathBuf },
 
+    /// A file being edited no longer holds what was read from it.
+    #[snafu(display("{} changed while it was being fixed", path.display()))]
+    InputChanged { path: PathBuf },
+
     #[snafu(display("the style failed to compile ({} errors)", errors_in(diagnostics)))]
     Compile {
         diagnostics: Vec<Diagnostic>,
@@ -117,6 +121,7 @@ impl Error {
             Self::OutputReadOnly { .. } => Some("make the file writable or delete it, or use -o <DIR>"),
             Self::OutputIsDirectory { .. } => Some("remove it or use -o <DIR> to write elsewhere"),
             Self::OutputExists { .. } => Some("use --force to replace it"),
+            Self::InputChanged { .. } => Some("the file was edited meanwhile; nothing was changed, run doctor again"),
             _ => None,
         }
     }

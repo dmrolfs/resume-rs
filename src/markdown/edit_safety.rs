@@ -1,7 +1,6 @@
 //! ABOUTME: Proves that deleting a hard-break marker cannot change how a resume is read, or withholds the Edit.
 //! ABOUTME: Two proofs: a local re-parse of the lines around the break, then a re-parse of the whole document.
 
-use std::cmp::Reverse;
 use std::ops::Range;
 
 use pulldown_cmark::{Event, Parser};
@@ -80,7 +79,7 @@ fn lines_around(text: &str, at: &Range<usize>) -> Range<usize> {
 /// together). The whole document can. A failure withdraws every hard-break Edit, so the check fails closed: the
 /// findings stay, with a hint to rewrite the text. `analyze` is the parse without this step, so it cannot recurse.
 pub(super) fn verify_hard_break_edits(parsed: &mut Parsed, text: &str, analyze: impl FnOnce(&str) -> Parsed) {
-    let mut edits: Vec<&Edit> = parsed
+    let edits: Vec<&Edit> = parsed
         .diagnostics
         .iter()
         .filter(|d| d.code == DiagnosticCode::HardBreak)
@@ -89,12 +88,7 @@ pub(super) fn verify_hard_break_edits(parsed: &mut Parsed, text: &str, analyze: 
     if edits.is_empty() {
         return;
     }
-    edits.sort_by_key(|edit| Reverse(edit.range.start));
-    let mut fixed = text.to_string();
-    for edit in edits {
-        fixed.replace_range(edit.range.clone(), &edit.replacement);
-    }
-    let after = analyze(&fixed);
+    let after = analyze(&Edit::apply_all(text, &edits));
     if parsed.resume == after.resume && other_findings(&parsed.diagnostics) == other_findings(&after.diagnostics) {
         return;
     }

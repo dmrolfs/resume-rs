@@ -20,12 +20,20 @@ pub(super) fn config() -> Config {
     }
 }
 
-/// Converts one finding (with its excerpt, if located) to a codespan diagnostic.
-pub(super) fn to_codespan(d: &Diagnostic, resolved: &Resolved<'_>, excerpt: Option<&Excerpt>) -> Drawn<()> {
+/// Converts one finding (with its excerpt, if located) to a codespan diagnostic; `extra` notes follow the
+/// finding's own, each on its own line.
+pub(super) fn to_codespan(
+    d: &Diagnostic,
+    resolved: &Resolved<'_>,
+    excerpt: Option<&Excerpt>,
+    extra: &[String],
+) -> Drawn<()> {
+    let mut all = notes(d, resolved, excerpt);
+    all.extend(extra.iter().map(|note| display_text(note, true)));
     let drawn = Drawn::new(severity(d.severity))
         .with_code(d.code)
         .with_message(display_text(&d.message, false))
-        .with_notes(notes(d, resolved, excerpt));
+        .with_notes(all);
     match excerpt {
         Some(excerpt) => {
             let marker = if d.fix.is_some() { FIXABLE } else { "" };
@@ -112,7 +120,7 @@ mod tests {
             Resolved::Located(located) => Some(Excerpt::build(located)),
             _ => None,
         };
-        to_codespan(d, &resolved, excerpt.as_ref())
+        to_codespan(d, &resolved, excerpt.as_ref(), &[])
     }
 
     /// Like [`convert`], for a finding whose file is whatever its span says.
@@ -126,7 +134,7 @@ mod tests {
             Resolved::Located(located) => Some(Excerpt::build(located)),
             _ => None,
         };
-        to_codespan(d, &resolved, excerpt.as_ref())
+        to_codespan(d, &resolved, excerpt.as_ref(), &[])
     }
 
     #[test]

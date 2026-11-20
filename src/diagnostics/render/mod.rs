@@ -20,6 +20,7 @@ use crate::diagnostics::Diagnostic;
 pub use codespan_reporting::term::termcolor;
 
 pub use self::color::{ColorEnv, resolve_color};
+pub use self::sanitize::display_text;
 pub use self::sources::Sources;
 pub use self::summary::Summary;
 
@@ -58,16 +59,29 @@ pub fn emit_human<'d>(
     sources: &Sources<'_>,
     diagnostics: impl IntoIterator<Item = &'d Diagnostic>,
 ) -> Result<(), RenderError> {
+    emit_human_with_notes(out, sources, diagnostics.into_iter().map(|d| (d, &[][..])))
+}
+
+/// Like [`emit_human`], with extra notes after each finding's own, such as the advice for its code.
+///
+/// # Errors
+/// - [`RenderError::Write`] - When `out` cannot be written.
+/// - [`RenderError::Human`] - When codespan cannot draw a finding (a bug: the excerpt is always valid).
+pub fn emit_human_with_notes<'d, 'n>(
+    out: &mut dyn termcolor::WriteColor,
+    sources: &Sources<'_>,
+    diagnostics: impl IntoIterator<Item = (&'d Diagnostic, &'n [String])>,
+) -> Result<(), RenderError> {
     let config = human::config();
     // A finding with no excerpt has no labels, so codespan never looks anything up in this file.
     let no_file = SimpleFile::new("", "");
-    for diagnostic in diagnostics {
+    for (diagnostic, extra) in diagnostics {
         let resolved = sources.resolve(diagnostic.span.as_ref());
         let excerpt = match &resolved {
             Resolved::Located(located) => Some(Excerpt::build(located)),
             Resolved::NoSpan | Resolved::Unlocated { .. } => None,
         };
-        let drawn = human::to_codespan(diagnostic, &resolved, excerpt.as_ref());
+        let drawn = human::to_codespan(diagnostic, &resolved, excerpt.as_ref(), extra);
         match &excerpt {
             Some(excerpt) => term::emit_to_write_style(out, &config, excerpt, &drawn),
             None => term::emit_to_write_style(out, &config, &no_file, &drawn),

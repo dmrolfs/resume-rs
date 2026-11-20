@@ -2,6 +2,8 @@
 //! ABOUTME: Advice text is filled in per code by the parser and doctor tasks.
 
 use serde::Serialize;
+
+use super::Severity;
 use strum::{Display, EnumIter, EnumString, IntoStaticStr};
 
 /// What kind of finding a diagnostic is, and which stage reports it.
@@ -72,6 +74,8 @@ pub enum DiagnosticCode {
     // Setup (doctor)
     UnknownStyle,
     StyleMissingMain,
+    StylesDirUnusable,
+    FontPathUnusable,
     OutputNotWritable,
     TypstError,
     TypstWarning,
@@ -119,7 +123,42 @@ impl DiagnosticCode {
             | FontFallbackMetric
             | FontFallbackLayout
             | FontMissing => Category::Layout,
-            UnknownStyle | StyleMissingMain | OutputNotWritable | TypstError | TypstWarning => Category::Setup,
+            UnknownStyle | StyleMissingMain | StylesDirUnusable | FontPathUnusable | OutputNotWritable | TypstError
+            | TypstWarning => Category::Setup,
+        }
+    }
+
+    /// How serious a finding with this code is, unless the finder knows better.
+    ///
+    /// One table for every code, exhaustive with no wildcard, so a new code cannot silently default to a
+    /// warning. Format errors block `build`; content advice never fails a run; a layout code is an error when the
+    /// document cannot be used as it is; a Setup code is an error when the run cannot do its job.
+    #[must_use]
+    pub const fn default_severity(self) -> Severity {
+        use DiagnosticCode::*;
+        match self {
+            MissingName | DuplicateName | ContentBeforeSection | RoleLineShape | RoleSeparator | EmptyRolePart
+            | EraShape | EraOutsideRole | PeriodUnparseable | PeriodEndBeforeStart | UnsupportedHtml | InvalidLink
+            | UnsupportedLink | UnsupportedMarkdown | TextTooLong | EmptyHeading | InputLimit => Severity::Error,
+            PeriodHyphen
+            | PeriodPresentSpelling
+            | NestedList
+            | RoleOrder
+            | MidSentenceBold
+            | Image
+            | TooManyContactItems
+            | MissingContact
+            | HardBreak
+            | HeadingMarkerSpacing => Severity::Warning,
+            LongBullet | UnquantifiedBullet | WeakOpener | FirstPerson | SloppyPhrase | LongSummary
+            | EducationNotLast | OldRoleDetail => Severity::Warning,
+            PageLimitExceeded | ContentOverflowsPage | FontMissing => Severity::Error,
+            HeadingNearPageBottom | SparseLastPage | FontFallbackLayout => Severity::Warning,
+            FontFallbackMetric => Severity::Note,
+            UnknownStyle | StyleMissingMain | StylesDirUnusable | FontPathUnusable | OutputNotWritable | TypstError => {
+                Severity::Error
+            }
+            TypstWarning => Severity::Warning,
         }
     }
 }
@@ -192,6 +231,30 @@ mod tests {
         assert_eq!(DiagnosticCode::FontMissing.category(), Category::Layout);
         assert_eq!(DiagnosticCode::UnknownStyle.category(), Category::Setup);
         assert_eq!(DiagnosticCode::TypstError.category(), Category::Setup);
+    }
+
+    #[test]
+    fn every_setup_code_is_an_error_but_a_typst_warning_and_a_content_code_is_never_one() {
+        for code in DiagnosticCode::iter() {
+            let severity = code.default_severity();
+            match code.category() {
+                Category::Setup if code == DiagnosticCode::TypstWarning => assert_eq!(severity, Severity::Warning),
+                Category::Setup => assert_eq!(severity, Severity::Error, "{code}: an unusable setup must fail the run"),
+                Category::Content => assert_eq!(severity, Severity::Warning, "{code}: advice never fails a run"),
+                Category::Format | Category::Layout => {}
+            }
+        }
+        assert_eq!(DiagnosticCode::FontFallbackMetric.default_severity(), Severity::Note);
+        assert_eq!(DiagnosticCode::PageLimitExceeded.default_severity(), Severity::Error);
+        assert_eq!(DiagnosticCode::SparseLastPage.default_severity(), Severity::Warning);
+    }
+
+    #[test]
+    fn the_two_setup_codes_for_unusable_directories_have_stable_ids() {
+        assert_eq!(DiagnosticCode::StylesDirUnusable.to_string(), "styles-dir-unusable");
+        assert_eq!(DiagnosticCode::FontPathUnusable.to_string(), "font-path-unusable");
+        assert_eq!(DiagnosticCode::StylesDirUnusable.category(), Category::Setup);
+        assert_eq!(DiagnosticCode::FontPathUnusable.category(), Category::Setup);
     }
 
     #[test]

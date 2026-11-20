@@ -10,10 +10,12 @@
 pub mod cli;
 pub mod commands;
 pub mod diagnostics;
+pub mod doctor;
 pub mod error;
 pub mod layout;
 pub mod markdown;
 pub mod model;
 pub mod output;
+pub mod pipeline;
 pub mod style;
 pub mod typeset;

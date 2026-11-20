@@ -5,6 +5,7 @@ use std::ops::Range;
 
 use super::inline;
 use super::lint::{self, RoleKey};
+use super::outline::{BulletOutline, Located, Outline, RoleOutline, SectionOutline};
 use super::role::{self, EraCheck, EraHead, RoleHead};
 use super::tree::{
     BlockNode, Construct, Document, HeadingNode, HtmlNode, ItemNode, ListNode, ParagraphNode, UnsupportedNode,
@@ -12,13 +13,13 @@ use super::tree::{
 use super::{Finding, Sink, Source};
 use crate::diagnostics::DiagnosticCode;
 use crate::model::text::{NameError, SectionTitleError};
-use crate::model::{Block, Bullet, Inline, Name, Resume, Role, RoleBlock, Section, SectionTitle};
+use crate::model::{Block, Bullet, Inline, Name, Period, Resume, Role, RoleBlock, Section, SectionTitle};
 
 /// The one HTML construct allowed besides comments: a forced page break.
 pub(crate) const PAGE_BREAK: &str = r#"<div class="page-break"></div>"#;
 
-/// Interprets the document; `None` only when no valid name heading exists.
-pub(crate) fn interpret(doc: &Document, src: &Source<'_>, sink: &mut Sink<'_>) -> Option<Resume> {
+/// Interprets the document; `None` only when no valid name heading exists. The outline is `Some` exactly then.
+pub(crate) fn interpret(doc: &Document, src: &Source<'_>, sink: &mut Sink<'_>) -> (Option<Resume>, Option<Outline>) {
     let blocks = &doc.blocks;
     let name_heading = blocks.iter().enumerate().find_map(|(index, block)| match block {
         BlockNode::Heading(heading) if heading.level == 1 => Some((index, heading)),
@@ -27,7 +28,7 @@ pub(crate) fn interpret(doc: &Document, src: &Source<'_>, sink: &mut Sink<'_>) -
     let Some((at, heading)) = name_heading else {
         report_missing_name(blocks, sink);
         walk_sections(blocks, src, sink);
-        return None;
+        return (None, None);
     };
     for block in blocks[..at].iter().filter(|b| !is_comment(b)) {
         report_before_section(block.range(), "the name heading", sink);
@@ -35,8 +36,14 @@ pub(crate) fn interpret(doc: &Document, src: &Source<'_>, sink: &mut Sink<'_>) -
     let name = name(heading, sink);
     let rest = &blocks[at + 1..];
     let (contact, consumed) = contact(heading, rest, src, sink);
-    let sections = walk_sections(&rest[consumed..], src, sink);
-    name.map(|name| Resume::new(name, contact, sections))
+    let (sections, outline) = walk_sections(&rest[consumed..], src, sink);
+    match name {
+        Some(name) => (
+            Some(Resume::new(name, contact, sections)),
+            Some(Outline { sections: outline }),
+        ),
+        None => (None, None),
+    }
 }
 
 fn report_missing_name(blocks: &[BlockNode], sink: &mut Sink<'_>) {
@@ -245,17 +252,18 @@ fn html_block(node: &HtmlNode, src: &Source<'_>, sink: &mut Sink<'_>) -> HtmlCla
 // ---------------------------------------------------------------------------------------------
 
 /// Walks the blocks after the name, building sections; used with or without a valid name.
-fn walk_sections(blocks: &[BlockNode], src: &Source<'_>, sink: &mut Sink<'_>) -> Vec<Section> {
+fn walk_sections(blocks: &[BlockNode], src: &Source<'_>, sink: &mut Sink<'_>) -> (Vec<Section>, Vec<SectionOutline>) {
     let next = next_visible(blocks);
     let mut walker = Walker {
         current: None,
         sections: Vec::new(),
+        outline: Vec::new(),
     };
     for (block, next) in blocks.iter().zip(next) {
         walker.block(block, next.map(|index| &blocks[index]), src, sink);
     }
     walker.close_section(sink);
-    walker.sections
+    (walker.sections, walker.outline)
 }
 
 /// For each block, the index of the next block that is not a comment, computed in one backward pass.
@@ -277,6 +285,7 @@ fn next_visible(blocks: &[BlockNode]) -> Vec<Option<usize>> {
 struct Walker {
     current: Option<SectionBuilder>,
     sections: Vec<Section>,
+    outline: Vec<SectionOutline>,
 }
 
 impl Walker {
@@ -339,8 +348,9 @@ impl Walker {
     }
 
     fn close_section(&mut self, sink: &mut Sink<'_>) {
-        if let Some(section) = self.current.take().and_then(|builder| builder.finish(sink)) {
+        if let Some((section, outline)) = self.current.take().and_then(|builder| builder.finish(sink)) {
             self.sections.push(section);
+            self.outline.push(outline);
         }
     }
 }
@@ -370,6 +380,11 @@ struct SectionBuilder {
     blocks: Vec<Block>,
     role: Option<RoleBuilder>,
     order: Vec<RoleKey>,
+    /// Where the section's heading text is, and what the section holds outside roles, for the outline.
+    heading: Range<usize>,
+    prose: Vec<Located>,
+    bullets: Vec<BulletOutline>,
+    roles: Vec<RoleOutline>,
 }
 
 impl SectionBuilder {
@@ -391,6 +406,10 @@ impl SectionBuilder {
             blocks: Vec::new(),
             role: None,
             order: Vec::new(),
+            heading: role::content_range(heading),
+            prose: Vec::new(),
+            bullets: Vec::new(),
+            roles: Vec::new(),
         }
     }
 
@@ -403,6 +422,7 @@ impl SectionBuilder {
             body: Vec::new(),
             era: None,
             started: false,
+            outline: RoleParts::default(),
         });
     }
 
@@ -413,8 +433,17 @@ impl SectionBuilder {
         let Some(head) = role.head else { return };
         self.order.push(RoleKey {
             end: head.period.end,
-            range: head.range,
+            range: head.range.clone(),
             company: head.company.to_string(),
+        });
+        self.roles.push(RoleOutline {
+            line: head.range.clone(),
+            company: head.company.to_string(),
+            period: head.period.clone(),
+            eras: role.outline.eras,
+            blurb: role.outline.blurb,
+            paragraphs: role.outline.paragraphs,
+            bullets: role.outline.bullets,
         });
         self.blocks.push(Block::Role(Role {
             company: head.company,
@@ -461,31 +490,50 @@ impl SectionBuilder {
         if content.is_empty() {
             return;
         }
+        let located = Located::of(&paragraph.content);
         match self.role.as_mut() {
-            Some(role) => role.paragraph(content),
-            None => self.blocks.push(Block::Paragraph { content }),
+            Some(role) => role.paragraph(content, located),
+            None => {
+                self.prose.push(located);
+                self.blocks.push(Block::Paragraph { content });
+            }
         }
     }
 
     fn list(&mut self, list: &ListNode, src: &Source<'_>, sink: &mut Sink<'_>) {
         let mut items = Vec::new();
-        bullets(list, src, sink, &mut items);
+        let mut located = Vec::new();
+        bullets(list, src, sink, &mut items, &mut located);
         if items.is_empty() {
             return;
         }
         match self.role.as_mut() {
-            Some(role) => role.bullets(items),
-            None => self.blocks.push(Block::Bullets { items }),
+            Some(role) => role.bullets(items, located),
+            None => {
+                self.bullets.extend(located);
+                self.blocks.push(Block::Bullets { items });
+            }
         }
     }
 
-    fn finish(mut self, sink: &mut Sink<'_>) -> Option<Section> {
+    fn finish(mut self, sink: &mut Sink<'_>) -> Option<(Section, SectionOutline)> {
         self.close_role();
         lint::role_order(&self.order, sink);
-        Some(Section {
-            title: self.title?,
-            blocks: self.blocks,
-        })
+        let title = self.title?;
+        let outline = SectionOutline {
+            title: title.to_string(),
+            heading: self.heading,
+            prose: self.prose,
+            bullets: self.bullets,
+            roles: self.roles,
+        };
+        Some((
+            Section {
+                title,
+                blocks: self.blocks,
+            },
+            outline,
+        ))
     }
 }
 
@@ -497,6 +545,17 @@ struct RoleBuilder {
     era: Option<EraBuilder>,
     /// True once any block followed the role line; only the first paragraph can be the blurb.
     started: bool,
+    /// What the outline keeps of the role, filled beside the model parts above.
+    outline: RoleParts,
+}
+
+/// The located parts of a role in progress.
+#[derive(Default)]
+struct RoleParts {
+    eras: Vec<Period>,
+    blurb: Option<Located>,
+    paragraphs: Vec<Located>,
+    bullets: Vec<BulletOutline>,
 }
 
 struct EraBuilder {
@@ -508,6 +567,7 @@ impl RoleBuilder {
     fn start_era(&mut self, head: EraHead) {
         self.close_era();
         self.started = true;
+        self.outline.eras.push(head.period.clone());
         self.era = Some(EraBuilder {
             head,
             items: Vec::new(),
@@ -524,18 +584,21 @@ impl RoleBuilder {
         }
     }
 
-    fn paragraph(&mut self, content: Vec<Inline>) {
+    fn paragraph(&mut self, content: Vec<Inline>, located: Located) {
         if !self.started {
             self.started = true;
             self.blurb = Some(content);
+            self.outline.blurb = Some(located);
             return;
         }
         self.close_era();
+        self.outline.paragraphs.push(located);
         self.body.push(RoleBlock::Paragraph { content });
     }
 
-    fn bullets(&mut self, items: Vec<Bullet>) {
+    fn bullets(&mut self, items: Vec<Bullet>, located: Vec<BulletOutline>) {
         self.started = true;
+        self.outline.bullets.extend(located);
         match self.era.as_mut() {
             Some(era) => era.items.extend(items),
             None => self.body.push(RoleBlock::Bullets { items }),
@@ -548,7 +611,13 @@ impl RoleBuilder {
 // ---------------------------------------------------------------------------------------------
 
 /// Converts a list into bullets, flattening nested lists depth-first after their parent.
-fn bullets(list: &ListNode, src: &Source<'_>, sink: &mut Sink<'_>, out: &mut Vec<Bullet>) {
+fn bullets(
+    list: &ListNode,
+    src: &Source<'_>,
+    sink: &mut Sink<'_>,
+    out: &mut Vec<Bullet>,
+    located: &mut Vec<BulletOutline>,
+) {
     if list.ordered {
         let message = "numbered lists are not supported";
         unsupported(
@@ -559,11 +628,17 @@ fn bullets(list: &ListNode, src: &Source<'_>, sink: &mut Sink<'_>, out: &mut Vec
         );
     }
     for item in &list.items {
-        bullet(item, src, sink, out);
+        bullet(item, src, sink, out, located);
     }
 }
 
-fn bullet(item: &ItemNode, src: &Source<'_>, sink: &mut Sink<'_>, out: &mut Vec<Bullet>) {
+fn bullet(
+    item: &ItemNode,
+    src: &Source<'_>,
+    sink: &mut Sink<'_>,
+    out: &mut Vec<Bullet>,
+    located: &mut Vec<BulletOutline>,
+) {
     let mut paragraphs = Vec::new();
     let mut nested = Vec::new();
     for block in &item.blocks {
@@ -591,19 +666,29 @@ fn bullet(item: &ItemNode, src: &Source<'_>, sink: &mut Sink<'_>, out: &mut Vec<
             BlockNode::Unsupported(node) => report_unsupported(node, sink),
         }
     }
-    if let Some(bullet) = bullet_from(&paragraphs, src, sink) {
+    if let Some((bullet, outline)) = bullet_from(&paragraphs, src, sink) {
         out.push(bullet);
+        located.push(outline);
     }
     for list in nested {
         lint::nested_list(list, sink);
-        bullets(list, src, sink, out);
+        bullets(list, src, sink, out, located);
     }
 }
 
-/// Builds a bullet from the item's paragraphs; extra paragraphs are reported and joined with a space.
-fn bullet_from(paragraphs: &[&ParagraphNode], src: &Source<'_>, sink: &mut Sink<'_>) -> Option<Bullet> {
+/// Builds a bullet from the item's paragraphs, with its outline; extra paragraphs are reported and joined
+/// with a space.
+fn bullet_from(
+    paragraphs: &[&ParagraphNode],
+    src: &Source<'_>,
+    sink: &mut Sink<'_>,
+) -> Option<(Bullet, BulletOutline)> {
     let (first, extra) = paragraphs.split_first()?;
     let (label, mut content) = inline::label_and_content(&first.content, src, sink);
+    let (label_text, mut content_text) = match inline::split_bullet_label(&first.content) {
+        Some((children, rest)) => (Some(Located::of(children)), Located::of(rest)),
+        None => (None, Located::of(&first.content)),
+    };
     for paragraph in extra {
         let message = "a bullet has more than one paragraph";
         unsupported(
@@ -613,11 +698,21 @@ fn bullet_from(paragraphs: &[&ParagraphNode], src: &Source<'_>, sink: &mut Sink<
             sink,
         );
         inline::append_with_space(&mut content, inline::convert(&paragraph.content, src, sink));
+        content_text.append_with_space(
+            &Located::of(&paragraph.content),
+            paragraph.range.start..paragraph.range.start,
+        );
     }
     if label.is_none() && content.is_empty() {
         return None;
     }
-    Some(Bullet { label, content })
+    let outline = BulletOutline {
+        item: first.range.clone(),
+        // The model drops a label that is empty after its colon is stripped; the outline must agree.
+        label: label.is_some().then_some(label_text).flatten(),
+        content: content_text,
+    };
+    Some((Bullet { label, content }, outline))
 }
 
 #[cfg(test)]

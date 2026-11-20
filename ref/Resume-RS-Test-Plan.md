@@ -219,14 +219,18 @@ In-crate (`src/typeset/pragmatic_tests.rs`, reads frames) and through the public
 - [x] `fallback_font_reports_note_or_warning_by_metric_compatibility` (the bead's name; the test plan said `font_fallback_warns`)
 
 ### rsm-141.11: doctor
-- [ ] `every_diagnostic_code_has_advice` (strum `EnumIter`)
-- [ ] For each content lint, a positive and a negative test: `long_bullet`, `unquantified_bullet`, `weak_opener`, `first_person`, `sloppy_phrase`, `long_summary`, `education_not_last`, `old_role_detail`
-- [ ] `setup_reports_unknown_style`, `setup_reports_unwritable_output`
-- [ ] `doctor_groups_findings_by_category` (snapshot), including the role-to-page map
-- [ ] `explain_prints_advice_for_code`, `explain_unknown_code_exits_2_with_suggestions`
-- [ ] `fix_applies_edits_and_reports_diff`, `fix_dry_run_leaves_file_unchanged`, `fix_is_idempotent`
-- [ ] `doctor_exit_1_only_on_errors`
-- [ ] `check_matches_doctor_report`, `check_rejects_fix_and_explain` (exit 2), `check_never_writes`
+- [x] `every_diagnostic_code_has_advice` (`advice()` is total, so a missing entry is a compile error; the test rejects placeholders and unsourced rationale), and `explain_works_for_every_code_and_prints_its_own_advice` (summary, why, and fix of each code in `tests/doctor_test.rs`)
+- [x] Content lints (`src/doctor/content.rs`, 60 tests): each lint has a positive and a negative test and a boundary pair (320/321 characters, 120/121 words, 15/14 years, 1/2 bullets, the year range 1950 and 2100, every first-person word, every weak opener, every sloppy phrase); spans are checked exactly against the source text, on LF and on CRLF
+- [x] `setup_reports_unknown_style`, an unusable styles directory and font path, an output directory that is a file; every Setup code is an error (`default_severity` table test)
+- [x] `doctor_groups_findings_by_category` (fixed order, every category present, why and fix once per code per file, the role-to-page map, the exact Setup line), and the report is the same for `check`
+- [x] `explain_prints_advice_for_code`, `explain_unknown_code_exits_2_with_suggestions` (through the real binary: exit 2 and the close codes named), `explain` ignores `--format`
+- [x] `fix_applies_edits_and_reports_diff` (the exact diff), `fix_dry_run_leaves_file_unchanged` (bytes, mtime, and inode), `fix_is_idempotent`, `fix_preserves_crlf_line_endings`, and a lone CR and mixed endings byte for byte
+- [x] The meaning guard: the exact fix passes; a tampered model is refused for the model; a new finding is refused for the findings; a relabel together with any other change is refused; a swapped label is not mistaken for a relabel; a range outside the text is refused
+- [x] `doctor_exit_1_only_on_errors`, and the exit codes 0, 1, and 2 through the real binary for `doctor` and `check`
+- [x] `check_matches_doctor_report` (clean, warning, error, and JSON), `check_rejects_fix_and_explain` (exit 2, file untouched), `check_never_writes`
+- [x] `output::Writer` source edits (`Overwrite::ReplaceSource`): unchanged replace, a changed file refused in both modes, a missing file, a read-only file, permissions kept, a symlink followed and kept, the temp private until it takes the file's permissions; the Windows test (a file held open) runs only on `windows-latest`
+- [x] The only-the-Writer-writes scan covers `src/commands/`, `src/doctor/`, and `src/pipeline.rs`
+- [x] Content findings never reach `build` (`the_full_fixture_has_content_advice_while_its_parse_has_none`, and `build` is unchanged: its 900 tests passed before and after the shared pipeline)
 
 ### rsm-141.12: watch and export
 - [ ] `export_writes_resume_json_matching_model`, `export_dry_run_lists_files`

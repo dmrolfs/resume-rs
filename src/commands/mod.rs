@@ -2,6 +2,7 @@
 //! ABOUTME: `main` builds the real streams and environment, calls `run`, and turns the `Outcome` into an exit code.
 
 mod build;
+mod doctor;
 mod emit;
 mod export_style;
 mod licenses;
@@ -77,6 +78,8 @@ pub fn run(cli: &Cli, env: &Env, io: &mut Io<'_>) -> Outcome {
     };
     let outcome = match &cli.command {
         Command::Build(args) => build::run(cli, args, env, &mut streams),
+        Command::Doctor(args) => doctor::run(cli, args, env, &mut streams),
+        Command::Check(args) => doctor::run_check(cli, args, env, &mut streams),
         Command::Styles(args) => styles::run(cli, args, env, &mut streams),
         Command::ExportStyle(args) => export_style::run(cli, args, env, &mut streams),
         Command::Licenses => licenses::run(cli, env, &mut streams),

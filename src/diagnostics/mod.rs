@@ -13,7 +13,10 @@ use serde::Serialize;
 use strum::{AsRefStr, Display, EnumString};
 
 pub use self::code::{Advice, Category, DiagnosticCode};
-pub use self::render::{ColorEnv, RenderError, Sources, Summary, emit_human, emit_json, resolve_color, termcolor};
+pub use self::render::{
+    ColorEnv, RenderError, Sources, Summary, display_text, emit_human, emit_human_with_notes, emit_json, resolve_color,
+    termcolor,
+};
 
 /// How serious a finding is; ordered so `Error` is the greatest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Display, AsRefStr, EnumString)]
@@ -45,6 +48,23 @@ pub struct Span {
 pub struct Edit {
     pub range: Range<usize>,
     pub replacement: String,
+}
+
+impl Edit {
+    /// `text` with every edit applied, from the end, so no edit moves another's range.
+    ///
+    /// The one applier for both the hard-break proof and `doctor --fix`, so what was proven is what is applied.
+    /// The edits must not overlap; `doctor::fix` checks that before calling this.
+    #[must_use]
+    pub fn apply_all(text: &str, edits: &[&Edit]) -> String {
+        let mut ordered: Vec<&Edit> = edits.to_vec();
+        ordered.sort_by_key(|edit| std::cmp::Reverse(edit.range.start));
+        let mut fixed = text.to_string();
+        for edit in ordered {
+            fixed.replace_range(edit.range.clone(), &edit.replacement);
+        }
+        fixed
+    }
 }
 
 /// A located finding.

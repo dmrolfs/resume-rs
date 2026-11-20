@@ -9,8 +9,8 @@ use snafu::{IntoError as _, ResultExt};
 use tempfile::{Builder, NamedTempFile};
 
 use crate::error::{
-    CreateOutputDirSnafu, Error, OutputExistsSnafu, OutputIsDirectorySnafu, OutputLockedSnafu, OutputReadOnlySnafu,
-    WriteOutputSnafu,
+    CreateOutputDirSnafu, Error, InputChangedSnafu, OutputExistsSnafu, OutputIsDirectorySnafu, OutputLockedSnafu,
+    OutputReadOnlySnafu, WriteOutputSnafu,
 };
 
 /// Whether a write happens or is only checked and described.
@@ -24,11 +24,22 @@ pub enum WriteMode {
 
 /// What to do when the target already exists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Overwrite {
-    /// Replace it.
+pub enum Overwrite<'a> {
+    /// Replace it. For a file the tool generated: the old file's permissions are not kept, and a symlink at
+    /// the target is replaced, not followed.
     Replace,
     /// Fail with `Error::OutputExists`.
     Refuse,
+    /// Edit a file the user owns, which `expected` is the text of as it was read.
+    ///
+    /// The file is replaced by a rename, so it is a new inode: a hard link elsewhere keeps the old text, and
+    /// owner, ACLs, extended attributes, and creation time are not carried over (the permission bits are).
+    ///
+    /// The file must exist, a symlink is followed (so the link stays a link), the file's permissions are kept
+    /// (a resume holds a phone number and an address, so a 0600 file must not become readable by everyone), and
+    /// the write fails with `Error::InputChanged` when the file no longer holds `expected`, so an edit saved in
+    /// an editor in the meantime is not lost.
+    ReplaceSource { expected: &'a [u8] },
 }
 
 /// One file to write.
@@ -39,7 +50,7 @@ pub struct Planned<'a> {
     /// What goes in it.
     pub bytes: &'a [u8],
     /// What to do if the target exists.
-    pub overwrite: Overwrite,
+    pub overwrite: Overwrite<'a>,
 }
 
 /// What a commit did, or in a dry run what it would do.
@@ -72,6 +83,12 @@ impl Writer {
         Self { mode }
     }
 
+    /// Whether this writer writes or only reports.
+    #[must_use]
+    pub fn mode(&self) -> WriteMode {
+        self.mode
+    }
+
     /// Writes `planned` (or in a dry run, reports what it would do).
     ///
     /// # Errors
@@ -80,14 +97,23 @@ impl Writer {
     /// - `Error::CreateOutputDir` - the directory could not be created; a dry run also reports a parent that
     ///   is not a directory (a file, or a dangling link), which a write could not create either
     /// - `Error::OutputLocked` - another program holds the target open (Windows)
+    /// - `Error::InputChanged` - [`Overwrite::ReplaceSource`] only: the file no longer holds what was read
     /// - `Error::WriteOutput` - any other failure writing the file
     pub fn commit(&self, planned: Planned<'_>) -> Result<Written, Error> {
-        let replaces = preflight(planned.target, planned.overwrite)?;
-        let creates_dir = missing_directory(directory_of(planned.target))?;
+        // A source edit is made to the file a link points to, so everything below looks at that file.
+        let resolved = match planned.overwrite {
+            Overwrite::ReplaceSource { .. } => {
+                Some(fs::canonicalize(planned.target).context(WriteOutputSnafu { path: planned.target })?)
+            }
+            Overwrite::Replace | Overwrite::Refuse => None,
+        };
+        let target = resolved.as_deref().unwrap_or(planned.target);
+        let replaces = preflight(target, planned.overwrite)?;
+        let creates_dir = missing_directory(directory_of(target))?;
         match self.mode {
             WriteMode::DryRun => Ok(Written::WouldWrite { replaces, creates_dir }),
             WriteMode::Write => {
-                write_atomic(planned.target, planned.bytes, planned.overwrite)?;
+                write_atomic(target, planned.bytes, planned.overwrite)?;
                 Ok(Written::Wrote { replaced: replaces })
             }
         }
@@ -135,43 +161,76 @@ fn missing_directory(dir: &Path) -> Result<Option<PathBuf>, Error> {
 /// A read-only file is refused on every OS: Unix `rename` would silently replace it while Windows refuses
 /// with an access error, so refusing here gives the same behavior everywhere. A symlink is looked at, not
 /// followed: the rename replaces the link, not the file it points to.
-fn preflight(target: &Path, overwrite: Overwrite) -> Result<bool, Error> {
+fn preflight(target: &Path, overwrite: Overwrite<'_>) -> Result<bool, Error> {
     match fs::symlink_metadata(target) {
         Ok(meta) if meta.is_dir() => OutputIsDirectorySnafu { path: target }.fail(),
         Ok(_) if overwrite == Overwrite::Refuse => OutputExistsSnafu { path: target }.fail(),
         Ok(meta) if meta.permissions().readonly() => OutputReadOnlySnafu { path: target }.fail(),
-        Ok(_) => Ok(true),
+        Ok(_) => {
+            check_unchanged(target, overwrite)?;
+            Ok(true)
+        }
         Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(source) => Err(source).context(WriteOutputSnafu { path: target }),
+    }
+}
+
+/// For a source edit, fails unless `target` still holds the text that was read.
+fn check_unchanged(target: &Path, overwrite: Overwrite<'_>) -> Result<(), Error> {
+    let Overwrite::ReplaceSource { expected } = overwrite else {
+        return Ok(());
+    };
+    let now = fs::read(target).context(WriteOutputSnafu { path: target })?;
+    if now == expected {
+        Ok(())
+    } else {
+        InputChangedSnafu { path: target }.fail()
     }
 }
 
 /// Writes `bytes` to a temp file beside `target` and renames it over `target`, so a reader sees the old file
 /// or the new one and never a half-written one. Nothing of the old file is kept (permissions, attributes):
 /// the output is a generated artifact.
-fn write_atomic(target: &Path, bytes: &[u8], overwrite: Overwrite) -> Result<(), Error> {
+fn write_atomic(target: &Path, bytes: &[u8], overwrite: Overwrite<'_>) -> Result<(), Error> {
     let dir = directory_of(target);
     fs::create_dir_all(dir).context(CreateOutputDirSnafu { path: dir })?;
-    let mut temp = create_temp(dir).context(WriteOutputSnafu { path: target })?;
+    let source = matches!(overwrite, Overwrite::ReplaceSource { .. });
+    // A source edit starts private (0600) and takes the file's permissions before any byte is written, so the
+    // text of a private resume is never in a file others can read, even if the process dies mid-write.
+    let mut temp = create_temp(dir, source).context(WriteOutputSnafu { path: target })?;
+    if source {
+        let permissions = fs::metadata(target)
+            .context(WriteOutputSnafu { path: target })?
+            .permissions();
+        fs::set_permissions(temp.path(), permissions).context(WriteOutputSnafu { path: target })?;
+    }
     temp.write_all(bytes).context(WriteOutputSnafu { path: target })?;
     temp.as_file().sync_all().context(WriteOutputSnafu { path: target })?;
+    if source {
+        // Looked at once more just before the file is replaced, which narrows the window for a concurrent edit
+        // to the rename itself.
+        check_unchanged(target, overwrite)?;
+    }
     let persisted = match overwrite {
-        Overwrite::Replace => temp.persist(target),
+        Overwrite::Replace | Overwrite::ReplaceSource { .. } => temp.persist(target),
         Overwrite::Refuse => temp.persist_noclobber(target),
     };
     // A failed persist returns the temp file inside its error, and dropping that deletes it.
     persisted.map(drop).map_err(|failed| classify(failed.error, target))
 }
 
-fn create_temp(dir: &Path) -> io::Result<NamedTempFile> {
+fn create_temp(dir: &Path, private: bool) -> io::Result<NamedTempFile> {
     let mut builder = Builder::new();
     builder.prefix(".resume-").suffix(".tmp");
-    // A temp file is created private (0600), but a PDF should get the permissions a plain write would.
+    // A generated PDF should get the permissions a plain write would, and `tempfile` would make it private
+    // (0600); a source edit keeps tempfile's private default until the file's own permissions are applied.
     #[cfg(unix)]
-    {
+    if !private {
         use std::os::unix::fs::PermissionsExt as _;
         builder.permissions(fs::Permissions::from_mode(0o666));
     }
+    #[cfg(not(unix))]
+    let _ = private;
     builder.tempfile_in(dir)
 }
 
@@ -228,7 +287,7 @@ mod tests {
         })
     }
 
-    fn with(mode: WriteMode, overwrite: Overwrite, path: &Path, bytes: &[u8]) -> Result<Written, Error> {
+    fn with(mode: WriteMode, overwrite: Overwrite<'_>, path: &Path, bytes: &[u8]) -> Result<Written, Error> {
         Writer::new(mode).commit(Planned {
             target: path,
             bytes,
@@ -532,6 +591,122 @@ mod tests {
         }
     }
 
+    // ========================================================================
+    // Editing a source file
+    // ========================================================================
+
+    fn edit(mode: WriteMode, path: &Path, expected: &[u8], bytes: &[u8]) -> Result<Written, Error> {
+        with(mode, Overwrite::ReplaceSource { expected }, path, bytes)
+    }
+
+    #[test]
+    fn a_source_edit_replaces_the_file_when_it_is_unchanged() {
+        let dir = dir();
+        let file = dir.path().join("resume.md");
+        assert_ok!(fs::write(&file, b"old"));
+        assert_eq!(
+            assert_ok!(edit(WriteMode::Write, &file, b"old", b"new")),
+            Written::Wrote { replaced: true }
+        );
+        assert_eq!(read(&file), b"new");
+        assert_eq!(leftovers(dir.path()), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_source_edit_refuses_a_file_that_changed_since_it_was_read_and_keeps_it() {
+        let dir = dir();
+        let file = dir.path().join("resume.md");
+        assert_ok!(fs::write(&file, b"edited in an editor"));
+        for mode in [WriteMode::DryRun, WriteMode::Write] {
+            let err = assert_err!(edit(mode, &file, b"old", b"new"));
+            assert!(matches!(err, Error::InputChanged { .. }), "{err}");
+        }
+        assert_eq!(read(&file), b"edited in an editor");
+        assert_eq!(leftovers(dir.path()), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_source_edit_needs_the_file_to_exist() {
+        let dir = dir();
+        let err = assert_err!(edit(WriteMode::Write, &dir.path().join("missing.md"), b"", b"x"));
+        assert!(matches!(err, Error::WriteOutput { .. }), "{err}");
+    }
+
+    #[test]
+    fn a_source_edit_dry_run_touches_nothing_and_says_it_replaces() {
+        let dir = dir();
+        let file = dir.path().join("resume.md");
+        assert_ok!(fs::write(&file, b"old"));
+        assert_eq!(
+            assert_ok!(edit(WriteMode::DryRun, &file, b"old", b"new")),
+            Written::WouldWrite {
+                replaces: true,
+                creates_dir: None
+            }
+        );
+        assert_eq!(read(&file), b"old");
+    }
+
+    #[test]
+    fn a_source_edit_refuses_a_read_only_file_in_both_modes() {
+        let dir = dir();
+        let file = dir.path().join("resume.md");
+        assert_ok!(fs::write(&file, b"old"));
+        let mut permissions = assert_ok!(fs::metadata(&file)).permissions();
+        permissions.set_readonly(true);
+        assert_ok!(fs::set_permissions(&file, permissions));
+        let _writable = Writable(&file);
+        for mode in [WriteMode::DryRun, WriteMode::Write] {
+            let err = assert_err!(edit(mode, &file, b"old", b"new"));
+            assert!(matches!(err, Error::OutputReadOnly { .. }), "{err}");
+        }
+        assert_eq!(read(&file), b"old");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_source_edit_keeps_the_files_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = dir();
+        let file = dir.path().join("resume.md");
+        assert_ok!(fs::write(&file, b"old"));
+        assert_ok!(fs::set_permissions(&file, fs::Permissions::from_mode(0o600)));
+        assert_ok!(edit(WriteMode::Write, &file, b"old", b"new"));
+        let mode = assert_ok!(fs::metadata(&file)).permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "a private resume must not become readable by others");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_temp_of_a_source_edit_is_private_until_it_takes_the_files_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = dir();
+        let mode = |temp: &NamedTempFile| assert_ok!(fs::metadata(temp.path())).permissions().mode() & 0o777;
+        let source = assert_ok!(create_temp(dir.path(), true));
+        assert_eq!(mode(&source), 0o600, "a source edit's temp must start private");
+        let artifact = assert_ok!(create_temp(dir.path(), false));
+        // A generated PDF gets what a plain write would: 0666 less the umask, which is never private-only.
+        assert_ne!(mode(&artifact), 0o600);
+        assert_eq!(leftovers(dir.path()).len(), 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_source_edit_follows_a_symlink_and_keeps_the_link() {
+        let dir = dir();
+        let real = dir.path().join("real.md");
+        let link = dir.path().join("resume.md");
+        assert_ok!(fs::write(&real, b"old"));
+        assert_ok!(std::os::unix::fs::symlink(&real, &link));
+        assert_ok!(edit(WriteMode::Write, &link, b"old", b"new"));
+        assert!(
+            assert_ok!(fs::symlink_metadata(&link)).file_type().is_symlink(),
+            "the link was replaced"
+        );
+        assert_eq!(read(&real), b"new");
+        assert_eq!(read(&link), b"new");
+    }
+
     #[test]
     fn dry_run_and_write_refuse_a_missing_directory_below_a_file_alike() {
         let dir = dir();
@@ -595,6 +770,23 @@ mod tests {
         // The viewer still holds the file with no sharing, so even reading it back is refused until it lets go.
         drop(viewer);
         assert_eq!(read(&target), b"old");
+        assert_eq!(leftovers(dir.path()), Vec::<String>::new());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_source_edit_of_a_file_held_open_by_a_viewer_is_refused_and_nothing_changes() {
+        let dir = dir();
+        let file = dir.path().join("resume.md");
+        assert_ok!(fs::write(&file, b"old"));
+        let viewer = held_open(&file, 0);
+        let err = assert_err!(edit(WriteMode::Write, &file, b"old", b"new"));
+        assert!(
+            matches!(err, Error::OutputLocked { .. } | Error::WriteOutput { .. }),
+            "a held source must not be edited: {err}"
+        );
+        drop(viewer);
+        assert_eq!(read(&file), b"old");
         assert_eq!(leftovers(dir.path()), Vec::<String>::new());
     }
 

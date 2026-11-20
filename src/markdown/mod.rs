@@ -11,6 +11,7 @@ mod blocks;
 mod edit_safety;
 mod inline;
 mod lint;
+mod outline;
 mod period;
 mod role;
 #[cfg(test)]
@@ -24,6 +25,8 @@ use std::path::{Path, PathBuf};
 use crate::diagnostics::lines::{LineIndex, snap_to_boundaries};
 use crate::diagnostics::{Diagnostic, DiagnosticCode, Edit, Severity, SourceKind, Span};
 use crate::model::Resume;
+
+pub(crate) use self::outline::{BulletOutline, Located, Outline, RoleOutline, SectionOutline};
 
 /// Largest accepted input; larger inputs yield one `input-limit` error and no model.
 pub const MAX_INPUT_BYTES: usize = 1 << 20;
@@ -50,11 +53,29 @@ const BOM: char = '\u{FEFF}';
 pub struct Parsed {
     resume: Option<Resume>,
     diagnostics: Vec<Diagnostic>,
+    /// Where each kept section, role, and bullet sits in the source. `Some` exactly when `resume` is, and it
+    /// carries byte ranges, so two `Parsed` values compare equal only for the same text.
+    outline: Option<Outline>,
 }
 
 impl Parsed {
     fn new(resume: Option<Resume>, diagnostics: Vec<Diagnostic>) -> Self {
-        Self { resume, diagnostics }
+        Self {
+            resume,
+            diagnostics,
+            outline: None,
+        }
+    }
+
+    fn with_outline(mut self, outline: Option<Outline>) -> Self {
+        self.outline = outline;
+        self
+    }
+
+    /// What `doctor` lints: the kept structure with its source ranges. `Some` whenever [`Parsed::best_effort`]
+    /// is. `build` never reads it.
+    pub(crate) fn outline(&self) -> Option<&Outline> {
+        self.outline.as_ref()
     }
 
     /// The model, only when there is no error-severity diagnostic.
@@ -111,10 +132,10 @@ fn analyze(path: &Path, text: &str) -> Parsed {
     let normalized = normalize_lone_cr(&text[base..]);
     let doc = tree::lower(&normalized, base, &mut sink);
     let src = Source { text };
-    let resume = blocks::interpret(&doc, &src, &mut sink);
+    let (resume, outline) = blocks::interpret(&doc, &src, &mut sink);
     let mut diagnostics = sink.finish();
     enforce_span_contract(&mut diagnostics, text);
-    Parsed::new(resume, diagnostics)
+    Parsed::new(resume, diagnostics).with_outline(outline)
 }
 
 /// Replaces each lone `\r` with `\n`, byte for byte, so every offset still indexes the original.
@@ -301,47 +322,9 @@ impl<'a> Sink<'a> {
     }
 }
 
-/// Severity of each Format code: errors block `build`; warnings do not.
-///
-/// The match is exhaustive with no wildcard, so a new code cannot silently default to a warning.
+/// Severity of a finding the parser reports: the code's default.
 pub(crate) const fn severity_of(code: DiagnosticCode) -> Severity {
-    use DiagnosticCode::*;
-    match code {
-        MissingName | DuplicateName | ContentBeforeSection | RoleLineShape | RoleSeparator | EmptyRolePart
-        | EraShape | EraOutsideRole | PeriodUnparseable | PeriodEndBeforeStart | UnsupportedHtml | InvalidLink
-        | UnsupportedLink | UnsupportedMarkdown | TextTooLong | EmptyHeading | InputLimit => Severity::Error,
-        PeriodHyphen
-        | PeriodPresentSpelling
-        | NestedList
-        | RoleOrder
-        | MidSentenceBold
-        | Image
-        | TooManyContactItems
-        | MissingContact
-        | HardBreak
-        | HeadingMarkerSpacing => Severity::Warning,
-        // Never reported by the parser; the tasks that report them choose their severity.
-        LongBullet
-        | UnquantifiedBullet
-        | WeakOpener
-        | FirstPerson
-        | SloppyPhrase
-        | LongSummary
-        | EducationNotLast
-        | OldRoleDetail
-        | PageLimitExceeded
-        | HeadingNearPageBottom
-        | SparseLastPage
-        | ContentOverflowsPage
-        | FontFallbackMetric
-        | FontFallbackLayout
-        | FontMissing
-        | UnknownStyle
-        | StyleMissingMain
-        | OutputNotWritable
-        | TypstError
-        | TypstWarning => Severity::Warning,
-    }
+    code.default_severity()
 }
 
 #[cfg(test)]

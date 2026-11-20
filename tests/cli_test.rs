@@ -304,3 +304,72 @@ fn licenses_prints_the_font_notices_on_stdout() {
         .stdout(contains("Libertinus"))
         .stderr("");
 }
+
+// ============================================================================
+// `resume doctor` and `resume check` through the real binary: exit codes
+// ============================================================================
+
+#[test]
+fn doctor_exits_0_for_a_clean_resume_1_for_an_error_and_2_for_a_usage_error() {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    std::fs::write(
+        dir.path().join("Clean.md"),
+        "# Ada\n\nLondon\n\n## Experience\n\n### Acme \u{b7} 2015 \u{2013} 2017\n\n- Cut costs 40%.\n",
+    )
+    .expect("write");
+    std::fs::write(dir.path().join("Bad.md"), "## Experience\n\n- x\n").expect("write");
+    let run = |args: &[&str]| {
+        let mut command = resume();
+        command.current_dir(dir.path()).args(args);
+        command.assert()
+    };
+    run(&["doctor", "Clean.md", "--fonts", "bundled"]).code(0);
+    run(&["check", "Clean.md", "--fonts", "bundled"]).code(0);
+    run(&["doctor", "Bad.md", "--fonts", "bundled"]).code(1);
+    run(&["check", "Bad.md", "--fonts", "bundled"]).code(1);
+    run(&["doctor", "--explain", "no-such-code"])
+        .code(2)
+        .stderr(contains("is not a diagnostic code"));
+    run(&["doctor", "--explain", "period-hyphen"])
+        .code(0)
+        .stdout(contains("period-hyphen (format)"));
+}
+
+#[test]
+fn check_with_fix_or_explain_exits_2_and_leaves_the_file_alone() {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let text = "# Ada\n\nLondon\n\n## Experience\n\n### Acme | Engineer | 2015 - Current\n\n- Led 3 teams.\n";
+    std::fs::write(dir.path().join("Resume.md"), text).expect("write");
+    for args in [
+        &["check", "Resume.md", "--fix"][..],
+        &["check", "--explain", "period-hyphen"][..],
+    ] {
+        resume().current_dir(dir.path()).args(args).assert().code(2);
+    }
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("Resume.md")).expect("read"),
+        text
+    );
+}
+
+#[test]
+fn doctor_fix_through_the_binary_fixes_the_file_and_exits_by_what_is_left() {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let path = dir.path().join("Resume.md");
+    std::fs::write(
+        &path,
+        "# Ada\n\nLondon\n\n## Experience\n\n### Acme | Engineer | 2015 - Current\n\n- Led 3 teams.\n",
+    )
+    .expect("write");
+    resume()
+        .current_dir(dir.path())
+        .args(["doctor", "Resume.md", "--fix", "--fonts", "bundled"])
+        .assert()
+        .code(0)
+        .stderr(contains("fixed 3 findings in Resume.md"));
+    let fixed = std::fs::read_to_string(&path).expect("read");
+    assert!(
+        fixed.contains("### Acme \u{b7} Engineer \u{b7} 2015 \u{2013} Present"),
+        "{fixed}"
+    );
+}

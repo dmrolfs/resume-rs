@@ -97,6 +97,24 @@ impl Workspace {
         args
     }
 
+    /// The arguments of `resume <command> <files> --fonts bundled --out <workspace>/out <extra>`.
+    pub fn assess_args(&self, command: &str, files: &[&Path], extra: &[&str]) -> Vec<String> {
+        let mut args = vec![command.to_string()];
+        args.extend(files.iter().map(|f| f.display().to_string()));
+        args.extend(["--fonts", "bundled", "--out"].map(String::from));
+        args.push(self.out().display().to_string());
+        args.extend(extra.iter().map(|a| (*a).to_string()));
+        args
+    }
+
+    pub fn doctor(&self, files: &[&Path], extra: &[&str]) -> Run {
+        self.run(&self.assess_args("doctor", files, extra))
+    }
+
+    pub fn check(&self, files: &[&Path], extra: &[&str]) -> Run {
+        self.run(&self.assess_args("check", files, extra))
+    }
+
     pub fn build(&self, files: &[&Path], extra: &[&str]) -> Run {
         self.run(&self.build_args(files, extra))
     }

@@ -17,7 +17,7 @@ pub(super) fn cap(text: &str) -> Cow<'_, str> {
 }
 
 /// `text` as shown to a person: cut to [`MAX_TEXT_CHARS`], then sanitized (see [`sanitize`]).
-pub(super) fn display_text(text: &str, multiline: bool) -> String {
+pub fn display_text(text: &str, multiline: bool) -> String {
     sanitize(&cap(text), multiline).into_owned()
 }
 

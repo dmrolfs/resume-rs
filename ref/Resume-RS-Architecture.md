@@ -684,45 +684,52 @@ Limits: a group's transform is ignored, so rotated, scaled, or skewed content is
 ```
 resume doctor drafts/Resume-Org-Leader.md --style mono --max-pages 3
 
-Format   2 findings
-  warning[period-hyphen]: dates are separated by `-`; use an en dash with a space on each side
-     --> drafts/Resume-Org-Leader.md:41:51
-      |
-   41 | ### Globex · Engineering Director, Platform · 2015 - 2017
-      |                                                  ^^^ fixable
-      |
-      = help: write `2015 – 2017`
-      = fix: use an en dash (Option+hyphen on a Mac)
-Content  5 findings
-  warning[unquantified-bullet]: bullet has no number
+drafts/Resume-Org-Leader.md
+Format  2 findings
+warning[period-hyphen]: dates are separated by `-`; use an en dash with a space on each side
+   --> drafts/Resume-Org-Leader.md:41:51
+    |
+ 41 | ### Globex · Engineering Director, Platform · 2015 - 2017
+    |                                                   ^^^ fixable
+    |
+    = help: write `2015 – 2017`
+    = why: Project convention: one separator everywhere keeps dates consistent ...
+    = fix: Replace the separator with ` – ` (an en dash; Option+hyphen on a Mac).
+Content 5 findings
+warning[unquantified-bullet]: bullet has no number
     ...
-    = why: The book: quantify impact; "most resumes do not contain numbers"
-    = fix: add a measurable result (team size, %, $, users, time saved)
-Layout   1 finding
-  error[page-limit-exceeded]: 4 pages, limit is 3
-    = roles: Acme p1–2 · Globex p2–3 · Initech p3 · ... (page map)
-Setup    ok (style mono, 3 fonts embedded, out/ writable)
+    = why: The Tech Resume Inside Out says to quantify impact with numbers ...
+    = fix: Add a measurable result: a percentage, a team size, a dollar amount, users, or time saved.
+Layout  1 finding
+  = roles: Acme p1-2; Globex p2-3; Initech p3
+error[page-limit-exceeded]: 4 pages, limit is 3
+Setup   ok (style mono; fonts: body Calibri (system); display Gelasio (fallback for Georgia); out/Resume-Org-Leader.pdf is free)
 
-1 error, 6 warnings; 3 fixable with `resume doctor --fix`
+error 1 error, 6 warnings; 3 fixable with `resume doctor --fix`
 ```
 
-**Content lints** (`doctor/content.rs`). All are warnings with book-cited advice, and each is deterministic and computed from the document alone:
+The text the tool prints itself is ASCII (`p1-2`, `;`), like the rest of the CLI; the findings quote the user's own text, which may not be. Each category always has a header, with `ok` when empty, so the shape is fixed. The `why` and `fix` of a code print in full on its first finding in a file and as a pointer on the later ones.
+
+**Content lints** (`doctor/content.rs`). All are warnings with book-cited advice, and each is deterministic and computed from the document alone. "From the document alone" means never from the clock or the environment, not "from the span-free model": the lints read the parser's located outline (`markdown/outline.rs`), which the same pass that builds the model records, so a finding points at the words that caused it. `build` does not run them; `doctor` and `check` do. The rules, exactly:
 
 | Code | Rule |
 |---|---|
-| `long-bullet` | A bullet over 320 characters, roughly three or more lines. The book advises two lines or fewer. |
-| `unquantified-bullet` | An experience bullet with no digit. The book: use numbers to quantify impact. |
-| `weak-opener` | A bullet that starts with "Responsible for", "Worked on", "Helped", "Participated in", "Involved in", or "Assisted". The book: active verbs, your contribution. |
-| `first-person` | "I", "we", "our team", or "my team" in a bullet. The book: drop "I", avoid "we". |
-| `sloppy-phrase` | "etc.", "and so on", "various", "stuff". The book: sloppy phrases. |
-| `long-summary` | A summary section over 120 words. The book: keep the summary short and specific. |
-| `education-not-last` | An Education section that isn't last. The book: move Education to the end. |
-| `old-role-detail` | A role that ended 15 or more years before the latest role's end, with more bullets than the most recent role. The book: older roles take proportionally less space. "Latest" comes from the document, not today's date. |
+| `long-bullet` | A bullet of more than 320 characters (label included, link addresses not, characters not bytes), roughly three lines. The book advises two lines or fewer. Any section. |
+| `unquantified-bullet` | An unlabelled bullet in a role (era bullets too), outside Education, with no quantity: no digit that starts a number and no quantity word (`two`, `half`, `doubled`, `percent`, ...). A digit counts only when no letter, digit, `/`, or `.` precedes it, so `EC2`, `Q4`, `K8s`, `v2`, and `HTTP/2` do not, while `3rd`, `40%`, `$39K`, and `~5` do. A bare year from 1950 to 2100 is not a quantity (`in 2019`) unless a currency sign precedes it or `%`, `+`, `x`, `k`, `m`, or `b` follows. The book: quantify impact. |
+| `weak-opener` | A bullet that opens with "Responsible for", "Worked on", "Helped", "Participated in", "Involved in", or "Assisted", whole words, any case, after a label or emphasis. Only the opening counts. Not in Education or on a labelled bullet outside a role. The book: active verbs, your contribution. |
+| `first-person` | "I" (upper case only; not `I/O` or `I-9`, and not a numeral right after a label word such as `Phase I` or `Tier I`), "we", "me", "my", "our", "us" (lower case only, so `US` is left alone), and their contractions, in a bullet or Summary text, not in Education or a role's description (written in the company's voice). One finding per bullet, with a count. The book: drop "I", avoid "we". |
+| `sloppy-phrase` | "etc.", "and so on", "and so forth", "and the like", "various", "stuff", whole words, never inside code, in any bullet, summary, or role text. The book: sloppy phrases. |
+| `long-summary` | A Summary section (title has the word `summary` or `profile`, or is exactly `About` or `About me`) of more than 120 words, prose and bullets together. The book: keep the summary short and specific. |
+| `education-not-last` | An Education section (title has the word `education`) followed by a section that is not Education, certifications, licenses, awards, honors, publications, patents, interests, or references. The book: move Education to the end. |
+| `old-role-detail` | A role outside Education that ended 15 or more years before the latest year in the resume, with at least 2 bullets and more than the most recent role has. The latest year is the largest year in any role or era period, and the most recent role is the one with the latest end (`Present` last): neither reads the clock, so a run gives the same findings in any year. The book: older roles take proportionally less space. |
 
-**Setup checks** (`doctor/setup.rs`):
-- the style resolves, and its directory contains `style.typ`
-- each font role resolves, showing whether the preferred font or the fallback was used and where it came from (system, app directory, `--font-path`, bundled), plus any metric difference
-- the output directory exists or can be created, and is writable
+The thresholds (320 characters, 120 words, 15 years, 2 bullets) and the word lists beyond the book's own examples are this project's reading of the book, and the advice for those codes says so. A section's class is decided from its title by whole word, so an unrecognized title gets fewer lints, never more.
+
+**Setup checks** (`doctor/setup.rs`), run by the same session `build` uses (`pipeline.rs`): `build` stops the run when the style or the fonts cannot be set up, because it can do nothing without them, and `doctor` reports the failure as a Setup finding beside everything else it found.
+- the style resolves, and its directory contains `style.typ` (`unknown-style`, `style-missing-main`); a `--styles-dir` that cannot be read or holds a style that links out of it is `styles-dir-unusable`
+- each font role resolves, showing whether the preferred font or the fallback was used and where it came from (system, app directory, `--font-path`, bundled); a `--font-path` or `RESUME_FONT_PATH` entry that cannot be read is `font-path-unusable`. The fallback findings stay in the Layout group, and the Setup line names the fonts
+- the output location is usable: the Writer's own dry run, so the same checks as a real write (a file or a dangling link in the way, a directory where the PDF goes, a read-only PDF) and nothing is created to test it. It cannot see permissions or free space, so the line says "would be created", "is free", or "would be replaced", never "writable"
+- every Setup code is an error: an unknown style would otherwise exit 0, which `DiagnosticCode::default_severity` (one explicit table for every code) prevents
 
 **Fixes** (`doctor/fix.rs`). A diagnostic carries an `Edit` only when the fix is mechanical and preserves meaning:
 - a role or era separator typed as `-`, `|`, or `•` between parts becomes ` · `
@@ -731,7 +738,15 @@ Setup    ok (style mono, 3 fonts embedded, out/ writable)
 - the trailing spaces or backslash of a hard line break are removed, but only when removing them cannot change how the document is read, which is proven twice (`markdown/edit_safety.rs`). First, locally: the three lines around the break are re-parsed with the parser's own options (the same BOM-free text, a lone CR as a line end) and compared with and without the marker, so a line that is only the marker (a blank line, a paragraph break) or only `-`, `---`, `=`, `#`, or `>` (a setext underline, an empty heading, a block quote) is withheld on its own. Then, for the whole document: every surviving hard-break Edit is applied together, the document is parsed again, and the Edits are all withdrawn unless the model and every other finding are unchanged. Three lines cannot see an emphasis closer or a tag end further on, a link definition elsewhere, or two Edits that only form a table together. A withheld finding keeps its warning and says to rewrite or delete the line
 - `**Label**: text` at the start of a bullet becomes `**Label:** text`, when whitespace follows the colon
 
-`doctor --fix` applies all edits in one pass (sorted, non-overlapping, applied from the end), writes the file atomically, prints a unified diff (`similar` 3), and re-runs the checks. Content advice is never auto-fixed. `doctor --explain <code>` prints the full advice entry, like `rustc --explain`.
+`doctor --fix` plans, checks, writes, and re-reports, per file and in the order given:
+1. The edits come only from Format findings, sorted by position. Two edits that overlap are a parser bug: the file is not fixed, and the run exits 1. Edits that only touch are fine. No edit may contain or cover a line ending, so every ending is kept as it is (LF, CRLF, a lone CR, mixed) with no conversion; the same applier (`Edit::apply_all`) serves the hard-break proof and the fix.
+2. The fixed text is parsed in memory before anything is written. It must give the same model and the same findings less the fixed ones; moving the colon of `**Label**: text` into the bold is the one fix meant to change the model (the bullet gains a label), so for it the structure (section titles, roles with their periods, bullets per role) must be identical instead. A file with no name heading has no model to check against and is not fixed. The hard-break edits were proven only as a set and are applied as a set or not at all.
+3. The file is written through `output::Writer` with `Overwrite::ReplaceSource`: the permissions are kept (a private resume stays private), a symlink is followed and kept, a read-only file is refused, and the write fails with `InputChanged` when the file no longer holds what was read, so an edit saved meanwhile is not lost. Nothing is written when there is nothing to fix.
+4. A unified diff (`similar`, three lines of context) goes to stderr, then the report of the fixed text, so the exit code is what a second run would give. `--dry-run` runs every step but the write, labelled "would fix".
+
+Content advice is never auto-fixed. `doctor --explain <code>` prints the advice entry to stdout, like `rustc --explain`; a code that is not one is a usage error (exit 2) that names the close ones. `doctor --format json` writes the same JSON lines as `build` (one record per finding, with its `category`), and the diff and the Setup facts stay human-only on stderr.
+
+`check` is a separate command with no `--fix` and no `--explain` field, so clap rejects them (exit 2) and no code path from `check` reaches the fix. It prints the same report as `doctor`.
 
 ### CLI (`src/cli.rs`)
 

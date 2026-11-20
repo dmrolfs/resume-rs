@@ -5,7 +5,7 @@ use std::io;
 use std::path::Path;
 
 use crate::diagnostics::termcolor::{Color, ColorSpec};
-use crate::diagnostics::{Diagnostic, RenderError, Sources, emit_human, emit_json};
+use crate::diagnostics::{Diagnostic, RenderError, Sources, Summary, emit_human, emit_human_with_notes, emit_json};
 use crate::error::Error;
 use crate::model::options::OutputFormat;
 use crate::typeset::fonts::FontResolution;
@@ -77,6 +77,57 @@ impl<'a, 'io> Reporter<'a, 'io> {
         if let Err(error) = rendered {
             self.render_failed(&error);
         }
+    }
+
+    /// One line of the doctor report, such as a category header, on stderr.
+    pub(super) fn report_line(&mut self, text: &str) {
+        let _ = writeln!(self.io.stderr, "{text}");
+    }
+
+    /// The closing line of one file's report: a marker, the counts, and what `--fix` could do about them.
+    pub(super) fn doctor_line(&mut self, summary: Summary, note: super::doctor::FixableNote, failed: bool) {
+        let stderr = &mut *self.io.stderr;
+        let (marker, color) = if failed {
+            ("error", Color::Red)
+        } else {
+            ("ok", Color::Green)
+        };
+        let _ = writeln!(stderr);
+        let _ = stderr.set_color(ColorSpec::new().set_fg(Some(color)).set_bold(true));
+        let _ = write!(stderr, "{marker}");
+        let _ = stderr.reset();
+        let how = if summary.fixable > 0 && note == super::doctor::FixableNote::Offer {
+            " with `resume doctor --fix`"
+        } else {
+            ""
+        };
+        let _ = writeln!(stderr, " {summary}{how}");
+    }
+
+    /// A category header, in bold when color is on.
+    pub(super) fn header(&mut self, text: &str) {
+        let stderr = &mut *self.io.stderr;
+        let _ = stderr.set_color(ColorSpec::new().set_bold(true));
+        let _ = write!(stderr, "{text}");
+        let _ = stderr.reset();
+        let _ = writeln!(stderr);
+    }
+
+    /// Findings with the advice notes after each, as excerpts on stderr; in JSON mode the findings only, as
+    /// JSON lines on stdout, because a consumer groups by `category` and reads the advice from `--explain`.
+    pub(super) fn diagnostics_with_notes(&mut self, sources: &Sources<'_>, shown: &[(&Diagnostic, &[String])]) {
+        let rendered = match self.format {
+            OutputFormat::Human => emit_human_with_notes(&mut *self.io.stderr, sources, shown.iter().copied()),
+            OutputFormat::Json => emit_json(&mut *self.io.stdout, sources, shown.iter().map(|(d, _)| *d)),
+        };
+        if let Err(error) = rendered {
+            self.render_failed(&error);
+        }
+    }
+
+    /// The text of a command's product on stdout, such as a unified diff or an explained code.
+    pub(super) fn stderr_text(&mut self, text: &str) {
+        let _ = write!(self.io.stderr, "{text}");
     }
 
     /// An operational error. A compile or export failure carries findings, which are shown with the style

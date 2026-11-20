@@ -158,13 +158,13 @@ impl InlineNode {
 /// The text is what pulldown-cmark produced (smart punctuation applied, entities decoded, line
 /// endings never included), so meaning is read from `text` while every span or edit is mapped back
 /// to the original bytes through the segments.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct TextNode {
     pub text: String,
     segments: Vec<Segment>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Segment {
     text_start: usize,
     source: Range<usize>,
@@ -203,6 +203,16 @@ impl TextNode {
             }));
         }
         joined
+    }
+
+    /// Appends `other`, keeping its source mapping.
+    pub fn append(&mut self, other: &TextNode) {
+        let offset = self.text.len();
+        self.text.push_str(&other.text);
+        self.segments.extend(other.segments.iter().map(|s| Segment {
+            text_start: s.text_start + offset,
+            ..s.clone()
+        }));
     }
 
     /// Source range of the whole node.
