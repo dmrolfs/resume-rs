@@ -368,6 +368,10 @@ pub fn theme_reads_are_defined() -> Vec<String> {
             .collect::<Vec<_>>()
             .join("\n");
         for cap in read.captures_iter(&code) {
+            // `theme.at("gutter-reach", default: 0pt)` calls a method on the dictionary; it reads no key.
+            if code[cap.get(0).map_or(0, |m| m.end())..].starts_with('(') {
+                continue;
+            }
             let path = cap[1].trim_start_matches('.').to_string();
             seen += 1;
             let normalized = if path.starts_with("fonts.") {
