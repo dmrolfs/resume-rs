@@ -54,7 +54,7 @@ What each line does, in order:
 2. `doctor --fix --dry-run` shows the changes `doctor` would make, as a diff, and changes nothing.
 3. `doctor --fix` makes them.
 4. `build` writes `out/Resume.pdf`.
-5. `--style mono --paper a4` builds the same resume in the other built-in style, on A4 paper.
+5. `--style mono --paper a4` builds the same resume in another built-in style, on A4 paper.
 6. `--fonts bundled --max-pages 2` uses only the fonts inside the program, so the PDF is the same on any machine, and fails if the resume needs more than two pages.
 7. `export-style` copies a built-in style into `my-styles` so you can edit it.
 8. `--styles-dir my-styles` builds with your copy.
@@ -223,11 +223,12 @@ resume check Resume.md --format json
 
 ## Fonts
 
-A style names fonts by **role**, not by file. The built-in styles use three roles:
+A style names fonts by **role**, not by file. Every built-in style has a `body` role and a `mono` role, and a third role for its display type:
 
 - `body`: the text of the resume.
-- `display`: the name and the headings.
 - `mono`: inline code.
+- `display`: the name and the headings, in `pragmatic` and `mono`.
+- `label`: the name and the section labels, in `experienced`.
 
 Each role has three fields in the style's theme, described in [the theme keys](#theme-keys):
 
@@ -235,7 +236,7 @@ Each role has three fields in the style's theme, described in [the theme keys](#
 - `fallback`: a free font bundled inside the program, used when the preferred one is not installed.
 - `metric-compatible`: `true` when the fallback has the same character widths as the preferred font, so lines break in the same places either way.
 
-The bundled fallbacks are Carlito (for Calibri), Gelasio (for Georgia), and Arimo (for Arial). A style that prefers Calibri and falls back to Carlito produces the same line breaks and the same page count on a machine that has Calibri and on one that does not. The difference is only in the shapes of the letters.
+The bundled fallbacks are Carlito (for Calibri), Gelasio (for Georgia), Arimo (for Arial), and TeX Gyre Pagella (for Book Antiqua). A style that prefers Calibri and falls back to Carlito produces the same line breaks and the same page count on a machine that has Calibri and on one that does not: the difference is only in the shapes of the letters. TeX Gyre Pagella is the exception. Its character widths differ from Book Antiqua's by about 2% on average, so the `experienced` style, which sets its name and labels in it, can break those lines differently when Book Antiqua is not installed. The style says so with `metric-compatible: false`, and a build reports [`font-fallback-layout`](#code-font-fallback-layout).
 
 **Which fonts may be used** is up to you:
 
@@ -253,7 +254,7 @@ After a build, the `fonts:` line says what was used, for example `body Carlito (
 
 ## Styles
 
-A style decides how a resume looks. The content never changes between styles. The program has built-in styles, and you can make your own.
+A style decides how a resume looks. The content never changes between styles. The program has three built-in styles, and you can make your own.
 
 ### Built-in styles
 
@@ -266,6 +267,10 @@ The default. It follows The Pragmatic Engineer's resume template: the name in th
 #### mono
 
 It follows The Mono Engineer's resume template: a centered name over one centered contact line, section titles in black capitals over a black rule, and no color but the links. Choose it when the page should be quiet and the roles should carry the weight. [Its README](../styles/mono/README.md) describes where it differs from the template.
+
+#### experienced
+
+It follows The Experienced Engineer's resume template (the layout of Standard Resume's Venables): two zones, with each section's label in a gutter at the left and its content in the column beside it. The name and the labels are set in Book Antiqua, or in the bundled TeX Gyre Pagella when it is not installed. A block of bullets that all start with a label, such as `**Languages:** Rust`, becomes a skills table: the labels in one column and the values in the next. Links are red. Choose it when you want sections to be found by their labels at a glance. [Its README](../styles/experienced/README.md) describes where it differs from the template, and its limits.
 
 ### Customizing a style
 
@@ -287,32 +292,32 @@ A style has two files you edit:
 
 ### Theme keys
 
-Every value a built-in theme sets is listed here. A theme is a Typst dictionary, and `spacing.section` means the `section` entry of `spacing`. Lengths are in Typst units: `pt` (points), `in` (inches), `em` (a multiple of the font size). The **Styles** column says which built-in styles have the key.
+Every value a built-in theme sets is listed here. A theme is a Typst dictionary, and `spacing.section` means the `section` entry of `spacing`. Lengths are in Typst units: `pt` (points), `in` (inches), `em` (a multiple of the font size). The **Styles** column says which built-in styles have the key. The styles do not all have the same keys: `experienced` keeps its page margins in `page-margin` and has no `margin`, for example.
 
 | Key | Unit | What it controls | Styles |
 |---|---|---|---|
-| `fonts.<role>.preferred` | font name | The template's own font for the role, used when installed. Roles are `body`, `display`, and `mono`. `display` is the font of the name and the headings: set it to Georgia, with Gelasio as its fallback, for a serif look. | all |
+| `fonts.<role>.preferred` | font name | The template's own font for the role, used when installed. The roles are `body`, `mono`, and `display` or `label`. In `pragmatic` and `mono`, set `display` to Georgia, with Gelasio as its fallback, for a serif look. | all |
 | `fonts.<role>.fallback` | font name | The bundled font used when the preferred one is not installed. | all |
 | `fonts.<role>.metric-compatible` | `true` or `false` | Whether the fallback has the preferred font's character widths. When `false`, `doctor` warns that lines may break differently. | all |
 | `size.body` | length | The size of the text. | all |
 | `size.name` | length | The size of the name. | all |
-| `size.heading` | length | The size of the section titles. | all |
+| `size.heading` | length | The size of the section titles. | mono, pragmatic |
 | `size.role` | length | The size of the role line: title, company, and period. | all |
-| `size.contact` | length | The size of the contact items. | all |
+| `size.contact` | length | The size of the contact items. | mono, pragmatic |
 | `size.footer` | length | The size of the footer text. | all |
 | `color.text` | color | The color of the text. | all |
 | `color.accent` | color | The color of section titles and the rule under them. | all |
 | `color.link` | color | The color of links. They are also underlined. | all |
 | `color.muted` | color | The color of the footer. | all |
-| `margin.x` | length | The left and right page margins. | all |
-| `margin.top` | length | The top page margin. | all |
-| `margin.bottom` | length | The bottom page margin. Leave room for the footer. | all |
+| `margin.x` | length | The left and right page margins. | mono, pragmatic |
+| `margin.top` | length | The top page margin. | mono, pragmatic |
+| `margin.bottom` | length | The bottom page margin. Leave room for the footer. | mono, pragmatic |
 | `footer-descent` | percentage | How far the footer is lowered into the bottom margin, as a share of that margin's height. A larger value puts the footer closer to the page edge. | all |
 | `line.top` | length, positive | The space above the baseline of a line. Together with `line.bottom` it sets the line's height from fixed lengths, so a fallback font with a slightly different shape gives identical line positions. Keep it positive. | all |
 | `line.bottom` | length, negative | The space below the baseline of a line. Keep it negative: a positive value is silently clamped. | all |
 | `line.leading` | length | Extra space between lines. | all |
 | `spacing.section` | length | The space above a section title. | all |
-| `spacing.section-below` | length | The space between a section title's rule and what follows. | all |
+| `spacing.section-below` | length | The space between a section title's rule and what follows. | mono, pragmatic |
 | `spacing.role` | length | The space above a role. | all |
 | `spacing.role-line-below` | length | The space between the role line and what follows. | all |
 | `spacing.era` | length | The space above an era. | all |
@@ -320,14 +325,29 @@ Every value a built-in theme sets is listed here. A theme is a Typst dictionary,
 | `spacing.blurb` | length | The space around a role's description. | all |
 | `spacing.bullet` | length | The space between bullets. | all |
 | `spacing.paragraph` | length | The space around paragraphs. | all |
-| `rule.weight` | length | The thickness of the rule under a section title. | all |
-| `rule.gap` | length | The space between a section title and its rule. | all |
+| `rule.weight` | length | The thickness of the rule under a section title. | mono, pragmatic |
+| `rule.gap` | length | The space between a section title and its rule. | mono, pragmatic |
 | `bullet.marker` | content | The bullet character. | all |
 | `bullet.indent` | length | How far the bullet is indented from the margin. | all |
 | `bullet.gap` | length | The space between the bullet and its text. | all |
 | `header.name-gap` | length | The least clear space between the name and either side of the header. When the name and the wider side do not fit with that space, the name moves to a line of its own. | pragmatic |
 | `header.stacked-gap` | length | The space under the name when it has moved to its own line. | pragmatic |
 | `header.gap` | length | The space between the name and the contact line, beyond the 17 pt that the two lines' own heights give. | mono |
+| `color.label` | color | The color of the section labels in the gutter. | experienced |
+| `size.label` | length | The size of the section labels. | experienced |
+| `size.label-min` | length | The smallest a label is set when one word of it is wider than the gutter. A word that is still too wide at this size is broken between letters. | experienced |
+| `size.period` | length | The size of a role's dates. | experienced |
+| `gutter.width` | length | The width of the gutter at the left of the page, which holds the section labels. | experienced |
+| `gutter.inset` | length | How far a label is inset from the page margin. | experienced |
+| `gutter.gap` | length | The space between the gutter and the text column. | experienced |
+| `page-margin.left` | length | The left page margin, outside the gutter. The style adds the gutter's width and gap to it, so the text column starts after them. | experienced |
+| `page-margin.right` | length | The right page margin. | experienced |
+| `page-margin.top` | length | The top page margin. | experienced |
+| `page-margin.bottom` | length | The bottom page margin. Leave room for the footer. | experienced |
+| `skills.label-max` | length | The widest the label column of a skills table may be. A longer label wraps. | experienced |
+| `skills.column-gap` | length | The space between a skills label and its value. | experienced |
+| `spacing.name-below` | length | The space under the name. | experienced |
+| `spacing.skill-row` | length | The space between the rows of a skills table. | experienced |
 
 Changing `line.top` and `line.bottom` changes the page count and where lines break. Everything else changes only the look.
 
@@ -362,6 +382,8 @@ Every style is built from the same components, in `styles/lib/components.typ`. T
 | `section-heading` | A section title with its rule, kept with what follows. |
 | `paragraph` | A paragraph of text. |
 | `blurb` | A role's one-line description. |
+| `role-head` | The start of a role: its heading and description. A style that sets something beside them, such as `experienced`'s label, renders this and then `role-body`. |
+| `role-body` | The rest of a role: its eras, bullets, and paragraphs. |
 | `role-line` | A role heading, kept with the next block. |
 | `era-line` | An era heading, kept with the next block. |
 | `render-role` | A role with its description, eras, bullets, and paragraphs. |
@@ -585,6 +607,7 @@ How the Markdown is written. Every command that reads a resume reports these.
 | <a id="code-empty-heading"></a>`empty-heading` | error | A heading has no text. |
 | <a id="code-input-limit"></a>`input-limit` | error | The input exceeds a size or nesting limit. |
 | <a id="code-heading-marker-spacing"></a>`heading-marker-spacing` | warning | A line starts with `#` but has no space after it, so it is text, not a heading. |
+| <a id="code-placeholder-unresolved"></a>`placeholder-unresolved` | error | A selected letter placeholder has no application field value. |
 
 ### Content codes
 
