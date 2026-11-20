@@ -229,16 +229,16 @@ These keep output identical on macOS and Windows:
 ## Licenses
 
 The program's own code is MIT (`LICENSE`). The binary also embeds fonts, which keep their own licenses, and the
-archives carry them in `FONT-LICENSES.md`. The `license` field in `Cargo.toml` (`MIT AND OFL-1.1`) names the first two
-and does not list every font license below.
+archives carry them in `FONT-LICENSES.md`. The `license` field in `Cargo.toml` (`MIT AND OFL-1.1 AND LPPL-1.3c`) covers the code and the bundled font
+families below (the GUST Font License is an instance of LPPL 1.3c); the `typst-assets` fonts are listed apart.
 
 - Carlito, Gelasio, and Arimo are under the SIL Open Font License 1.1, and TeX Gyre Pagella is under the GUST Font
   License; each family's license text sits beside its files in `fonts/`, with the sources, versions, and checksums in
   [`fonts/LICENSES.md`](fonts/LICENSES.md).
 - Typst's own fonts (Libertinus Serif, New Computer Modern, DejaVu Sans Mono) come with the `typst-assets` crate under
   their own licenses, listed in `fonts/LICENSES.md`. New Computer Modern's `NewCM10-Regular` is GPL-3.0-or-later with
-  the Font Exception and the Distribution Exception; whether those cover embedding the font in this program is for
-  the owner to confirm, and is not settled by this README.
+  the Font Exception and the Distribution Exception. The owner has confirmed that those exceptions cover embedding
+  the font in this program.
 - `resume licenses` prints every license notice the binary has to carry: the font texts and the `typst-assets`
   `NOTICE` (Apache-2.0, section 4(d)). Run it, and keep its output with any copy of the program you give someone.
 - The Rust crates linked into the program (about 400, nearly all MIT or Apache-2.0) are not printed by `resume licenses`.
