@@ -15,7 +15,9 @@ pub use model::{
     FieldValue, FieldValueError, LETTER_SCHEMA_VERSION, Letter, LetterDate, LetterDateError, LetterFields, LetterKind,
 };
 pub use resolve::resolve;
-pub use source::{LetterInline, LetterSource, Piece, Placeholder, SelectedLetter};
+pub use source::{
+    AlternateGroup, Item, LetterInline, LetterSource, Piece, Placeholder, SelectedLetter, SelectionRequired, SourceItem,
+};
 
 #[cfg(test)]
 mod tests;

@@ -123,15 +123,18 @@ fn unclosed_comment(text: &TextNode, src: &Source<'_>, sink: &mut Sink<'_>) {
         let escapes = src.text[..at].bytes().rev().take_while(|b| *b == b'\\').count();
         if escapes % 2 == 0 && last_close.is_none_or(|close| close < start) {
             let reserved = annotation::is_annotation(&format!("<!--{}-->", &raw[start + 4..]));
-            let code = if reserved {
-                DiagnosticCode::LetterAnnotationUnsupported
+            if reserved {
+                sink.report(letter_safety::unseen(at..range.end, false));
             } else {
-                DiagnosticCode::UnsupportedHtml
-            };
-            sink.report(
-                Finding::new(code, at..range.end, "unclosed HTML comment in letter text")
+                sink.report(
+                    Finding::new(
+                        DiagnosticCode::UnsupportedHtml,
+                        at..range.end,
+                        "unclosed HTML comment in letter text",
+                    )
                     .hint("close the comment with -->, or escape the opening < to print it literally"),
-            );
+                );
+            }
             break; // An unclosed real comment owns the remainder of this text run.
         }
     }

@@ -760,7 +760,6 @@ How the Markdown is written. Every command that reads a resume reports these.
 | <a id="code-letter-section-order"></a>`letter-section-order` | error | The letter needs Greeting, Body and Closing sections in that order. |
 | <a id="code-letter-section-shape"></a>`letter-section-shape` | error | The letter section has the wrong number of paragraphs. |
 | <a id="code-letter-unsupported-block"></a>`letter-unsupported-block` | error | This construct is not supported in a cover letter. |
-| <a id="code-letter-annotation-unsupported"></a>`letter-annotation-unsupported` | error | Letter annotations are not supported yet. |
 | <a id="code-placeholder-unknown"></a>`placeholder-unknown` | error | The letter placeholder names an unknown application field. |
 | <a id="code-placeholder-malformed"></a>`placeholder-malformed` | error | The letter placeholder is malformed or explicitly escaped. |
 | <a id="code-placeholder-position"></a>`placeholder-position` | error | A placeholder appears outside permitted letter text. |

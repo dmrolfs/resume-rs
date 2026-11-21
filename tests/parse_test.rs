@@ -929,6 +929,21 @@ fn many_html_blocks_parse_in_linear_time() {
 }
 
 #[test]
+fn many_alternate_groups_and_variants_parse_in_linear_time() {
+    // The group check compared each group name and each variant name with every earlier one: about a second and a
+    // half in a release build at the input cap, and far more in a debug build. Valid groups report nothing, so the
+    // diagnostic cap did not bound it.
+    let head = "# Ada\n\nada@example.invalid\n\n## S\n\n";
+    let groups: String = (0..30_000).map(|i| format!("- A <!-- =g{i}.default -->\n")).collect();
+    let one_group: String = std::iter::once("- A <!-- =g.default -->\n".to_string())
+        .chain((0..30_000).map(|i| format!("- A <!-- =g.v{i} -->\n")))
+        .collect();
+    for (name, body) in [("many groups", groups), ("one big group", one_group)] {
+        assert_parses_within(name, &format!("{head}{body}"), Duration::from_secs(10));
+    }
+}
+
+#[test]
 fn nesting_beyond_the_cap_is_reported_not_crashed_on() {
     let delimiter = |i: usize| if i.is_multiple_of(2) { "*" } else { "_" };
     let opens: String = (0..30).map(|i| format!("{}w ", delimiter(i))).collect();

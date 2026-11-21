@@ -74,7 +74,6 @@ pub enum DiagnosticCode {
     LetterSectionOrder,
     LetterSectionShape,
     LetterUnsupportedBlock,
-    LetterAnnotationUnsupported,
     PlaceholderUnknown,
     PlaceholderMalformed,
     PlaceholderPosition,
@@ -160,7 +159,6 @@ impl DiagnosticCode {
             | LetterSectionOrder
             | LetterSectionShape
             | LetterUnsupportedBlock
-            | LetterAnnotationUnsupported
             | PlaceholderUnknown
             | PlaceholderMalformed
             | PlaceholderPosition
@@ -225,7 +223,6 @@ impl DiagnosticCode {
             | LetterSectionOrder
             | LetterSectionShape
             | LetterUnsupportedBlock
-            | LetterAnnotationUnsupported
             | PlaceholderUnknown
             | PlaceholderMalformed
             | PlaceholderPosition

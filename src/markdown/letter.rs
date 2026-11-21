@@ -2,14 +2,16 @@
 //! ABOUTME: Explicit section frames and error-gated models prevent silently lost letter content.
 
 use super::{
-    Finding, Sink, Source, blocks, letter_inline, letter_safety,
-    tree::{BlockNode, Document},
+    Finding, Sink, Source, annotation, blocks, letter_inline, letter_safety,
+    tree::{BlockNode, Document, InlineNode},
 };
 use crate::{
     diagnostics::{Diagnostic, DiagnosticCode as Code, Severity},
-    letter::{LetterSource, Piece},
+    letter::{AlternateGroup, Item, LetterSource, Piece, SourceItem},
     model::Name,
 };
+use annotation::{GroupItem, ItemKind, Marked};
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 /// Parse outcome; only `valid` exposes a letter, and only when no error was reported.
@@ -50,8 +52,10 @@ pub fn parse_letter(path: impl AsRef<Path>, text: &str) -> ParsedLetter {
             0
         };
         let normalized = super::normalize_lone_cr(&text[base..]);
-        letter_safety::inspect(&normalized, base, &mut sink);
-        interpret(&doc, &Source { text }, &mut sink)
+        let (letter, owned) = interpret(&doc, &Source { text }, &mut sink);
+        // After the interpreter, so that a comment it has already judged is not judged twice.
+        letter_safety::inspect(&normalized, base, &owned, &mut sink);
+        letter
     });
     let mut diagnostics = sink.finish();
     super::enforce_span_contract(&mut diagnostics, text);
@@ -74,15 +78,28 @@ impl Section {
     }
 }
 
-fn interpret(doc: &Document, src: &Source<'_>, sink: &mut Sink<'_>) -> Option<LetterSource> {
+/// Interprets the document; the second value is where every annotation comment it judged starts.
+///
+/// A comment is judged when a shared annotation helper has looked at it: a comment line (`leading`), the end of a
+/// paragraph (`trailing`), or anywhere else inside a block the letter reads (`reject_in`). The safety pass then
+/// reports only the annotation-shaped comments nobody looked at, which sit where the tree cannot show them.
+fn interpret(doc: &Document, src: &Source<'_>, sink: &mut Sink<'_>) -> (Option<LetterSource>, HashSet<usize>) {
+    let mut above = annotation::leading(
+        &doc.blocks,
+        src,
+        "put the comment directly above the paragraph it marks, or delete it",
+        sink,
+    );
     let mut state = State::default();
-    for block in &doc.blocks {
+    for (index, block) in doc.blocks.iter().enumerate() {
         if blocks::is_comment(block) {
+            state.own_comment_block(block, src);
             continue;
         }
-        state.block(block, src, sink);
+        state.block(block, above[index].take(), src, sink);
     }
-    state.finish(src.text.len(), sink)
+    let owned = std::mem::take(&mut state.owned);
+    (state.finish(src.text.len(), sink), owned)
 }
 
 #[derive(Default)]
@@ -91,13 +108,36 @@ struct State {
     contact: Vec<crate::model::Inline>,
     contact_seen: bool,
     current: Option<Section>,
+    /// Counts the section headings seen, so a repeated heading does not join the group before it.
+    container: usize,
     headings: [Option<std::ops::Range<usize>>; 3],
-    pieces: [Vec<Piece>; 3],
+    items: [Vec<Item>; 3],
+    /// Every paragraph in a section, as the group check sees it; the payload is its place in `items`.
+    candidates: Vec<GroupItem<(usize, usize)>>,
+    owned: HashSet<usize>,
 }
 impl State {
-    fn block(&mut self, block: &BlockNode, src: &Source<'_>, sink: &mut Sink<'_>) {
+    /// Notes every comment of a comment-only block as judged: `leading` has already reported what is wrong.
+    fn own_comment_block(&mut self, block: &BlockNode, src: &Source<'_>) {
+        self.owned.extend(annotation::judged_in_block(block, src));
+    }
+
+    /// Notes every comment among `nodes`, at any depth, as judged by `trailing` or `reject_in`.
+    fn own_inline(&mut self, nodes: &[InlineNode]) {
+        self.owned.extend(annotation::judged_in(nodes));
+    }
+
+    /// A run that takes no annotation: the name, a heading, or the contact line.
+    fn forbid_in(&mut self, above: Option<Marked>, why: &str, nodes: &[InlineNode], sink: &mut Sink<'_>) {
+        annotation::unclaimed(above, why, sink);
+        self.own_inline(nodes);
+        annotation::reject_in(nodes, sink);
+    }
+
+    fn block(&mut self, block: &BlockNode, above: Option<Marked>, src: &Source<'_>, sink: &mut Sink<'_>) {
         match block {
             BlockNode::Heading(h) if h.level == 1 => {
+                self.forbid_in(above, "the name takes no annotation", &h.content, sink);
                 letter_inline::forbidden(&h.content, sink);
                 if self.name.is_some() || self.current.is_some() {
                     report(
@@ -111,6 +151,7 @@ impl State {
                 }
             }
             BlockNode::Heading(h) if h.level == 2 => {
+                self.forbid_in(above, "a letter heading takes no annotation", &h.content, sink);
                 letter_inline::forbidden(&h.content, sink);
                 let title = blocks::heading_text(h, sink);
                 match title.parse::<Section>() {
@@ -126,27 +167,20 @@ impl State {
                     }
                 }
             }
-            BlockNode::Paragraph(p) => {
-                if let Some(section) = self.current {
-                    let content = letter_inline::convert(&p.content, src, sink);
-                    if !letter_inline::has_content(&content)
-                        && super::inline::flatten_text(&p.content).trim().is_empty()
-                    {
-                        report(
-                            Code::LetterSectionShape,
-                            p.range.clone(),
-                            "letter paragraph has no visible content",
-                            sink,
-                        );
-                    }
-                    self.pieces[section.index()].push(Piece {
-                        content,
-                        range: p.range.clone(),
-                    });
-                } else if self.name.is_some() && !self.contact_seen && self.headings.iter().all(Option::is_none) {
+            BlockNode::Paragraph(p) => match self.current {
+                Some(section) => self.paragraph(section, p, above, src, sink),
+                None if self.name.is_some() && !self.contact_seen && self.headings.iter().all(Option::is_none) => {
+                    self.forbid_in(above, "the contact line takes no annotation", &p.content, sink);
                     self.contact = letter_inline::contact(&p.content, src, sink);
                     self.contact_seen = true;
-                } else {
+                }
+                None => {
+                    self.forbid_in(
+                        above,
+                        "this paragraph is outside every letter section",
+                        &p.content,
+                        sink,
+                    );
                     report(
                         Code::ContentBeforeSection,
                         p.range.clone(),
@@ -155,9 +189,63 @@ impl State {
                     );
                     letter_inline::convert(&p.content, src, sink);
                 }
+            },
+            _ => {
+                annotation::unclaimed(above, "a letter takes annotations only on its paragraphs", sink);
+                letter_inline::unsupported(block.range(), sink);
             }
-            _ => letter_inline::unsupported(block.range(), sink),
         }
+    }
+
+    /// One paragraph of a section, with its annotation from the end of its line or the line above it.
+    fn paragraph(
+        &mut self,
+        section: Section,
+        p: &crate::markdown::tree::ParagraphNode,
+        above: Option<Marked>,
+        src: &Source<'_>,
+        sink: &mut Sink<'_>,
+    ) {
+        self.own_inline(&p.content);
+        let trailing = annotation::trailing(&p.content, sink);
+        let marked = annotation::combine(above, trailing, sink);
+        let content = letter_inline::convert(&p.content, src, sink);
+        if !letter_inline::has_content(&content) && super::inline::flatten_text(&p.content).trim().is_empty() {
+            annotation::unclaimed(marked, annotation::SHOWS_NOTHING, sink);
+            report(
+                Code::LetterSectionShape,
+                p.range.clone(),
+                "letter paragraph has no visible content",
+                sink,
+            );
+            self.items[section.index()].push(Item::plain(Piece {
+                content,
+                range: p.range.clone(),
+            }));
+            return;
+        }
+        if section != Section::Body {
+            frame_takes_only_alternates(marked.as_ref(), section, sink);
+        }
+        let annotation_range = marked.as_ref().map(|m| m.range.clone());
+        let annotations = annotation::annotations_of(marked);
+        let index = self.items[section.index()].len();
+        self.candidates.push(GroupItem {
+            alternate: annotations.alternate.clone(),
+            priority: annotations.priority,
+            container: self.container,
+            kind: ItemKind::Paragraph,
+            range: annotation_range.clone().unwrap_or_else(|| p.range.clone()),
+            payload: (section.index(), index),
+        });
+        self.items[section.index()].push(Item {
+            piece: Piece {
+                content,
+                range: p.range.clone(),
+            },
+            annotations,
+            annotation_range,
+        });
     }
 
     fn section(&mut self, section: Section, range: std::ops::Range<usize>, sink: &mut Sink<'_>) {
@@ -189,11 +277,19 @@ impl State {
         }
         self.headings[i] = Some(range);
         self.current = Some(section);
+        self.container += 1;
     }
 
     fn finish(mut self, end: usize, sink: &mut Sink<'_>) -> Option<LetterSource> {
         if self.name.is_none() {
             report(Code::MissingName, 0..0, "letter has no valid # Name heading", sink);
+        }
+        // One check for the whole letter, so a group name used in two sections is seen.
+        let groups = annotation::group(&self.candidates, sink);
+        let mut sections = std::mem::take(&mut self.items).map(Some);
+        let mut built: [Vec<SourceItem>; 3] = Default::default();
+        for (section, items) in sections.iter_mut().enumerate() {
+            built[section] = source_items(items.take().unwrap_or_default(), section, &groups);
         }
         for section in [Section::Greeting, Section::Body, Section::Closing] {
             let i = section.index();
@@ -204,7 +300,7 @@ impl State {
                     &format!("missing ## {section}"),
                     sink,
                 ),
-                Some(range) if self.pieces[i].is_empty() || (i != 1 && self.pieces[i].len() != 1) => {
+                Some(range) if built[i].is_empty() || (i != 1 && built[i].len() != 1) => {
                     report(
                         Code::LetterSectionShape,
                         range.clone(),
@@ -215,14 +311,59 @@ impl State {
                 _ => {}
             }
         }
+        let [greeting, body, closing] = built;
         Some(LetterSource {
             name: self.name?,
             contact: self.contact,
-            greeting: self.pieces[0].pop()?,
-            body: std::mem::take(&mut self.pieces[1]),
-            closing: self.pieces[2].pop()?,
+            greeting: greeting.into_iter().next()?,
+            body,
+            closing: closing.into_iter().next()?,
         })
     }
+}
+
+/// Greeting and closing hold one wording of one paragraph, so they take `=group.variant` and nothing else.
+fn frame_takes_only_alternates(marked: Option<&Marked>, section: Section, sink: &mut Sink<'_>) {
+    let Some(marked) = marked else { return };
+    let said = &marked.annotations;
+    if said.priority.is_some() || said.status.is_some() || !said.tags.is_empty() {
+        sink.report(
+            Finding::new(
+                Code::AnnotationMisplaced,
+                marked.range.clone(),
+                format!("the {section} takes no priority, status, or tags"),
+            )
+            .hint("keep only `=group.variant` here; state priority, status, and tags on body paragraphs"),
+        );
+    }
+}
+
+/// Moves one section's items into source items in authored order; each valid group becomes one item.
+///
+/// A group is checked before it gets here, so its members are the consecutive paragraphs that share its name.
+fn source_items(items: Vec<Item>, section: usize, groups: &[Vec<(usize, usize)>]) -> Vec<SourceItem> {
+    let group_of: HashMap<usize, usize> = groups
+        .iter()
+        .enumerate()
+        .flat_map(|(group, members)| members.iter().filter(|m| m.0 == section).map(move |m| (m.1, group)))
+        .collect();
+    let mut items: Vec<Option<Item>> = items.into_iter().map(Some).collect();
+    let mut built = Vec::with_capacity(items.len());
+    let mut done = HashSet::new();
+    for index in 0..items.len() {
+        match group_of.get(&index) {
+            Some(&group) if done.insert(group) => {
+                let variants = groups[group]
+                    .iter()
+                    .filter_map(|member| items.get_mut(member.1)?.take())
+                    .collect();
+                built.push(SourceItem::Alternates(AlternateGroup { variants }));
+            }
+            Some(_) => {}
+            None => built.extend(items[index].take().map(SourceItem::Paragraph)),
+        }
+    }
+    built
 }
 fn report(code: Code, range: std::ops::Range<usize>, message: &str, sink: &mut Sink<'_>) {
     sink.report(Finding::new(code, range, message).hint(code.advice().fix));

@@ -1,6 +1,7 @@
 //! ABOUTME: Shared annotation recognition for resumes and letters: the shape predicate and the token parser.
 //! ABOUTME: Every token error is located inside the comment; an ordinary comment is never an annotation.
 
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::str::FromStr;
 
@@ -312,6 +313,35 @@ pub(crate) fn reject_in(nodes: &[InlineNode], sink: &mut Sink<'_>) {
     }
 }
 
+/// The start of every comment [`trailing`] or [`reject_in`] looks at in `nodes`: the same walk, kept beside them.
+///
+/// A caller that runs a second pass for comments nobody looked at uses this to say which ones were looked at.
+pub(crate) fn judged_in(nodes: &[InlineNode]) -> Vec<usize> {
+    let mut found = Vec::new();
+    for node in nodes {
+        match node {
+            InlineNode::Html { range, .. } => found.push(range.start),
+            InlineNode::Strong { children, .. }
+            | InlineNode::Emph { children, .. }
+            | InlineNode::Link { children, .. } => found.extend(judged_in(children)),
+            _ => {}
+        }
+    }
+    found
+}
+
+/// The start of every comment [`leading`] looks at in `block`: those of a block that is only comments.
+pub(crate) fn judged_in_block(block: &BlockNode, src: &Source<'_>) -> Vec<usize> {
+    let BlockNode::Html(html) = block else {
+        return Vec::new();
+    };
+    comments(src.slice(&html.range))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|c| html.range.start + c.start)
+        .collect()
+}
+
 /// Reports an alternate where none is allowed (a section heading, role line, or era line) and drops it.
 pub(crate) fn forbid_alternate(marked: &mut Option<Marked>, what: &str, sink: &mut Sink<'_>) {
     let Some(marked) = marked.as_mut() else { return };
@@ -383,14 +413,17 @@ pub(crate) enum ItemKind {
 pub(crate) fn group<T: Clone>(items: &[GroupItem<T>], sink: &mut Sink<'_>) -> Vec<Vec<T>> {
     let mut valid = Vec::new();
     let mut seen: Vec<Run<'_, T>> = Vec::new();
+    // The first run of each name, found by name: a list search per run is quadratic at the input size cap.
+    let mut first_of: HashMap<&GroupName, usize> = HashMap::new();
     for run in runs(items) {
-        if let Some(earlier) = seen.iter().find(|r| r.name == run.name) {
-            report_scattered(earlier, &run, sink);
+        if let Some(&earlier) = first_of.get(run.name) {
+            report_scattered(&seen[earlier], &run, sink);
             continue;
         }
         if check_run(&run, sink) {
             valid.push(run.members.iter().map(|(item, _)| item.payload.clone()).collect());
         }
+        first_of.insert(run.name, seen.len());
         seen.push(run);
     }
     valid
@@ -461,11 +494,13 @@ fn report_scattered<T>(earlier: &Run<'_, T>, later: &Run<'_, T>, sink: &mut Sink
 fn check_run<T>(run: &Run<'_, T>, sink: &mut Sink<'_>) -> bool {
     let (first, _) = run.members[0];
     let mut problems = Vec::new();
-    for (index, &(item, alternate)) in run.members.iter().enumerate() {
+    // Variant names already met, so a repeat is found without comparing against every earlier variant.
+    let mut named: HashSet<&VariantName> = HashSet::with_capacity(run.members.len());
+    for &(item, alternate) in &run.members {
         if item.kind != first.kind {
             problems.push(differing_kind(item, first, run.name));
         }
-        if run.members[..index].iter().any(|(_, a)| a.variant == alternate.variant) {
+        if !named.insert(&alternate.variant) {
             problems.push(
                 Finding::new(
                     DiagnosticCode::AlternateVariantRepeated,
@@ -661,6 +696,49 @@ mod tests {
 
     fn tags(names: &[&str]) -> BTreeSet<Tag> {
         names.iter().map(|n| assert_ok!(Tag::try_new(*n))).collect()
+    }
+
+    /// The paragraph content of `markdown`, lowered the way the parsers lower it.
+    fn inline_nodes(markdown: &str) -> Vec<InlineNode> {
+        let mut sink = Sink::new(Path::new("r.md"));
+        let doc = crate::markdown::tree::lower(markdown, 0, &mut sink);
+        let Some(BlockNode::Paragraph(p)) = doc.blocks.into_iter().next() else {
+            panic!("a paragraph expected in {markdown:?}")
+        };
+        p.content
+    }
+
+    #[test]
+    fn judged_in_names_exactly_the_comments_reject_in_looks_at() {
+        // Every nesting `reject_in` walks, plus text and code that hold no comment node.
+        for markdown in [
+            "a <!-- @core --> b",
+            "**a <!-- @core -->** b <!-- #ai -->",
+            "*a <!-- @core -->* [x <!-- #ai -->](https://example.invalid) `<!-- @core -->` \\<!-- @core -->",
+            "**_[a <!-- @core -->](https://example.invalid)_** <!-- =g.default -->",
+            "a <!-- an ordinary note --> b",
+        ] {
+            let nodes = inline_nodes(markdown);
+            let mut sink = Sink::new(Path::new("r.md"));
+            reject_in(&nodes, &mut sink);
+            let reported: Vec<usize> = sink
+                .finish()
+                .iter()
+                .map(|d| d.span.as_ref().map_or(usize::MAX, |s| s.range.start))
+                .collect();
+            let judged: Vec<usize> = judged_in(&nodes);
+            for at in &reported {
+                assert!(
+                    judged.contains(at),
+                    "{markdown:?}: reject_in reports {at}, judged_in has {judged:?}"
+                );
+            }
+            // Every comment node in the tree is accounted for, so none can be owned without being looked at.
+            let comment_nodes = markdown.matches("<!--").count()
+                - markdown.matches("`<!--").count()
+                - markdown.matches("\\<!--").count();
+            assert_eq!(judged.len(), comment_nodes, "{markdown:?}");
+        }
     }
 
     #[test]

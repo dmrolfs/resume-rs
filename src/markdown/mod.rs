@@ -558,7 +558,6 @@ mod tests {
             LetterSectionOrder,
             LetterSectionShape,
             LetterUnsupportedBlock,
-            LetterAnnotationUnsupported,
             PlaceholderUnknown,
             PlaceholderMalformed,
             PlaceholderPosition,

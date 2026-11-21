@@ -1,6 +1,20 @@
 <!-- ABOUTME: Documents the implemented strict cover-letter parser and approved placeholder policies. -->
-<!-- ABOUTME: Covers rsm-5q1.2 only; selection, CLI and output remain later tasks. -->
+<!-- ABOUTME: Covers rsm-5q1.2 and the annotation reading of rsm-vqr.1; selection, CLI and output remain later tasks. -->
 # Cover-letter Markdown parser
+
+## Annotations (rsm-vqr.1, supersedes the reservation described under Annotation safety)
+
+A letter now reads annotations with the resume's grammar and group checker (`src/markdown/annotation.rs`); `letter-annotation-unsupported` no longer exists.
+A paragraph in Greeting, Body or Closing takes an annotation as a trailing comment or as a comment alone on the line above it.
+`annotation::leading`, `trailing` and `combine` report the shared codes (`annotation-detached`, `annotation-without-target`, `annotation-duplicate`, `annotation-unknown-keyword`, `annotation-malformed`, `annotation-conflict`).
+The name, contact line, headings, unsupported blocks, and a comment in the middle of a paragraph or inside bold, emphasis or a link are `annotation-misplaced`.
+Greeting and closing take `=group.variant` only; priority, status or tags there are `annotation-misplaced`.
+`LetterSource` keeps every authored wording: each section item is a `SourceItem`, a plain `Paragraph(Item)` or an `Alternates(AlternateGroup)` of one checked group (a lone `default` is still a group).
+An `Item` holds the paragraph's `Piece` with its original spans, its `Annotations`, and the annotation comment's own range.
+`annotation::group` runs once for the whole letter with one container per section, so a group never crosses a section and a group name is unique in the document.
+The parser chooses nothing: drafts and every variant stay in the source, and selection (rsm-vqr.2) decides.
+`TryFrom<LetterSource> for SelectedLetter` replaces the old `From`: it accepts only a letter with no annotations at all and otherwise returns `SelectionRequired` naming the first comment, so a draft or an unselected wording cannot reach field resolution.
+Ownership: a comment the interpreter judged (through `leading`, `trailing` or `reject_in`) is recorded by its start offset, and `letter_safety::inspect` then reports only annotation-shaped comments nobody judged, which sit inside unsupported containers or were never closed.
 
 Implementation task: rsm-5q1.2.
 This record supersedes verbatim-only placeholder recommendations in the raw Oracle appendices.
@@ -52,12 +66,12 @@ Substituted values are never parsed, decoded or recursively expanded.
 ## Annotation safety
 
 Only actual Markdown HTML comments are classified as annotations; code/escaped/entity-written comment lookalikes remain visible text.
-A comment's first token starting with @, # or = is reserved and errors until letter tailoring ships.
+A comment's first token starting with @, # or = is an annotation (`annotation::is_annotation`); see Annotations above for where it is read and where it is an error. Until rsm-vqr.1 it was reserved and always an error.
 Ordinary comments disappear, but malformed unescaped comments error instead of accidentally printing hidden text.
 A bounded second pulldown event pass observes HTML inside unsupported containers before the regular tree discards their events, and checks reference definitions.
 This leaves resume tree behavior unchanged; the cost is a second linear parse within the existing 1 MiB limit.
 Comment text uses the existing TextNode mapping for container prefixes and Unicode offsets.
-The whole-comment `annotation::is_annotation` signature matches the concurrently developed rsm-141.22.1 helper; retain the upstream full module when merging that work.
+The whole-comment `annotation::is_annotation` is the upstream module from rsm-141.22.1, which replaced the stub this task first shipped.
 
 ## Verification
 
