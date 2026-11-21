@@ -427,6 +427,16 @@ Letter page reporting uses the existing geometry and font checks without resume 
 Geometry retains the existing measurement limits; it is not a guarantee about every transformed glyph in an arbitrary custom style.
 `resume export` remains resume-only; `export-style` includes the optional letter entry.
 
+## Owner-reviewed PDF layout revision
+
+The owner rejected the resume-like centered name/contact header during D6 visual review.
+The pragmatic letter now uses full-block formatting: left-aligned, body-sized sender details, compact recipient/company lines, and blank-line separation between distinct letter blocks.
+It retains the font family and margins but not the resume header hierarchy or dense paragraph spacing.
+Greetings remain authored content; the style does not insert or remove `Dear`.
+This follows the block-format structure described by [Purdue OWL](https://owl.purdue.edu/owl/subject_specific_writing/professional_technical_writing/basic_business_letters/index.html).
+The Tech Resume Inside Out public contents mention cover letters, but no letter layout recommendation was verified from the book; Standard Resume's public pages did not establish a cover-letter template.
+The revised synthetic PDF requires renewed owner review and new determinism evidence; earlier hashes apply to the old layout.
+
 ## Final review disposition
 
 Oracle's final review (`history/cover-letter-oracle-final-review.md`, COMPLETE) found seven actionable filing corrections.

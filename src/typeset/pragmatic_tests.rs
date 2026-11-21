@@ -1063,3 +1063,4 @@ fn the_pragmatic_footer_still_starts_at_its_own_left_margin() {
 // The experienced style's tests share this module's frame-run and sweep helpers.
 #[path = "experienced_tests.rs"]
 mod experienced_tests;
+mod letter_tests;

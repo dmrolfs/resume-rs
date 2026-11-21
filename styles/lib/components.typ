@@ -336,8 +336,10 @@
     lang: "en", region: "US", hyphenate: false, ligatures: false,
     top-edge: theme.line.top, bottom-edge: theme.line.bottom,
   )
-  set par(leading: theme.line.leading, spacing: theme.spacing.paragraph, justify: false)
-  show link: it => text(fill: theme.color.link, underline(it))
+  // A blank line separates letter blocks; resume paragraph spacing is intentionally denser.
+  set align(left)
+  set par(leading: theme.line.leading, spacing: 1.2em, justify: false)
+  show link: it => text(fill: theme.color.text, underline(it))
   show raw: set text(font: font-stack(theme.fonts.mono), size: 0.92em)
   [#metadata(theme.fonts) <resume-fonts>]
   body

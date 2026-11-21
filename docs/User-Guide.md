@@ -503,7 +503,9 @@ All content and page checks finish before replacing a PDF; unlike `build`, a let
 In `both` mode the PDF is committed first, then text is printed; a later stdout failure leaves that PDF in place and reports it.
 JSON diagnostics are allowed with PDF-only output.
 
-The pragmatic PDF includes the name/contact header, optional date (for example `February 29, 2028`), recipient/company, and authored letter text.
+The pragmatic PDF uses full-block letter formatting: body-sized sender details aligned left, compact recipient/company lines, and blank-line spacing between the sender, date, recipient, greeting and body paragraphs.
+It includes the optional date (for example `February 29, 2028`) and authored closing/signature.
+The greeting is printed exactly as authored; `Hiring Team:` is valid, and the renderer never inserts `Dear`.
 No date appears when omitted; the clock is never consulted.
 Metadata uses title `<Name> - Cover letter` and author `<Name>`, not company or position fields.
 Only pragmatic supplies a letter entry initially; `resume styles` marks letter capability, and `export-style` includes `letter.typ`.
