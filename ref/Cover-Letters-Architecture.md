@@ -326,6 +326,9 @@ The first report's date is preserved; collection occurred on 2026-11-20 UTC.
    Remove emphasis/code markup, not text.
    Default links render label plus URL; collapse only exact label/URL equality, and exact mailto-address equality, never strip a scheme to guess equivalence.
    A non-address mailto label renders `label (address)` so meaningful wording is not lost.
+   The address shortcut applies only when the mailto URL has no query or fragment; otherwise retain the full serialized URL, including subject/cc/body parameters, rather than silently discard them.
+   Equality and display use the stored URL spelling (including percent encoding and canonical trailing slash); no percent decoding or source-equivalence guessing is performed.
+   An empty link label remains empty in text-only mode and renders ` (target)` in text-and-url mode; validation of authored content is upstream.
    An explicit text-only link option emits labels only.
    Keep the parser's existing smart punctuation, but apply no new Unicode normalization or transliteration.
 8. Count exact rendered bytes, Unicode scalars, UTF-16 units, whitespace-separated words and LF line breaks.

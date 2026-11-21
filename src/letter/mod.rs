@@ -2,6 +2,10 @@
 //! ABOUTME: Only resolved letters reach renderers; the resume JSON contract stays unchanged.
 
 mod model;
+mod plain;
+pub use plain::{LengthUnit, LinkStyle, PlainLetter, TextCounts, TextLimit, TextLimitError, to_plain};
+#[cfg(test)]
+mod plain_tests;
 mod resolve;
 mod source;
 
