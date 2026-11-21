@@ -15,6 +15,9 @@ pub(crate) struct Outline {
     pub sections: Vec<SectionOutline>,
     /// The visible text of each variant of each valid alternate group, in document order.
     pub groups: Vec<Vec<Located>>,
+    /// Where each node of the model starts, as a byte offset, in the order [`crate::model::Resume::nodes`]
+    /// visits them, so a report about a node can name its line.
+    pub starts: Vec<usize>,
 }
 
 /// A kept `##` section.

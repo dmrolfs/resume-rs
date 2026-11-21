@@ -219,7 +219,7 @@ resume check Resume.md --format json
 
 **`doctor --explain CODE`** prints what a finding means, the reason for it, how to fix it, and usually a before-and-after example. The code is written exactly as the report shows it, in lowercase. Every example it prints is one that really produces its code; the one for `font-fallback-metric` needs `--format json`, because that note is not shown in a human report.
 
-**Where output goes.** A human report is written to standard error, so `resume check Resume.md > report.txt` leaves the file empty. With `--format json`, each finding is one JSON object per line on standard output, for scripts. A JSON finding has the fields `type` (always `diagnostic`), `severity`, `code`, `category`, `message`, `file`, `line`, `column`, `end_line`, `end_column`, `hints`, and `fixable`. Operational problems (a file that cannot be read, an unknown style) are still plain lines on standard error with exit code 1, so standard output stays machine-readable.
+**Where output goes.** A human report is written to standard error, so `resume check Resume.md > report.txt` leaves the file empty. With `--format json`, each finding is one JSON object per line on standard output, for scripts. A JSON finding has the fields `type` (`diagnostic`; a tailored build also writes one `selection` record, see [Annotations](#annotations)), `severity`, `code`, `category`, `message`, `file`, `line`, `column`, `end_line`, `end_column`, `hints`, and `fixable`. Operational problems (a file that cannot be read, an unknown style) are still plain lines on standard error with exit code 1, so standard output stays machine-readable.
 
 **Exit codes.** 0 means success, and warnings are allowed. 1 means an error finding, a failed build, or an operational error such as an unreadable file. 2 means the command line itself was wrong.
 
@@ -536,6 +536,10 @@ resume build Resume.md Other.md --out pdfs
 | `--max-pages <N>` | a number of pages | Fail when the resume needs more pages than this. |
 | `--fonts <FONTS>` | `auto` or `bundled`; default `auto` | Which fonts may be used. See [Fonts](#fonts). |
 | `--font-path <DIR>` | none; repeatable | A directory of fonts to use when `--fonts` is `auto`. Give it more than once. It cannot be combined with `--fonts bundled`. |
+| `--tags <TAG>` | tag names; comma-separated or repeatable | Keep only items with one of these tags, besides `@core` and untagged items. See [Annotations](#annotations). It cannot be combined with `--core-only`. |
+| `--core-only` | a switch | Keep only `@core` items. |
+| `--prefer <NAME>` | wording names; comma-separated or repeatable | The wordings to use where a group has them, most preferred first. |
+| `--drafts` | a switch | Keep what is marked `@draft`, to preview the resume once the drafts are ready. |
 
 ### resume watch
 
@@ -564,6 +568,10 @@ A build starts shortly after the last change, so an editor that is still writing
 | `--font-path <DIR>` | none; repeatable | A directory of fonts to use when `--fonts` is `auto`. It cannot be combined with `--fonts bundled`. |
 | `--debounce <DURATION>` | a time such as `1s`; default `150ms` | How long to wait after the last change before building. |
 | `--open` | a switch | Opens the PDF once, after the first build that writes it, even a build with a layout error. A failure to open it is a warning. |
+| `--tags <TAG>` | tag names; comma-separated or repeatable | Keep only items with one of these tags, besides `@core` and untagged items. See [Annotations](#annotations). It cannot be combined with `--core-only`. |
+| `--core-only` | a switch | Keep only `@core` items. |
+| `--prefer <NAME>` | wording names; comma-separated or repeatable | The wordings to use where a group has them, most preferred first. |
+| `--drafts` | a switch | Keep what is marked `@draft`, to preview the resume once the drafts are ready. |
 
 ### resume doctor
 
@@ -586,6 +594,10 @@ resume doctor --explain role-separator
 | `--font-path <DIR>` | none; repeatable | A directory of fonts to use when `--fonts` is `auto`. |
 | `--fix` | a switch | Apply the changes that are mechanical and keep the meaning, to the files themselves. Add `--dry-run` to see the diff and change nothing. |
 | `--explain <CODE>` | a finding's code | Explain a finding by its code, with an example, and exit. It cannot be combined with files or `--fix`. |
+| `--tags <TAG>` | tag names; comma-separated or repeatable | Keep only items with one of these tags, besides `@core` and untagged items. See [Annotations](#annotations). It cannot be combined with `--core-only`. |
+| `--core-only` | a switch | Keep only `@core` items. |
+| `--prefer <NAME>` | wording names; comma-separated or repeatable | The wordings to use where a group has them, most preferred first. |
+| `--drafts` | a switch | Keep what is marked `@draft`, to preview the resume once the drafts are ready. |
 
 ### resume check
 
@@ -605,6 +617,10 @@ resume check Resume.md --format json
 | `--max-pages <N>` | a number of pages | Report a layout error when the resume needs more pages than this. |
 | `--fonts <FONTS>` | `auto` or `bundled`; default `auto` | Which fonts may be used. |
 | `--font-path <DIR>` | none; repeatable | A directory of fonts to use when `--fonts` is `auto`. |
+| `--tags <TAG>` | tag names; comma-separated or repeatable | Keep only items with one of these tags, besides `@core` and untagged items. See [Annotations](#annotations). It cannot be combined with `--core-only`. |
+| `--core-only` | a switch | Keep only `@core` items. |
+| `--prefer <NAME>` | wording names; comma-separated or repeatable | The wordings to use where a group has them, most preferred first. |
+| `--drafts` | a switch | Keep what is marked `@draft`, to preview the resume once the drafts are ready. |
 
 ### resume styles
 
@@ -661,6 +677,25 @@ The preview is a guide to the look and not to the page count: Typst's own tools 
 | `-s, --style <NAME>` | default `pragmatic` | The style to export. |
 | `--styles-dir <DIR>` | none | A directory of styles to use besides the built-in ones. |
 | `--force` | a switch | Replace style files that already exist. `resume.json` is always replaced. |
+| `--tags <TAG>` | tag names; comma-separated or repeatable | Keep only items with one of these tags, besides `@core` and untagged items. See [Annotations](#annotations). It cannot be combined with `--core-only`. |
+| `--core-only` | a switch | Keep only `@core` items. |
+| `--prefer <NAME>` | wording names; comma-separated or repeatable | The wordings to use where a group has them, most preferred first. |
+| `--drafts` | a switch | Keep what is marked `@draft`, to preview the resume once the drafts are ready. |
+
+### resume tags
+
+Lists what one resume's annotations offer: its tags, how often each keyword is used, and its groups of alternate wordings, with the line of each and which wordings are drafts. A position spec, or you at the command line, can only name what this lists. See [Annotations](#annotations).
+
+```sh
+resume tags Resume.md
+resume tags Resume.md --format json
+```
+
+A tag shows how many items carry it themselves, and how many more carry it because a section, role, or era above them does. With `--format json` it prints one JSON object, with `type` `inventory`, instead. A resume with format errors prints its findings and no list, and exits 1, because a partial list would suggest a name is not used.
+
+| Option | Values and default | What it does |
+|---|---|---|
+| `<FILE>` | one Markdown file | The resume to list. |
 
 ### resume licenses
 
@@ -681,9 +716,111 @@ Nothing else is read from the environment. Nothing is read from the current dire
 
 ## Annotations
 
-<!-- guide:planned rsm-141.22 witness=option:--tags -->
+One baseline resume can hold everything you might say, for every kind of job. Annotations in Markdown comments say how each item may be tailored: how important it is, whether it is ready, which jobs it fits, and which other wordings it has. A build then keeps what you select. Comments never print, so the baseline still reads as one resume, and a resume without annotations builds exactly as it did before them.
 
-**Planned, not available yet.** Annotations are planned as a way to produce several tailored resumes from one baseline. The parser already reads a comment that starts with `@`, `#`, or `=` as an annotation and reports one it cannot read as an error. Every build already leaves out what is marked `@draft`, and renders the `default` wording of each group. The options that choose tags and wordings are not available yet. Any other comment is ignored.
+### Syntax
+
+An annotation is an HTML comment whose first word starts with `@`, `#`, or `=` followed by a letter. Any other comment is an ordinary comment and is ignored.
+
+| Write | Meaning |
+|---|---|
+| `@core` | Important for every job: kept whatever the tags. At most one of `@core` and `@extra`. |
+| `@extra` | Kept only when one of its tags is selected. |
+| `@draft` | Not ready: left out of every build unless you pass `--drafts`. At most one of `@draft` and `@verify`. |
+| `@verify` | Kept, and listed after each build until you remove the mark. |
+| `#tag` | A topic, such as `#ai` or `#platform`. Any number on one line; the same tag twice counts once. |
+| `=group.variant` | One wording of an item. Every group has a `default`. At most one per line. |
+
+Tag, group, and wording names are lowercase letters and digits, starting with a letter, with single hyphens between, and at most 40 characters. A misspelled keyword, such as `@cor`, is the error [`annotation-unknown-keyword`](#code-annotation-unknown-keyword):
+
+```markdown in-section expect=annotation-unknown-keyword
+### Acme · Engineer · 2015 – 2017
+
+- Cut build time from 40 minutes to 9. <!-- @cor -->
+```
+
+### Where an annotation goes
+
+An annotation marks an item in one of two places: at the end of the item's own line, or alone on the line directly above it.
+
+```markdown in-section expect=none
+### Acme · Engineer · 2015 – 2017 <!-- #platform -->
+
+- Cut build time from 40 minutes to 9. <!-- @core #ai -->
+<!-- @extra #data -->
+- Moved 3 data pipelines to a new scheduler.
+```
+
+It can mark a section heading, a role line, an era line, a role's first paragraph (its description), any other paragraph, or a bullet. Anything less clear is an error with a fix, never ignored: a blank line between the comment and its item is [`annotation-detached`](#code-annotation-detached), a second annotation for one item is [`annotation-duplicate`](#code-annotation-duplicate), and an annotation in the middle of a line is [`annotation-misplaced`](#code-annotation-misplaced):
+
+```markdown in-section expect=annotation-misplaced
+### Acme · Engineer · 2015 – 2017
+
+- Cut build time <!-- #ai --> from 40 minutes to 9.
+```
+
+### Alternate wordings
+
+Several wordings of one item sit next to each other, each marked with the same group name and its own wording name. A build renders exactly one: the one you prefer, or `default`. A group's wordings are all bullets or all paragraphs, state the same priority (or none), and its name is used once in the file. Section headings, role lines, and era lines have one wording, so a wording there is [`alternate-not-allowed`](#code-alternate-not-allowed).
+
+```markdown in-section expect=none
+### Acme · Engineer · 2015 – 2017
+
+- Led delivery of the LLM gateway for 20 teams. <!-- =gateway.default @core -->
+- Built the LLM gateway 20 teams use. <!-- =gateway.short @core -->
+- Gave 20 teams control of their AI spend. <!-- =gateway.business @core -->
+```
+
+A group without a `default` is [`alternate-missing-default`](#code-alternate-missing-default). The numbers in the wordings of one group should agree; [`alternate-facts-differ`](#code-alternate-facts-differ) warns when they do not.
+
+### What a build keeps
+
+| You build with | It keeps |
+|---|---|
+| no option | everything except drafts |
+| `--tags a,b` | `@core` items, items tagged `a` or `b`, and untagged items; an `@extra` item needs one of the tags |
+| `--core-only` | `@core` items only |
+
+A tag on a section, role, or era applies to everything under it, so an untagged bullet under a `#platform` role counts as tagged `#platform`, and `--tags ai` leaves it out. The build lists every item dropped this way. Priority does not pass down: `@core` on a role keeps its line and its description, not its bullets. A role's description without a priority of its own takes the role's. `@draft` on a section, role, or era leaves out everything under it. A section, role, or era the selection empties is dropped, so a heading never prints alone; one you wrote empty stays.
+
+For each group, the build uses the first wording of `--prefer` that the group has, else `default`. When `default` is a draft, it uses the group's first ready wording.
+
+### Drafts and verification
+
+Every build leaves `@draft` items out. `--drafts` puts them back, to preview the resume once they are ready; the summary says so. A preferred wording that is a draft is skipped, and the summary names it. `@verify` items are kept and listed after the build, so a claim you still need to check is not sent by accident.
+
+### Tailoring from the command line
+
+`build`, `watch`, `doctor`, `check`, and `export` take the same four options:
+
+```sh
+resume build Resume.md --tags ai,platform --prefer short
+resume build Resume.md --core-only
+resume build Resume.md --tags platform --drafts
+```
+
+`--tags` and `--prefer` take a comma-separated list, or the option given more than once. `--tags` cannot be combined with `--core-only`. A tag or wording that the file does not use is a warning that lists the ones it does, [`unknown-tag`](#code-unknown-tag) or [`unknown-wording`](#code-unknown-wording), because a misspelled tag would quietly select nothing.
+
+After a tailored build, a few lines under the summary say what the selection did:
+
+```text
+ok out/Resume.pdf  pragmatic  2 pages  0 errors, 0 warnings  built in 90ms
+  fonts: body Calibri (installed); display Calibri (installed); mono DejaVu Sans Mono (bundled)
+  selection: tags lead; prefer leader
+  kept: 4 sections, 6 roles, 3 paragraphs, 41 bullets; dropped: 2 sections, 22 bullets (of which 14 other wordings)
+  wordings: 28 chosen (28 preference)
+  dropped by an inherited tag: bullet at line 19 "Rust, Java, Scala, SQL"
+  dropped as emptied: section at line 17 "Languages and Technologies"
+  to verify: bullet at line 44 "Cut costs 40 percent across 3 regions."
+  drafts left out: 2
+  core alone: 1 page
+```
+
+Routine choices are counted; what can surprise you is listed with its line. `core alone` is the page count of the `@core` content by itself, with the same style, paper, fonts, and wordings: it is what a `--core-only` build would print. A build of a file without annotations, with no options, prints none of these lines.
+
+With `--format json`, the same facts are one JSON object on standard output, with `type` `selection`, after the build's findings. Each item it names has its `line`.
+
+To see what a file's annotations offer, use [`resume tags`](#resume-tags).
 
 ## Profiles and position specs
 
@@ -817,6 +954,8 @@ The environment: styles, fonts, and the output location. `doctor` and `check` re
 | <a id="code-output-not-writable"></a>`output-not-writable` | error | The output directory cannot be created or written, so build would fail. |
 | <a id="code-typst-error"></a>`typst-error` | error | The style's Typst code failed to compile. |
 | <a id="code-typst-warning"></a>`typst-warning` | warning | Typst reported a warning while rendering the style. |
+| <a id="code-unknown-tag"></a>`unknown-tag` | warning | A tag given with --tags is not used anywhere in the resume. |
+| <a id="code-unknown-wording"></a>`unknown-wording` | warning | A wording given with --prefer is not a variant of any group in the resume. |
 
 <!-- /guide:generated -->
 

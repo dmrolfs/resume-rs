@@ -49,13 +49,14 @@ pub(crate) fn interpret(doc: &Document, src: &Source<'_>, sink: &mut Sink<'_>) -
     above[..body].iter_mut().for_each(|marked| {
         annotation::unclaimed(marked.take(), "the name and the contact line take no annotation", sink)
     });
-    let (sections, outline, groups) = walk_sections(&rest[consumed..], &mut above[body..], src, sink);
+    let (sections, outline, groups, starts) = walk_sections(&rest[consumed..], &mut above[body..], src, sink);
     match name {
         Some(name) => (
             Some(Resume::new(name, contact, sections)),
             Some(Outline {
                 sections: outline,
                 groups,
+                starts,
             }),
         ),
         None => (None, None),
@@ -267,13 +268,14 @@ fn walk_sections(
     above: &mut [Option<Marked>],
     src: &Source<'_>,
     sink: &mut Sink<'_>,
-) -> (Vec<Section>, Vec<SectionOutline>, Vec<Vec<Located>>) {
+) -> (Vec<Section>, Vec<SectionOutline>, Vec<Vec<Located>>, Vec<usize>) {
     let next = next_visible(blocks);
     let mut walker = Walker {
         current: None,
         sections: Vec::new(),
         outline: Vec::new(),
         items: Items::default(),
+        starts: Vec::new(),
     };
     for (index, (block, next)) in blocks.iter().zip(next).enumerate() {
         let marked = above[index].take();
@@ -288,7 +290,7 @@ fn walk_sections(
     }
     walker.close_section(sink);
     let groups = annotation::group(&walker.items.0, sink);
-    (walker.sections, walker.outline, groups)
+    (walker.sections, walker.outline, groups, walker.starts)
 }
 
 /// Every item that could be an alternate, in document order, carrying its visible text for the facts lint.
@@ -341,6 +343,8 @@ struct Walker {
     sections: Vec<Section>,
     outline: Vec<SectionOutline>,
     items: Items,
+    /// Where each node of the kept sections starts, in model order.
+    starts: Vec<usize>,
 }
 
 impl Walker {
@@ -435,9 +439,10 @@ impl Walker {
     fn close_section(&mut self, sink: &mut Sink<'_>) {
         let Some(mut builder) = self.current.take() else { return };
         self.items.append(std::mem::take(&mut builder.items));
-        if let Some((section, outline)) = builder.finish(sink) {
+        if let Some((section, outline, starts)) = builder.finish(sink) {
             self.sections.push(section);
             self.outline.push(outline);
+            self.starts.extend(starts);
         }
     }
 }
@@ -472,6 +477,8 @@ struct SectionBuilder {
     order: Vec<RoleKey>,
     /// Where the section's heading text is, and what the section holds outside roles, for the outline.
     heading: Range<usize>,
+    /// Where the section's heading line starts, then each node of `blocks` in model order.
+    starts: Vec<usize>,
     prose: Vec<Located>,
     bullets: Vec<BulletOutline>,
     roles: Vec<RoleOutline>,
@@ -502,6 +509,7 @@ impl SectionBuilder {
             role: None,
             order: Vec::new(),
             heading: role::content_range(heading),
+            starts: vec![heading.range.start],
             prose: Vec::new(),
             bullets: Vec::new(),
             roles: Vec::new(),
@@ -516,6 +524,7 @@ impl SectionBuilder {
         let head = role::role_line(heading, src, sink);
         self.role = Some(RoleBuilder {
             start: heading.range.start,
+            starts: Vec::new(),
             head,
             annotations: annotation::annotations_of(marked),
             blurb_annotations: Annotations::default(),
@@ -533,6 +542,9 @@ impl SectionBuilder {
         let Some(mut role) = self.role.take() else { return };
         role.close_era();
         let Some(head) = role.head else { return };
+        // The role line, then the blurb's start when it has one, then the body in model order.
+        self.starts.push(role.start);
+        self.starts.extend(role.starts);
         self.order.push(RoleKey {
             end: head.period.end,
             range: head.range.clone(),
@@ -616,11 +628,13 @@ impl SectionBuilder {
         let container = self.container();
         self.items
             .push(&annotations, range, container, ItemKind::Paragraph, located.clone());
+        let start = paragraph.range.start;
         match self.role.as_mut() {
-            Some(role) => role.paragraph(content, annotations, located),
+            Some(role) => role.paragraph(content, annotations, located, start),
             None => {
                 self.prose.push(located);
                 self.blocks.push(Block::Paragraph { content, annotations });
+                self.starts.push(start);
             }
         }
     }
@@ -646,9 +660,11 @@ impl SectionBuilder {
                 )
             })
             .collect();
+        let starts: Vec<usize> = located.iter().map(|outline| outline.item.start).collect();
         match self.role.as_mut() {
-            Some(role) => role.bullets(items, located, continues),
+            Some(role) => role.bullets(items, located, continues, starts),
             None => {
+                self.starts.extend(starts);
                 self.bullets.extend(located);
                 match self.blocks.last_mut() {
                     Some(Block::Bullets { items: before }) if continues => before.extend(items),
@@ -684,7 +700,7 @@ impl SectionBuilder {
         }
     }
 
-    fn finish(mut self, sink: &mut Sink<'_>) -> Option<(Section, SectionOutline)> {
+    fn finish(mut self, sink: &mut Sink<'_>) -> Option<(Section, SectionOutline, Vec<usize>)> {
         self.close_role();
         lint::role_order(&self.order, sink);
         let title = self.title?;
@@ -702,6 +718,7 @@ impl SectionBuilder {
                 annotations: self.annotations,
             },
             outline,
+            self.starts,
         ))
     }
 }
@@ -710,6 +727,8 @@ impl SectionBuilder {
 struct RoleBuilder {
     /// Where the role line starts, which names the role as a container of alternates.
     start: usize,
+    /// Where the blurb and each body node start, in model order (an era, then its bullets).
+    starts: Vec<usize>,
     head: Option<RoleHead>,
     annotations: Annotations,
     blurb_annotations: Annotations,
@@ -743,6 +762,7 @@ impl RoleBuilder {
     fn start_era(&mut self, start: usize, head: EraHead, annotations: Annotations) {
         self.close_era();
         self.started = true;
+        self.starts.push(start);
         self.outline.eras.push(head.period.clone());
         self.era = Some(EraBuilder {
             start,
@@ -769,7 +789,8 @@ impl RoleBuilder {
         }
     }
 
-    fn paragraph(&mut self, content: Vec<Inline>, annotations: Annotations, located: Located) {
+    fn paragraph(&mut self, content: Vec<Inline>, annotations: Annotations, located: Located, start: usize) {
+        self.starts.push(start);
         if !self.started {
             self.started = true;
             self.blurb = Some(content);
@@ -782,8 +803,9 @@ impl RoleBuilder {
         self.body.push(RoleBlock::Paragraph { content, annotations });
     }
 
-    fn bullets(&mut self, items: Vec<Bullet>, located: Vec<BulletOutline>, continues: bool) {
+    fn bullets(&mut self, items: Vec<Bullet>, located: Vec<BulletOutline>, continues: bool, starts: Vec<usize>) {
         self.started = true;
+        self.starts.extend(starts);
         self.outline.bullets.extend(located);
         match (self.era.as_mut(), self.body.last_mut()) {
             (Some(era), _) => era.items.extend(items),

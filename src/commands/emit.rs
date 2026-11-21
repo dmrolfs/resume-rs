@@ -66,6 +66,13 @@ impl<'a, 'io> Reporter<'a, 'io> {
         !matches!(self.io.stderr.flush(), Err(error) if error.kind() == io::ErrorKind::BrokenPipe)
     }
 
+    /// One non-diagnostic JSON-lines record on stdout, such as a build's `selection` record.
+    pub(super) fn record(&mut self, record: &impl serde::Serialize) {
+        if let Err(error) = crate::diagnostics::emit_json_record(&mut *self.io.stdout, record) {
+            self.render_failed(&error);
+        }
+    }
+
     /// One line of progress or result, on stderr like the summary lines.
     pub(super) fn line(&mut self, text: &str) {
         let _ = writeln!(self.io.stderr, "{text}");

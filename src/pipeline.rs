@@ -5,11 +5,13 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::cli::RenderArgs;
+use crate::diagnostics::{Diagnostic, DiagnosticCode};
 use crate::error::Error;
 use crate::layout::LayoutReport;
 use crate::markdown::{Parsed, parse};
+use crate::model::Priority;
 use crate::model::Resume;
-use crate::select::{self, Selection, SelectionReport};
+use crate::select::{self, CorePages, CoreSkip, Scope, Selection, SelectionReport, SelectionSummary, UnknownNames};
 use crate::style::{self, StyleSource};
 use crate::typeset::fonts::{FontSet, FontSetBuilder};
 use crate::typeset::{Compiled, RenderOptions, Typesetter};
@@ -110,14 +112,22 @@ impl Session {
     pub fn assess(&self, file: &Path, text: &str, render: &RenderArgs, selection: &Selection) -> Assessment {
         let parsed = parse(file, text);
         // Selection needs no fonts or style, so its result and its errors are known even when setup failed.
-        let tailored = parsed.valid().map(|resume| select::select(resume, selection));
+        let tailored = parsed.valid().map(|baseline| {
+            let findings = unknown_names(file, &UnknownNames::of(baseline, selection));
+            select::select(baseline, selection).map(|(resume, report)| Selected {
+                summary: SelectionSummary::new(baseline, &resume, selection, &report),
+                resume,
+                report,
+                findings,
+            })
+        });
         let (rendered, selected) = match (tailored, self.ready()) {
             (None, _) => (Rendered::Skipped(Skip::FormatErrors), None),
             (Some(Err(source)), _) => (Rendered::Failed(Error::Select { source }), None),
-            (Some(Ok((resume, report))), Err(_)) => (Rendered::Skipped(Skip::Setup), Some(Selected { resume, report })),
-            (Some(Ok((resume, report))), Ok((style, fonts))) => {
-                let rendered = self.render(&resume, style, fonts, render);
-                (rendered, Some(Selected { resume, report }))
+            (Some(Ok(selected)), Err(_)) => (Rendered::Skipped(Skip::Setup), Some(selected)),
+            (Some(Ok(selected)), Ok((style, fonts))) => {
+                let rendered = self.render(&selected.resume, style, fonts, render);
+                (rendered, Some(selected))
             }
         };
         Assessment {
@@ -125,6 +135,51 @@ impl Session {
             selected,
             rendered,
         }
+    }
+
+    /// The pages of `baseline`'s core content alone with `selection`'s wording choices and drafts setting: one
+    /// more compile with the same style, paper, and fonts, so it equals what a `--core-only` build would print.
+    ///
+    /// Skipped, and why, when `selection` is already core only or nothing in `baseline` is `@core`.
+    ///
+    /// # Errors
+    /// The core-only compile's own error (a style that compiles the whole resume but not its core), or a
+    /// selection error; the caller reports it and fails the run, because a promised count must not vanish.
+    pub fn core_pages(
+        &self,
+        baseline: &Resume,
+        selection: &Selection,
+        render: &RenderArgs,
+    ) -> Result<CorePages, Error> {
+        if selection.scope == Scope::CoreOnly {
+            return Ok(CorePages::Skipped {
+                reason: CoreSkip::AlreadyCoreOnly,
+            });
+        }
+        let core = baseline
+            .nodes()
+            .iter()
+            .any(|n| n.annotations.priority == Some(Priority::Core));
+        if !core {
+            return Ok(CorePages::Skipped {
+                reason: CoreSkip::NoCore,
+            });
+        }
+        let core_only = Selection {
+            scope: Scope::CoreOnly,
+            ..selection.clone()
+        };
+        let (resume, _) = select::select(baseline, &core_only).map_err(|source| Error::Select { source })?;
+        // A session that could not be set up has nothing to measure with; `build` never asks one.
+        let (Ok((style, _)), Some(typesetter)) = (self.ready(), self.typesetter.as_ref()) else {
+            return Ok(CorePages::Skipped {
+                reason: CoreSkip::NoSetup,
+            });
+        };
+        let compiled = typesetter.compile(&resume, style, RenderOptions::new(render.paper))?;
+        Ok(CorePages::Measured {
+            pages: compiled.page_count(),
+        })
     }
 
     fn render(&self, resume: &Resume, style: &StyleSource, fonts: &Arc<FontSet>, render: &RenderArgs) -> Rendered {
@@ -164,6 +219,53 @@ pub struct Assessment {
 pub struct Selected {
     pub resume: Resume,
     pub report: SelectionReport,
+    /// What the summary lines and the JSON `selection` record say; `core` is filled by the caller that wants it.
+    pub summary: SelectionSummary,
+    /// Warnings about the selection itself: tags and wordings asked for that the resume does not use.
+    pub findings: Vec<Diagnostic>,
+}
+
+/// One warning per unknown kind of name, listing what the file does use, so a typo is caught before it quietly
+/// selects nothing.
+pub(crate) fn unknown_names(file: &Path, unknown: &UnknownNames) -> Vec<Diagnostic> {
+    let finding = |code: DiagnosticCode, asked: String, what: &str, known: String| {
+        let has = if known.is_empty() {
+            format!("the resume uses no {what}s")
+        } else {
+            format!("the resume's {what}s are {known}")
+        };
+        Diagnostic {
+            severity: code.default_severity(),
+            code,
+            message: format!("{asked}: not used in {}", file.display()),
+            span: None,
+            hints: vec![has, "`resume tags <file>` lists every tag and wording".to_string()],
+            fix: None,
+        }
+    };
+    let listed = |names: Vec<String>| names.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join(", ");
+    let mut out = Vec::new();
+    if !unknown.tags.is_empty() {
+        let asked = listed(unknown.tags.iter().map(ToString::to_string).collect());
+        let known = listed(unknown.known_tags.iter().map(ToString::to_string).collect());
+        out.push(finding(
+            DiagnosticCode::UnknownTag,
+            format!("--tags {asked}"),
+            "tag",
+            known,
+        ));
+    }
+    if !unknown.wordings.is_empty() {
+        let asked = listed(unknown.wordings.iter().map(ToString::to_string).collect());
+        let known = listed(unknown.known_wordings.iter().map(ToString::to_string).collect());
+        out.push(finding(
+            DiagnosticCode::UnknownWording,
+            format!("--prefer {asked}"),
+            "wording",
+            known,
+        ));
+    }
+    out
 }
 
 /// What rendering a file came to.

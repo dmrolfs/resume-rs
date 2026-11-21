@@ -880,6 +880,102 @@ fn the_style_the_guide_shows_compiles_with_every_theme_that_fits_the_components(
     }
 }
 
+// ---- the Annotations section says what selection does ----------------------------------------------------
+
+/// The examples under `## Annotations` that are whole sections of a resume, placed after the shared preamble.
+fn annotation_example(guide: &Guide, containing: &str) -> resume::model::Resume {
+    let heading = assert_some!(guide.heading(2, "Annotations"), "the guide has no Annotations section");
+    let fence = assert_some!(
+        guide
+            .fences_in(Guide::range(heading))
+            .find(|f| f.body.contains(containing)),
+        "no Annotations example contains {containing:?}"
+    );
+    let text = format!("{}{}", checks::SECTION_PREAMBLE, fence.body);
+    let parsed = resume::markdown::parse("guide.md", &text);
+    assert_some!(parsed.valid(), "{text}").clone()
+}
+
+fn leaves(resume: &resume::model::Resume) -> Vec<String> {
+    resume
+        .nodes()
+        .iter()
+        .filter_map(|n| n.content.map(resume::model::plain_text))
+        .collect()
+}
+
+#[test]
+fn the_guides_wording_example_renders_default_or_the_preferred_wording() {
+    use resume::select::{Selection, select};
+    let guide = load();
+    let resume = annotation_example(&guide, "=gateway.default");
+    let plain = assert_ok!(select(&resume, &Selection::default())).0;
+    assert_eq!(leaves(&plain), ["Led delivery of the LLM gateway for 20 teams."]);
+    let short = Selection {
+        prefer: vec![assert_ok!(resume::model::VariantName::try_new("short"))],
+        ..Selection::default()
+    };
+    assert_eq!(
+        leaves(&assert_ok!(select(&resume, &short)).0),
+        ["Built the LLM gateway 20 teams use."]
+    );
+    // The first preferred wording the group has wins, whatever the order of the wordings in the file.
+    let ordered = |names: &[&str]| Selection {
+        prefer: names
+            .iter()
+            .map(|n| assert_ok!(resume::model::VariantName::try_new(*n)))
+            .collect(),
+        ..Selection::default()
+    };
+    let business = leaves(&assert_ok!(select(&resume, &ordered(&["business", "short"]))).0);
+    assert_eq!(business, ["Gave 20 teams control of their AI spend."]);
+    let missing_first = leaves(&assert_ok!(select(&resume, &ordered(&["tiny", "short"]))).0);
+    assert_eq!(missing_first, ["Built the LLM gateway 20 teams use."]);
+}
+
+#[test]
+fn the_guides_placement_example_keeps_what_its_keep_table_says() {
+    use resume::select::{Scope, SelectedTags, Selection, select};
+    let guide = load();
+    let resume = annotation_example(&guide, "<!-- @extra #data -->");
+    let tags = |names: &[&str]| Selection {
+        scope: Scope::Tags(assert_some!(SelectedTags::new(
+            names
+                .iter()
+                .map(|n| assert_ok!(resume::model::Tag::try_new(*n)))
+                .collect()
+        ))),
+        ..Selection::default()
+    };
+    // No option keeps everything; `@core` survives any tags; the `@extra #data` bullet needs `--tags data`.
+    let all = leaves(&assert_ok!(select(&resume, &Selection::default())).0);
+    assert_eq!(
+        all,
+        [
+            "Cut build time from 40 minutes to 9.",
+            "Moved 3 data pipelines to a new scheduler."
+        ]
+    );
+    let ai = leaves(&assert_ok!(select(&resume, &tags(&["ai"]))).0);
+    assert_eq!(ai, ["Cut build time from 40 minutes to 9."]);
+    let data = leaves(&assert_ok!(select(&resume, &tags(&["data"]))).0);
+    assert_eq!(
+        data,
+        [
+            "Cut build time from 40 minutes to 9.",
+            "Moved 3 data pipelines to a new scheduler."
+        ]
+    );
+    let core = Selection {
+        scope: Scope::CoreOnly,
+        ..Selection::default()
+    };
+    assert_eq!(
+        leaves(&assert_ok!(select(&resume, &core)).0),
+        ["Cut build time from 40 minutes to 9."]
+    );
+}
+
 // ---- keeping the generated block current ---------------------------------------------------------------
 
 /// Rewrites the diagnostic code tables in the guide from the code.

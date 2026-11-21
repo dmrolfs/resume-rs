@@ -4,8 +4,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::model::{
-    Alternate, Annotations, Block, Bullet, EraName, GroupName, Inline, Period, Priority, Resume, Role, RoleBlock,
-    Section, Status, Tag, VariantName,
+    Alternate, Annotations, Block, Bullet, EraName, GroupName, Inline, NodeKind, Period, Priority, Resume, Role,
+    RoleBlock, Section, Status, Tag, VariantName,
 };
 
 use super::rules::{self, ChosenBy, DropReason, Facts, GroupFacts, Resolution, Variant, Verdict};
@@ -57,55 +57,37 @@ pub enum UnknownPick {
     Variant(Alternate),
 }
 
-/// What kind of node a report entry is about.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::Display, strum::AsRefStr)]
-#[strum(serialize_all = "kebab-case")]
-pub enum NodeKind {
-    Section,
-    Role,
-    Era,
-    Blurb,
-    Paragraph,
-    Bullet,
-}
-
-/// A report's name for a node: its kind and a short label (a title, `Company · Title`, or a leaf's first words).
-// shortcut: no source position, the model has none; join with the parser's outline if the summary needs lines.
+/// A report's name for a node: its kind, a short label (a title, `Company · Title`, or a leaf's first words), and
+/// its position among the input's [`Resume::nodes`], which a caller with the source maps to a line
+/// (`Parsed::node_lines`). Labels can repeat; the index never does.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NodeRef {
     pub kind: NodeKind,
     pub label: String,
+    /// The node's index in the input resume's `nodes()`.
+    pub index: usize,
 }
 
 impl NodeRef {
-    fn new(kind: NodeKind, label: impl Into<String>) -> Self {
+    fn new(kind: NodeKind, label: impl Into<String>, index: usize) -> Self {
         Self {
             kind,
             label: label.into(),
+            index,
         }
     }
 
     /// A leaf, labelled by its first words.
-    fn leaf(kind: NodeKind, content: &[Inline]) -> Self {
+    fn leaf(kind: NodeKind, content: &[Inline], index: usize) -> Self {
         const WORDS: usize = 8;
-        let text = plain(content);
+        let text = crate::model::plain_text(content);
         let mut words = text.split_whitespace();
         let mut label: Vec<&str> = words.by_ref().take(WORDS).collect();
         if words.next().is_some() {
             label.push("…");
         }
-        Self::new(kind, label.join(" "))
+        Self::new(kind, label.join(" "), index)
     }
-}
-
-fn plain(content: &[Inline]) -> String {
-    content
-        .iter()
-        .map(|inline| match inline {
-            Inline::Text { text } | Inline::Code { text } => text.clone(),
-            Inline::Strong { content } | Inline::Emph { content } | Inline::Link { content, .. } => plain(content),
-        })
-        .collect()
 }
 
 /// Tailors `resume` to `selection`: keeps the selected items, renders one wording per kept group, and drops every
@@ -166,6 +148,8 @@ struct Walker<'s> {
     selection: &'s Selection,
     groups: BTreeMap<GroupName, Group>,
     report: SelectionReport,
+    /// The index the next node takes, in the order `Resume::nodes` visits them.
+    next: usize,
 }
 
 impl<'s> Walker<'s> {
@@ -192,18 +176,26 @@ impl<'s> Walker<'s> {
             selection,
             groups,
             report,
+            next: 0,
         })
     }
 
+    /// The index of the next node in `nodes()` order, counting it.
+    fn index(&mut self) -> usize {
+        self.next += 1;
+        self.next - 1
+    }
+
     fn section(&mut self, section: &Section) -> Option<Section> {
-        let node = NodeRef::new(NodeKind::Section, section.title.as_ref());
+        let node = NodeRef::new(NodeKind::Section, section.title.as_ref(), self.index());
         let gate = self.enter(&section.annotations, Gate::Open, &node);
         let tags = inherit(&Tags::new(), &section.annotations);
         let mut blocks = Vec::new();
         for block in &section.blocks {
             match block {
                 Block::Paragraph { content, annotations } => {
-                    let node = || NodeRef::leaf(NodeKind::Paragraph, content);
+                    let index = self.index();
+                    let node = || NodeRef::leaf(NodeKind::Paragraph, content, index);
                     if let Some(annotations) = self.leaf(annotations, &tags, gate, None, node) {
                         blocks.push(Block::Paragraph {
                             content: content.clone(),
@@ -231,7 +223,7 @@ impl<'s> Walker<'s> {
     }
 
     fn role(&mut self, role: &Role, inherited: &Tags, above: Gate) -> Option<Role> {
-        let node = NodeRef::new(NodeKind::Role, role_label(role));
+        let node = NodeRef::new(NodeKind::Role, role_label(role), self.index());
         let gate = self.enter(&role.annotations, above, &node);
         let tags = inherit(inherited, &role.annotations);
         let blurb_group = role
@@ -244,7 +236,8 @@ impl<'s> Walker<'s> {
         for part in &role.body {
             match part {
                 RoleBlock::Paragraph { content, annotations } => {
-                    let node = || NodeRef::leaf(NodeKind::Paragraph, content);
+                    let index = self.index();
+                    let node = || NodeRef::leaf(NodeKind::Paragraph, content, index);
                     let Some(kept) = self.leaf(annotations, &tags, gate, None, node) else {
                         continue;
                     };
@@ -294,7 +287,8 @@ impl<'s> Walker<'s> {
     /// keeps its blurb.
     fn blurb(&mut self, role: &Role, tags: &Tags, gate: Gate) -> Option<(Vec<Inline>, Annotations)> {
         let content = role.blurb.as_ref()?;
-        let node = || NodeRef::leaf(NodeKind::Blurb, content);
+        let index = self.index();
+        let node = || NodeRef::leaf(NodeKind::Blurb, content, index);
         let kept = self.leaf(&role.blurb_annotations, tags, gate, role.annotations.priority, node)?;
         Some((content.clone(), kept))
     }
@@ -308,7 +302,7 @@ impl<'s> Walker<'s> {
         inherited: &Tags,
         above: Gate,
     ) -> Option<RoleBlock> {
-        let node = NodeRef::new(NodeKind::Era, name.as_ref());
+        let node = NodeRef::new(NodeKind::Era, name.as_ref(), self.index());
         let gate = self.enter(annotations, above, &node);
         let kept = self.bullets(items, &inherit(inherited, annotations), gate);
         let emptied = !items.is_empty() && kept.is_empty();
@@ -324,7 +318,8 @@ impl<'s> Walker<'s> {
         items
             .iter()
             .filter_map(|bullet| {
-                let node = || NodeRef::leaf(NodeKind::Bullet, &bullet.content);
+                let index = self.index();
+                let node = || NodeRef::leaf(NodeKind::Bullet, &bullet.content, index);
                 self.leaf(&bullet.annotations, tags, gate, None, node)
                     .map(|annotations| Bullet {
                         label: bullet.label.clone(),

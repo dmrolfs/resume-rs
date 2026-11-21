@@ -106,6 +106,16 @@ pub fn emit_json<'d>(
         .try_for_each(|diagnostic| json::write_line(out, sources, diagnostic))
 }
 
+/// Writes one non-diagnostic JSON-lines record, such as a build's `selection` record, with the escaping every
+/// record on the stream shares. The record must carry its own `type` key.
+///
+/// # Errors
+/// - [`RenderError::Json`] - When the record cannot be serialized.
+/// - [`RenderError::Write`] - When `out` cannot be written.
+pub fn emit_json_record(out: &mut dyn std::io::Write, record: &impl serde::Serialize) -> Result<(), RenderError> {
+    json::write_record(out, record)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

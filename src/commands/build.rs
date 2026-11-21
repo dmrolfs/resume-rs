@@ -10,19 +10,29 @@ use snafu::ResultExt;
 use super::emit::Reporter;
 use super::report::Built;
 use super::{BuildLine, Env, Io, Outcome};
-use crate::cli::{BuildArgs, Cli, RenderArgs};
+use crate::cli::{BuildArgs, Cli, RenderArgs, SelectArgs};
 use crate::diagnostics::{Diagnostic, DiagnosticCode, Sources, Summary};
 use crate::error::{Error, ReadInputSnafu};
 use crate::markdown::Parsed;
 use crate::model::options::OutputFormat;
 use crate::output::{Overwrite, Planned, WriteMode, Writer, Written};
 use crate::pipeline::{Rendered, Session, Skip};
-use crate::select::Selection;
+use crate::select::{CorePages, Selection, SelectionRecord, SelectionSummary};
 
 /// The result being presented, including an operational failure after findings were computed.
 struct BuildResult<'a> {
     built: Built<'a>,
     error: Option<&'a Error>,
+    /// What the selection did, printed under the build line; `None` when there was nothing to select from.
+    selection: Option<Shown<'a>>,
+}
+
+/// A selection summary with what it needs to name lines: the input's node lines.
+struct Shown<'a> {
+    summary: &'a SelectionSummary,
+    lines: Vec<usize>,
+    /// The input, as shown to people.
+    input: &'a Path,
 }
 
 impl<'a> BuildResult<'a> {
@@ -30,7 +40,13 @@ impl<'a> BuildResult<'a> {
         Self {
             built: Built::NoPdf { input },
             error: Some(error),
+            selection: None,
         }
+    }
+
+    fn with_selection(mut self, selection: Option<Shown<'a>>) -> Self {
+        self.selection = selection;
+        self
     }
 }
 
@@ -41,6 +57,7 @@ impl<'a> BuildResult<'a> {
 pub(super) struct Job<'a> {
     out_dir: &'a Path,
     render: &'a RenderArgs,
+    selection: Selection,
     format: OutputFormat,
     cwd: &'a Path,
     session: Session,
@@ -97,16 +114,23 @@ impl<'a> Job<'a> {
     /// Resolves the style and builds the font set once, so an unknown style or an unreadable font directory
     /// fails the whole run before any file is touched.
     fn prepare(cli: &Cli, args: &'a BuildArgs, env: &'a Env) -> Result<Self, Error> {
-        Self::open(cli, &args.out, &args.render, env)
+        Self::open(cli, &args.out, &args.render, &args.select, env)
     }
 
-    /// The job for building into `out_dir` with `render`, as `build` and `watch` both do.
-    pub(super) fn open(cli: &Cli, out_dir: &'a Path, render: &'a RenderArgs, env: &'a Env) -> Result<Self, Error> {
+    /// The job for building into `out_dir` with `render` and `select`, as `build` and `watch` both do.
+    pub(super) fn open(
+        cli: &Cli,
+        out_dir: &'a Path,
+        render: &'a RenderArgs,
+        select: &SelectArgs,
+        env: &'a Env,
+    ) -> Result<Self, Error> {
         // `build` can do nothing without a style or fonts, unlike `doctor`, which reports them.
         let session = Session::open(render, env.resume_font_path.as_deref()).require_ready()?;
         Ok(Self {
             out_dir,
             render,
+            selection: select.selection(),
             format: cli.format,
             cwd: &env.cwd,
             session,
@@ -135,10 +159,37 @@ impl<'a> Job<'a> {
 
     fn attempt(&self, file: &Path, started: Instant, out: &mut Reporter<'_, '_>) -> Result<BuiltFile, Error> {
         let text = fs::read_to_string(file).context(ReadInputSnafu { path: file })?;
-        let assessment = self.session.assess(file, &text, self.render, &Selection::default());
+        let assessment = self.session.assess(file, &text, self.render, &self.selection);
         let mut sources = out.sources();
         sources.insert(file, &text);
         let parsed = &assessment.parsed;
+        let mut summary = assessment.selected.as_ref().map(|s| s.summary.clone());
+        // The core-only count is a second compile; its error fails the run, after the main PDF is written.
+        let mut core_error = None;
+        if let (Some(summary), Some(baseline)) = (summary.as_mut(), parsed.valid())
+            && !summary.is_silent()
+        {
+            summary.core = Some(match self.session.core_pages(baseline, &self.selection, self.render) {
+                Ok(core) => core,
+                Err(error) => {
+                    core_error = Some(error);
+                    CorePages::Failed
+                }
+            });
+        }
+        // What every outcome shows: the parse's findings, then the selection's own warnings.
+        let early: Vec<&Diagnostic> = parsed
+            .diagnostics()
+            .iter()
+            .chain(assessment.selected.iter().flat_map(|s| &s.findings))
+            .collect();
+        let shown = || {
+            summary.as_ref().map(|summary| Shown {
+                summary,
+                lines: parsed.node_lines(&text),
+                input: self.shown(file),
+            })
+        };
         let (compiled, layout) = match &assessment.rendered {
             Rendered::Skipped(Skip::FormatErrors) => {
                 return Ok(BuiltFile::unwritten(
@@ -148,9 +199,9 @@ impl<'a> Job<'a> {
             // `prepare` required a ready session, so a setup failure cannot get here.
             Rendered::Skipped(Skip::Setup) => unreachable!("build requires a ready session before any file"),
             Rendered::Failed(error) => {
-                let findings: Vec<&Diagnostic> = parsed.diagnostics().iter().collect();
+                let findings = early.clone();
                 return Ok(BuiltFile::unwritten(self.present(
-                    BuildResult::failed(self.shown(file), error),
+                    BuildResult::failed(self.shown(file), error).with_selection(shown()),
                     started,
                     &findings,
                     &[],
@@ -162,9 +213,9 @@ impl<'a> Job<'a> {
                 for style_file in compiled.sources() {
                     sources.insert(&style_file.path, &style_file.text);
                 }
-                let findings: Vec<&Diagnostic> = parsed.diagnostics().iter().chain(compiled.warnings()).collect();
+                let findings: Vec<&Diagnostic> = early.iter().copied().chain(compiled.warnings()).collect();
                 return Ok(BuiltFile::unwritten(self.present(
-                    BuildResult::failed(self.shown(file), error),
+                    BuildResult::failed(self.shown(file), error).with_selection(shown()),
                     started,
                     &findings,
                     &[],
@@ -177,7 +228,8 @@ impl<'a> Job<'a> {
         for style_file in compiled.sources() {
             sources.insert(&style_file.path, &style_file.text);
         }
-        let mut findings: Vec<&Diagnostic> = parsed.diagnostics().iter().chain(compiled.warnings()).collect();
+        let mut findings: Vec<&Diagnostic> = early.clone();
+        findings.extend(compiled.warnings());
         findings.extend(&layout.diagnostics);
         let target = self.out_dir.join(BuildArgs::pdf_name(file));
         // Delivery can fail after diagnostics exist. Present both rather than discarding the findings.
@@ -192,7 +244,7 @@ impl<'a> Job<'a> {
             Ok(written) => written,
             Err(error) => {
                 return Ok(BuiltFile::unwritten(self.present(
-                    BuildResult::failed(self.shown(file), &error),
+                    BuildResult::failed(self.shown(file), &error).with_selection(shown()),
                     started,
                     &findings,
                     &layout.fonts,
@@ -218,7 +270,11 @@ impl<'a> Job<'a> {
             },
         };
         let outcome = self.present(
-            BuildResult { built, error: None },
+            BuildResult {
+                built,
+                error: core_error.as_ref(),
+                selection: shown(),
+            },
             started,
             &findings,
             &layout.fonts,
@@ -259,7 +315,11 @@ impl<'a> Job<'a> {
             input: self.shown(file),
         };
         self.present(
-            BuildResult { built, error: None },
+            BuildResult {
+                built,
+                error: None,
+                selection: None,
+            },
             started,
             &findings,
             &[],
@@ -293,6 +353,9 @@ impl<'a> Job<'a> {
             elapsed: started.elapsed(),
         });
         out.fonts(fonts);
+        if let Some(selection) = &result.selection {
+            self.selection_summary(selection, out);
+        }
         out.diagnostics(sources, &shown);
         if let Some(error) = result.error {
             out.error(error);
@@ -301,6 +364,23 @@ impl<'a> Job<'a> {
             Outcome::Failure
         } else {
             Outcome::Success
+        }
+    }
+
+    /// The selection's lines under the build line, or its JSON record on stdout; nothing when it is silent.
+    fn selection_summary(&self, selection: &Shown<'_>, out: &mut Reporter<'_, '_>) {
+        let line_of = |index: usize| selection.lines.get(index).copied();
+        match self.format {
+            OutputFormat::Human => {
+                for line in selection.summary.lines(&line_of) {
+                    out.line(&format!("  {line}"));
+                }
+            }
+            OutputFormat::Json if !selection.summary.is_silent() => {
+                let input = selection.input.display().to_string();
+                out.record(&SelectionRecord::new(selection.summary, &input, &line_of));
+            }
+            OutputFormat::Json => {}
         }
     }
 

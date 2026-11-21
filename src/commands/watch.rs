@@ -43,7 +43,7 @@ pub(super) fn watch(
     stop: &mut dyn FnMut() -> bool,
     open: Opener<'_>,
 ) -> Result<Outcome, Error> {
-    let mut job = Job::open(cli, &args.out, &args.render, env)?;
+    let mut job = Job::open(cli, &args.out, &args.render, &args.select, env)?;
     let watched = Watched::resolve(&args.file, args.render.styles_dir.as_deref(), &args.out, &env.cwd)?;
     // The watches come before the first build, so a save made while the fonts are being scanned is not lost, and
     // the first summary line means the watch is ready.
@@ -755,13 +755,18 @@ mod tests {
     // ------------------------------------------------------------------------------------------
 
     fn serve_with(signals: Vec<Signal>, keep_open: bool) -> (Outcome, String) {
+        serve_resume(RESUME, &[], signals, keep_open)
+    }
+
+    /// Serves `resume` with the extra watch options `extra`, over `signals`.
+    fn serve_resume(resume: &str, extra: &[&str], signals: Vec<Signal>, keep_open: bool) -> (Outcome, String) {
         let dir = assert_ok!(tempfile::tempdir());
         let real = assert_ok!(std::fs::canonicalize(dir.path()));
-        assert_ok!(std::fs::write(real.join("Resume.md"), RESUME));
-        let cli = assert_ok!(Cli::try_parse_validated(watch_args(
-            &real,
-            &["--out", &real.join("out").display().to_string()]
-        )));
+        assert_ok!(std::fs::write(real.join("Resume.md"), resume));
+        let out = real.join("out").display().to_string();
+        let mut options = vec!["--out", out.as_str()];
+        options.extend(extra);
+        let cli = assert_ok!(Cli::try_parse_validated(watch_args(&real, &options)));
         let Command::Watch(args) = &cli.command else {
             panic!("watch")
         };
@@ -769,7 +774,7 @@ mod tests {
             cwd: real.clone(),
             resume_font_path: None,
         };
-        let mut job = assert_ok!(Job::open(&cli, &args.out, &args.render, &env));
+        let mut job = assert_ok!(Job::open(&cli, &args.out, &args.render, &args.select, &env));
         let stderr = Shared::default();
         let mut stdout = Vec::new();
         let mut sink = NoColor::new(stderr.clone());
@@ -853,6 +858,16 @@ mod tests {
     }
 
     #[test]
+    fn each_build_of_a_tailored_watch_prints_its_selection_summary() {
+        let resume = "# Ada Lovelace\n\nLondon\n\n## Experience\n\n### Acme · Engineer · 2015 – 2017\n\n\
+            - Cut costs 40%. <!-- @core -->\n- Led 6 people. <!-- #lead -->\n- Wrote 3 engines. <!-- #arch -->\n";
+        let (_, text) = serve_resume(resume, &["--tags", "lead"], vec![Signal::Changed], true);
+        assert_eq!(text.lines().filter(|l| l.starts_with("ok ")).count(), 2, "{text}");
+        assert_eq!(text.matches("  selection: tags lead").count(), 2, "{text}");
+        assert_eq!(text.matches("  core alone: 1 page").count(), 2, "{text}");
+    }
+
+    #[test]
     fn being_told_to_stop_ends_the_watch_with_success() {
         let (outcome, text) = serve_with(Vec::new(), true);
         assert_eq!(outcome, Outcome::Success, "{text}");
@@ -889,7 +904,7 @@ mod tests {
         let Command::Watch(args) = &cli.command else {
             panic!("watch")
         };
-        let job = assert_ok!(Job::open(&cli, &args.out, &args.render, &env));
+        let job = assert_ok!(Job::open(&cli, &args.out, &args.render, &args.select, &env));
         let stderr = Shared::default();
         let mut stdout = Vec::new();
         let mut sink = NoColor::new(stderr.clone());
