@@ -352,7 +352,7 @@ fn both_product_matches_text_and_pdf_is_committed_at_first_stdout_write() {
     assert_ok!(std::fs::write(root.path().join("neutral.md"), SOURCE));
     let mut expected = Vec::new();
     assert_eq!(run(root.path(), &[], &mut expected).0, Outcome::Success);
-    let target = root.path().join("out/neutral-letter.pdf");
+    let target = root.path().join("out").join("neutral-letter.pdf");
     assert_ok!(std::fs::create_dir(root.path().join("out")));
     struct Observe<'a> {
         target: &'a Path,
