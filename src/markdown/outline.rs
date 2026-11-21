@@ -13,6 +13,8 @@ use crate::model::Period;
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct Outline {
     pub sections: Vec<SectionOutline>,
+    /// The visible text of each variant of each valid alternate group, in document order.
+    pub groups: Vec<Vec<Located>>,
 }
 
 /// A kept `##` section.
@@ -51,6 +53,10 @@ pub(crate) struct BulletOutline {
     pub item: Range<usize>,
     pub label: Option<Located>,
     pub content: Located,
+    /// The bullet's annotation comment, where findings about its annotation point.
+    pub annotation: Option<Range<usize>>,
+    /// Where the parent bullet starts, for a nested bullet; it names the parent as a container of alternates.
+    pub nested_in: Option<usize>,
 }
 
 /// Visible text with a map back to the source.

@@ -134,8 +134,13 @@ pub(crate) fn plain_text(nodes: &[InlineNode]) -> Option<TextNode> {
 }
 
 /// True for a complete inline HTML comment.
-pub(super) fn is_comment(html: &str) -> bool {
+pub(crate) fn is_comment(html: &str) -> bool {
     html.starts_with("<!--") && html.ends_with("-->")
+}
+
+/// True when a node shows something: not whitespace, a comment, or a line break.
+pub(crate) fn is_visible(node: &InlineNode) -> bool {
+    !is_blank(node) && !matches!(node, InlineNode::Break { .. })
 }
 
 /// True when a node adds nothing visible: an HTML comment or whitespace.

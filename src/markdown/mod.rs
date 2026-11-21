@@ -8,6 +8,8 @@
 //! mechanical.
 
 mod annotation;
+#[cfg(test)]
+mod annotation_tests;
 mod blocks;
 mod letter;
 mod letter_inline;
@@ -536,6 +538,19 @@ mod tests {
             EmptyHeading,
             InputLimit,
             PlaceholderUnresolved,
+            AnnotationUnknownKeyword,
+            AnnotationMalformed,
+            AnnotationConflict,
+            AnnotationDuplicate,
+            AnnotationWithoutTarget,
+            AnnotationDetached,
+            AnnotationMisplaced,
+            AlternateNotAllowed,
+            AlternateMissingDefault,
+            AlternateNotAdjacent,
+            AlternateGroupReused,
+            AlternateVariantRepeated,
+            AlternatePriorityConflict,
             LetterMissingSection,
             LetterUnknownSection,
             LetterDuplicateSection,

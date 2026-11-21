@@ -35,7 +35,7 @@ fn parse_fixture(name: &str) -> (String, Parsed) {
 }
 
 /// Fixtures that must produce findings, in a stable order.
-const FINDING_FIXTURES: [&str; 14] = [
+const FINDING_FIXTURES: [&str; 15] = [
     "errors-missing-name.md",
     "errors-duplicate-name.md",
     "errors-content-before-section.md",
@@ -47,6 +47,7 @@ const FINDING_FIXTURES: [&str; 14] = [
     "errors-links.md",
     "errors-length.md",
     "errors-unsupported.md",
+    "errors-annotations.md",
     "warnings-format.md",
     "warnings-missing-contact.md",
     "warnings-fixable.md",

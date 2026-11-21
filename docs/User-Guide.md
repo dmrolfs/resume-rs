@@ -678,6 +678,19 @@ How the Markdown is written. Every command that reads a resume reports these.
 | <a id="code-input-limit"></a>`input-limit` | error | The input exceeds a size or nesting limit. |
 | <a id="code-heading-marker-spacing"></a>`heading-marker-spacing` | warning | A line starts with `#` but has no space after it, so it is text, not a heading. |
 | <a id="code-placeholder-unresolved"></a>`placeholder-unresolved` | error | A selected letter placeholder has no application field value. |
+| <a id="code-annotation-unknown-keyword"></a>`annotation-unknown-keyword` | error | An `@` word in an annotation is not one the tool knows. |
+| <a id="code-annotation-malformed"></a>`annotation-malformed` | error | An annotation token is not `@word`, `#tag`, or `=group.variant` with valid names. |
+| <a id="code-annotation-conflict"></a>`annotation-conflict` | error | One annotation gives two priorities, two statuses, or two alternates. |
+| <a id="code-annotation-duplicate"></a>`annotation-duplicate` | error | An item has two annotations. |
+| <a id="code-annotation-without-target"></a>`annotation-without-target` | error | An annotation on its own line has nothing after it to annotate. |
+| <a id="code-annotation-detached"></a>`annotation-detached` | error | A blank line or another comment separates an annotation from the item below it. |
+| <a id="code-annotation-misplaced"></a>`annotation-misplaced` | error | An annotation is where no annotation is allowed. |
+| <a id="code-alternate-not-allowed"></a>`alternate-not-allowed` | error | An alternate wording is on a section heading, role line, or era line. |
+| <a id="code-alternate-missing-default"></a>`alternate-missing-default` | error | A group of alternate wordings has no `default` variant. |
+| <a id="code-alternate-not-adjacent"></a>`alternate-not-adjacent` | error | The variants of one group are apart, in different places, or of different kinds. |
+| <a id="code-alternate-group-reused"></a>`alternate-group-reused` | error | Two separate groups of alternates use the same group name. |
+| <a id="code-alternate-variant-repeated"></a>`alternate-variant-repeated` | error | A group has two variants with the same name. |
+| <a id="code-alternate-priority-conflict"></a>`alternate-priority-conflict` | error | The variants of one group give different priorities. |
 | <a id="code-letter-missing-section"></a>`letter-missing-section` | error | The letter needs Greeting, Body and Closing sections in that order. |
 | <a id="code-letter-unknown-section"></a>`letter-unknown-section` | error | The letter needs Greeting, Body and Closing sections in that order. |
 | <a id="code-letter-duplicate-section"></a>`letter-duplicate-section` | error | The letter needs Greeting, Body and Closing sections in that order. |
@@ -703,6 +716,7 @@ What the resume says. `doctor` and `check` report these.
 | <a id="code-long-summary"></a>`long-summary` | warning | The summary is longer than about 120 words. |
 | <a id="code-education-not-last"></a>`education-not-last` | warning | Education comes before experience. |
 | <a id="code-old-role-detail"></a>`old-role-detail` | warning | An old role has more bullets than your latest one. |
+| <a id="code-alternate-facts-differ"></a>`alternate-facts-differ` | warning | The numbers in the variants of one group differ. |
 
 ### Layout codes
 

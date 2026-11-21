@@ -55,6 +55,19 @@ pub enum DiagnosticCode {
     InputLimit,
     HeadingMarkerSpacing,
     PlaceholderUnresolved,
+    AnnotationUnknownKeyword,
+    AnnotationMalformed,
+    AnnotationConflict,
+    AnnotationDuplicate,
+    AnnotationWithoutTarget,
+    AnnotationDetached,
+    AnnotationMisplaced,
+    AlternateNotAllowed,
+    AlternateMissingDefault,
+    AlternateNotAdjacent,
+    AlternateGroupReused,
+    AlternateVariantRepeated,
+    AlternatePriorityConflict,
     LetterMissingSection,
     LetterUnknownSection,
     LetterDuplicateSection,
@@ -74,6 +87,7 @@ pub enum DiagnosticCode {
     LongSummary,
     EducationNotLast,
     OldRoleDetail,
+    AlternateFactsDiffer,
     // Layout (render)
     PageLimitExceeded,
     HeadingNearPageBottom,
@@ -126,6 +140,19 @@ impl DiagnosticCode {
             | InputLimit
             | HeadingMarkerSpacing
             | PlaceholderUnresolved
+            | AnnotationUnknownKeyword
+            | AnnotationMalformed
+            | AnnotationConflict
+            | AnnotationDuplicate
+            | AnnotationWithoutTarget
+            | AnnotationDetached
+            | AnnotationMisplaced
+            | AlternateNotAllowed
+            | AlternateMissingDefault
+            | AlternateNotAdjacent
+            | AlternateGroupReused
+            | AlternateVariantRepeated
+            | AlternatePriorityConflict
             | LetterMissingSection
             | LetterUnknownSection
             | LetterDuplicateSection
@@ -137,7 +164,7 @@ impl DiagnosticCode {
             | PlaceholderMalformed
             | PlaceholderPosition => Category::Format,
             LongBullet | UnquantifiedBullet | WeakOpener | FirstPerson | SloppyPhrase | LongSummary
-            | EducationNotLast | OldRoleDetail => Category::Content,
+            | EducationNotLast | OldRoleDetail | AlternateFactsDiffer => Category::Content,
             PageLimitExceeded
             | HeadingNearPageBottom
             | SparseLastPage
@@ -177,6 +204,19 @@ impl DiagnosticCode {
             | EmptyHeading
             | InputLimit
             | PlaceholderUnresolved
+            | AnnotationUnknownKeyword
+            | AnnotationMalformed
+            | AnnotationConflict
+            | AnnotationDuplicate
+            | AnnotationWithoutTarget
+            | AnnotationDetached
+            | AnnotationMisplaced
+            | AlternateNotAllowed
+            | AlternateMissingDefault
+            | AlternateNotAdjacent
+            | AlternateGroupReused
+            | AlternateVariantRepeated
+            | AlternatePriorityConflict
             | LetterMissingSection
             | LetterUnknownSection
             | LetterDuplicateSection
@@ -198,7 +238,7 @@ impl DiagnosticCode {
             | HardBreak
             | HeadingMarkerSpacing => Severity::Warning,
             LongBullet | UnquantifiedBullet | WeakOpener | FirstPerson | SloppyPhrase | LongSummary
-            | EducationNotLast | OldRoleDetail => Severity::Warning,
+            | EducationNotLast | OldRoleDetail | AlternateFactsDiffer => Severity::Warning,
             PageLimitExceeded | ContentOverflowsPage | FontMissing => Severity::Error,
             HeadingNearPageBottom | SparseLastPage | FontFallbackLayout => Severity::Warning,
             FontFallbackMetric => Severity::Note,

@@ -1,0 +1,111 @@
+---
+source: tests/diagnostics_test.rs
+expression: "format!(\"{shown}{summary}\\n\")"
+---
+error[alternate-not-allowed]: a section heading has one wording, so it takes no `=group.variant`
+  --> errors-annotations.md:8:15
+  |
+8 | ## Experience <!-- =experience.default -->
+  |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = help: remove the `=group.variant`; keep the priority, status, and tags
+
+error[annotation-unknown-keyword]: `@cor` is not an annotation keyword
+   --> errors-annotations.md:12:26
+   |
+12 | - Led the platform. <!-- @cor -->
+   |                          ^^^^
+   |
+   = help: did you mean `@core`?
+   = help: the keywords are `@core`, `@extra`, `@draft`, and `@verify`; a topic is a `#tag`
+
+error[annotation-malformed]: `AI` is not a valid tag name
+   --> errors-annotations.md:13:27
+   |
+13 | - Built the gateway. <!-- #AI -->
+   |                           ^^^
+   |
+   = help: names are lowercase letters and digits, starting with a letter, with single hyphens, at most 40 characters
+
+error[annotation-conflict]: a second priority in one annotation
+   --> errors-annotations.md:14:26
+   |
+14 | - Shipped it. <!-- @core @extra -->
+   |                          ^^^^^^
+   |
+   = help: an item has at most one priority; keep the one you mean
+
+error[annotation-misplaced]: an annotation must be the last thing on the line it marks
+   --> errors-annotations.md:15:7
+   |
+15 | - Ran <!-- #ai --> the team.
+   |       ^^^^^^^^^^^^
+   |
+   = help: put the annotation at the end of the line it marks, or alone on the line directly above it
+
+error[annotation-duplicate]: a second annotation for the same item
+   --> errors-annotations.md:17:1
+   |
+17 | <!-- #ai -->
+   | ^^^^^^^^^^^^
+   |
+   = help: an item takes one annotation; merge them into one comment
+   = help: merge the two annotation lines into one comment
+
+error[annotation-detached]: a blank line separates the annotation from the line below it
+   --> errors-annotations.md:21:1
+   |
+21 | <!-- #data -->
+   | ^^^^^^^^^^^^^^
+   |
+   = help: a comment alone on a line marks only the line directly below it; remove what is in between
+
+error[annotation-without-target]: an annotation on its own line has nothing after it to annotate
+   --> errors-annotations.md:26:3
+   |
+26 |   <!-- #indented -->
+   |   ^^^^^^^^^^^^^^^^^^
+   |
+   = help: to mark the next bullet, start the comment where that bullet's `-` starts
+
+error[alternate-missing-default]: the group `first` has no `default` variant
+   --> errors-annotations.md:30:18
+   |
+30 | - First wording. <!-- =first.long -->
+   |                  ^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: name one variant `first.default`; a build that prefers nothing renders it
+
+error[alternate-variant-repeated]: `twice` has two variants named `default`
+   --> errors-annotations.md:33:26
+   |
+33 | - Same name twice again. <!-- =twice.default -->
+   |                          ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: rename one of the variants
+
+error[alternate-priority-conflict]: this variant of `prio` has `@extra`, but the first has `@core`
+   --> errors-annotations.md:35:18
+   |
+35 | - Extra wording. <!-- =prio.short @extra -->
+   |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: the variants are one item, so they share one priority: state it on every variant, or on none
+
+error[alternate-not-adjacent]: this variant of `apart` is apart from the others
+   --> errors-annotations.md:38:17
+   |
+38 | - Apart, short. <!-- =apart.short -->
+   |                 ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: put the variants of a group next to each other, in the same section, role, era, or parent bullet
+
+error[alternate-group-reused]: a second group is named `reused`
+   --> errors-annotations.md:44:17
+   |
+44 | - Reused again. <!-- =reused.default -->
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: a position spec picks a wording by group name, so each group needs its own name; rename one
+
+13 errors, 0 warnings

@@ -34,6 +34,12 @@ fn lint(outline: &Outline, file: &Path) -> Vec<Diagnostic> {
     }
     findings.extend(education_not_last(outline, file));
     findings.extend(old_role_detail(outline, file));
+    findings.extend(
+        outline
+            .groups
+            .iter()
+            .filter_map(|group| alternate_facts_differ(group, file)),
+    );
     findings.sort_by_key(|d| d.span.as_ref().map_or(usize::MAX, |s| s.range.start));
     findings
 }
@@ -267,6 +273,62 @@ const QUANTITY_WORDS: &[&str] = &[
     "tenfold",
     "percent",
 ];
+
+// ---------------------------------------------------------------------------------------------
+// alternate-facts-differ
+// ---------------------------------------------------------------------------------------------
+
+/// The numbers of `text`, in order: each run of digits with the `.`, `,`, `%`, `+`, and unit letters around it.
+///
+/// `5,000+` and `5,000` are different numbers here, which is the point: one wording was edited and the other
+/// was not.
+fn numbers(text: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut current = String::new();
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        let continues = !current.is_empty()
+            && (matches!(c, '%' | '+' | '×')
+                || (matches!(c, '.' | ',') && chars.peek().is_some_and(char::is_ascii_digit)));
+        if c.is_ascii_digit() || continues {
+            current.push(c);
+        } else if !current.is_empty() {
+            found.push(std::mem::take(&mut current));
+        }
+    }
+    if !current.is_empty() {
+        found.push(current);
+    }
+    found.sort();
+    found
+}
+
+/// A group whose variants do not all state the same numbers.
+fn alternate_facts_differ(group: &[Located], file: &Path) -> Option<Diagnostic> {
+    let (first, rest) = group.split_first()?;
+    let expected = numbers(&first.matched());
+    let differs = rest.iter().find(|variant| numbers(&variant.matched()) != expected)?;
+    let range = differs.source_range(0..differs.matched().len());
+    Some(finding(
+        DiagnosticCode::AlternateFactsDiffer,
+        file,
+        range,
+        format!(
+            "this wording states {} but the group's first states {}",
+            listed(&numbers(&differs.matched())),
+            listed(&expected)
+        ),
+        "make the numbers agree in every wording of the group",
+    ))
+}
+
+fn listed(numbers: &[String]) -> String {
+    if numbers.is_empty() {
+        "no numbers".to_string()
+    } else {
+        numbers.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join(", ")
+    }
+}
 
 /// A bullet with no number: no digit that starts a quantity, and no quantity word.
 fn unquantified_bullet(bullet: &BulletOutline, file: &Path) -> Option<Diagnostic> {
@@ -677,6 +739,56 @@ mod tests {
 
     fn only(body: &str, code: DiagnosticCode) -> Vec<Diagnostic> {
         run(body).into_iter().filter(|d| d.code == code).collect()
+    }
+
+    // ============================================================================
+    // alternate-facts-differ
+    // ============================================================================
+
+    #[test]
+    fn the_numbers_of_a_text_keep_their_signs_and_ignore_their_order() {
+        assert_eq!(
+            numbers("Served 5,000+ users in 3.5 years, 40% faster"),
+            ["3.5", "40%", "5,000+"]
+        );
+        assert_eq!(
+            numbers("in 3.5 years, 40% faster, served 5,000+"),
+            numbers("Served 5,000+ users in 3.5 years, 40% faster")
+        );
+        assert_eq!(numbers("No numbers."), Vec::<String>::new());
+        assert_eq!(numbers("Ended 2019."), ["2019"]);
+    }
+
+    #[test]
+    fn variants_whose_numbers_differ_are_flagged_on_the_differing_variant() {
+        let body = role("- Served 5,000+ users. <!-- =reach.default -->\n- Reached 5,000 users. <!-- =reach.short -->");
+        let found = only(&body, DiagnosticCode::AlternateFactsDiffer);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].severity, crate::diagnostics::Severity::Warning);
+        assert!(
+            found[0].message.contains("`5,000`") && found[0].message.contains("`5,000+`"),
+            "{}",
+            found[0].message
+        );
+        let text = format!("# Ada\n\nLondon\n\n{body}");
+        let range = assert_some!(found[0].span.as_ref()).range.clone();
+        assert_eq!(text[range].trim(), "Reached 5,000 users.");
+    }
+
+    #[test]
+    fn variants_with_the_same_numbers_in_other_words_are_not_flagged() {
+        let body = role(
+            "- Served 5,000+ users in 3 regions. <!-- =reach.default -->\n- 3 regions, 5,000+ users. <!-- =reach.short -->\n- Led the team. <!-- =team.default -->\n- Ran the team. <!-- =team.short -->",
+        );
+        assert!(!has(&body, DiagnosticCode::AlternateFactsDiffer), "{:?}", run(&body));
+    }
+
+    #[test]
+    fn a_number_only_one_variant_states_is_flagged() {
+        let body = role("- Cut costs 40%. <!-- =cost.default -->\n- Cut costs. <!-- =cost.short -->");
+        let found = only(&body, DiagnosticCode::AlternateFactsDiffer);
+        assert_eq!(found.len(), 1);
+        assert!(found[0].message.contains("no numbers"), "{}", found[0].message);
     }
 
     // ============================================================================

@@ -3,6 +3,7 @@
 
 use std::ops::Range;
 
+use super::annotation::{self, GroupItem, ItemKind, Marked};
 use super::inline;
 use super::lint::{self, RoleKey};
 use super::outline::{BulletOutline, Located, Outline, RoleOutline, SectionOutline};
@@ -13,7 +14,7 @@ use super::tree::{
 use super::{Finding, Sink, Source};
 use crate::diagnostics::DiagnosticCode;
 use crate::model::text::{NameError, SectionTitleError};
-use crate::model::{Block, Bullet, Inline, Name, Period, Resume, Role, RoleBlock, Section, SectionTitle};
+use crate::model::{Annotations, Block, Bullet, Inline, Name, Period, Resume, Role, RoleBlock, Section, SectionTitle};
 
 /// The one HTML construct allowed besides comments: a forced page break.
 pub(crate) const PAGE_BREAK: &str = r#"<div class="page-break"></div>"#;
@@ -21,26 +22,41 @@ pub(crate) const PAGE_BREAK: &str = r#"<div class="page-break"></div>"#;
 /// Interprets the document; `None` only when no valid name heading exists. The outline is `Some` exactly then.
 pub(crate) fn interpret(doc: &Document, src: &Source<'_>, sink: &mut Sink<'_>) -> (Option<Resume>, Option<Outline>) {
     let blocks = &doc.blocks;
+    let mut above = annotation::leading(
+        blocks,
+        src,
+        "put the comment directly above the item it marks, or delete it",
+        sink,
+    );
     let name_heading = blocks.iter().enumerate().find_map(|(index, block)| match block {
         BlockNode::Heading(heading) if heading.level == 1 => Some((index, heading)),
         _ => None,
     });
     let Some((at, heading)) = name_heading else {
         report_missing_name(blocks, sink);
-        walk_sections(blocks, src, sink);
+        walk_sections(blocks, &mut above, src, sink);
         return (None, None);
     };
     for block in blocks[..at].iter().filter(|b| !is_comment(b)) {
         report_before_section(block.range(), "the name heading", sink);
     }
+    annotation::reject_in(&heading.content, sink);
     let name = name(heading, sink);
     let rest = &blocks[at + 1..];
     let (contact, consumed) = contact(heading, rest, src, sink);
-    let (sections, outline) = walk_sections(&rest[consumed..], src, sink);
+    let body = at + 1 + consumed;
+    // The name and the contact line take no annotation.
+    above[..body].iter_mut().for_each(|marked| {
+        annotation::unclaimed(marked.take(), "the name and the contact line take no annotation", sink)
+    });
+    let (sections, outline, groups) = walk_sections(&rest[consumed..], &mut above[body..], src, sink);
     match name {
         Some(name) => (
             Some(Resume::new(name, contact, sections)),
-            Some(Outline { sections: outline }),
+            Some(Outline {
+                sections: outline,
+                groups,
+            }),
         ),
         None => (None, None),
     }
@@ -144,6 +160,7 @@ fn contact(name: &HeadingNode, rest: &[BlockNode], src: &Source<'_>, sink: &mut 
         && let BlockNode::Paragraph(paragraph) = &rest[index]
     {
         check_heading_marker(paragraph, src, sink);
+        annotation::reject_in(&paragraph.content, sink);
         lint::contact_items(&paragraph.content, paragraph.range.clone(), sink);
         return (inline::convert(&paragraph.content, src, sink), index + 1);
     }
@@ -188,19 +205,11 @@ fn classify_html(text: &str) -> HtmlClass {
         return HtmlClass::Other;
     }
     let mut rest = trimmed;
-    while let Some(after_open) = rest.strip_prefix("<!--") {
-        // CommonMark 0.31: `<!-->` and `<!--->` are complete, empty comments.
-        let after = if let Some(after) = after_open.strip_prefix('>') {
-            after
-        } else if let Some(after) = after_open.strip_prefix("->") {
-            after
-        } else {
-            let Some(close) = after_open.find("-->") else {
-                return HtmlClass::UnclosedComment;
-            };
-            &after_open[close + 3..]
+    while rest.starts_with("<!--") {
+        let Some(len) = annotation::comment_len(rest) else {
+            return HtmlClass::UnclosedComment;
         };
-        rest = after.trim_start();
+        rest = rest[len..].trim_start();
     }
     if rest.is_empty() {
         HtmlClass::Comment
@@ -252,18 +261,63 @@ fn html_block(node: &HtmlNode, src: &Source<'_>, sink: &mut Sink<'_>) -> HtmlCla
 // ---------------------------------------------------------------------------------------------
 
 /// Walks the blocks after the name, building sections; used with or without a valid name.
-fn walk_sections(blocks: &[BlockNode], src: &Source<'_>, sink: &mut Sink<'_>) -> (Vec<Section>, Vec<SectionOutline>) {
+/// Walks the blocks after the header; `above` holds each block's full-line annotation, taken as it is used.
+fn walk_sections(
+    blocks: &[BlockNode],
+    above: &mut [Option<Marked>],
+    src: &Source<'_>,
+    sink: &mut Sink<'_>,
+) -> (Vec<Section>, Vec<SectionOutline>, Vec<Vec<Located>>) {
     let next = next_visible(blocks);
     let mut walker = Walker {
         current: None,
         sections: Vec::new(),
         outline: Vec::new(),
+        items: Items::default(),
     };
-    for (block, next) in blocks.iter().zip(next) {
-        walker.block(block, next.map(|index| &blocks[index]), src, sink);
+    for (index, (block, next)) in blocks.iter().zip(next).enumerate() {
+        let marked = above[index].take();
+        // A comment line between two bullets ends the list in Markdown; joining the halves back keeps
+        // the model what it is without the comment.
+        let continues = marked.is_some()
+            && index >= 2
+            && matches!(blocks[index - 1], BlockNode::Html(_))
+            && matches!(blocks[index - 2], BlockNode::List(_))
+            && annotation::same_list(&blocks[index - 2], block, src);
+        walker.block(block, next.map(|index| &blocks[index]), marked, continues, src, sink);
     }
     walker.close_section(sink);
-    (walker.sections, walker.outline)
+    let groups = annotation::group(&walker.items.0, sink);
+    (walker.sections, walker.outline, groups)
+}
+
+/// Every item that could be an alternate, in document order, carrying its visible text for the facts lint.
+#[derive(Default)]
+struct Items(Vec<GroupItem<Located>>);
+
+impl Items {
+    /// Records one item of `container`; `range` is its annotation comment, or the item itself without one.
+    fn push(
+        &mut self,
+        annotations: &Annotations,
+        range: Range<usize>,
+        container: usize,
+        kind: ItemKind,
+        text: Located,
+    ) {
+        self.0.push(GroupItem {
+            alternate: annotations.alternate.clone(),
+            priority: annotations.priority,
+            container,
+            kind,
+            range,
+            payload: text,
+        });
+    }
+
+    fn append(&mut self, other: Self) {
+        self.0.extend(other.0);
+    }
 }
 
 /// For each block, the index of the next block that is not a comment, computed in one backward pass.
@@ -286,26 +340,54 @@ struct Walker {
     current: Option<SectionBuilder>,
     sections: Vec<Section>,
     outline: Vec<SectionOutline>,
+    items: Items,
 }
 
 impl Walker {
-    fn block(&mut self, block: &BlockNode, next: Option<&BlockNode>, src: &Source<'_>, sink: &mut Sink<'_>) {
+    fn block(
+        &mut self,
+        block: &BlockNode,
+        next: Option<&BlockNode>,
+        marked: Option<Marked>,
+        continues: bool,
+        src: &Source<'_>,
+        sink: &mut Sink<'_>,
+    ) {
         match block {
-            BlockNode::Heading(heading) => self.heading(heading, src, sink),
-            BlockNode::Html(html) => self.html(html, next, src, sink),
-            BlockNode::Unsupported(node) => report_unsupported(node, sink),
+            BlockNode::Heading(heading) => self.heading(heading, marked, src, sink),
+            BlockNode::Html(html) => {
+                annotation::unclaimed(marked, annotation::NOT_ANNOTATABLE, sink);
+                self.html(html, next, src, sink);
+            }
+            BlockNode::Unsupported(node) => {
+                annotation::unclaimed(marked, annotation::NOT_ANNOTATABLE, sink);
+                report_unsupported(node, sink);
+            }
             BlockNode::Paragraph(paragraph) => match self.current.as_mut() {
-                Some(section) => section.paragraph(paragraph, src, sink),
-                None => report_before_section(paragraph.range.clone(), "the first section", sink),
+                Some(section) => section.paragraph(paragraph, marked, src, sink),
+                None => {
+                    annotation::unclaimed(marked, "an annotation before the first section marks nothing", sink);
+                    report_before_section(paragraph.range.clone(), "the first section", sink);
+                }
             },
             BlockNode::List(list) => match self.current.as_mut() {
-                Some(section) => section.list(list, src, sink),
-                None => report_before_section(list.range.clone(), "the first section", sink),
+                Some(section) => section.list(list, marked, continues, src, sink),
+                None => {
+                    annotation::unclaimed(marked, "an annotation before the first section marks nothing", sink);
+                    report_before_section(list.range.clone(), "the first section", sink);
+                }
             },
         }
     }
 
-    fn heading(&mut self, heading: &HeadingNode, src: &Source<'_>, sink: &mut Sink<'_>) {
+    fn heading(&mut self, heading: &HeadingNode, marked: Option<Marked>, src: &Source<'_>, sink: &mut Sink<'_>) {
+        let marked = if matches!(heading.level, 2 | 3) {
+            marked
+        } else {
+            annotation::unclaimed(marked, annotation::NOT_ANNOTATABLE, sink);
+            annotation::reject_in(&heading.content, sink);
+            None
+        };
         match heading.level {
             1 => {
                 let message = "a resume has one `# ` name heading";
@@ -315,11 +397,14 @@ impl Walker {
             }
             2 => {
                 self.close_section(sink);
-                self.current = Some(SectionBuilder::open(heading, sink));
+                self.current = Some(SectionBuilder::open(heading, marked, sink));
             }
             3 => match self.current.as_mut() {
-                Some(section) => section.start_role(heading, src, sink),
-                None => report_before_section(heading.range.clone(), "the first section", sink),
+                Some(section) => section.start_role(heading, marked, src, sink),
+                None => {
+                    annotation::unclaimed(marked, "an annotation before the first section marks nothing", sink);
+                    report_before_section(heading.range.clone(), "the first section", sink);
+                }
             },
             _ => {
                 let message = format!("level-{} headings are not supported", heading.level);
@@ -348,7 +433,9 @@ impl Walker {
     }
 
     fn close_section(&mut self, sink: &mut Sink<'_>) {
-        if let Some((section, outline)) = self.current.take().and_then(|builder| builder.finish(sink)) {
+        let Some(mut builder) = self.current.take() else { return };
+        self.items.append(std::mem::take(&mut builder.items));
+        if let Some((section, outline)) = builder.finish(sink) {
             self.sections.push(section);
             self.outline.push(outline);
         }
@@ -377,6 +464,9 @@ fn report_unsupported(node: &UnsupportedNode, sink: &mut Sink<'_>) {
 
 struct SectionBuilder {
     title: Option<SectionTitle>,
+    annotations: Annotations,
+    /// The section's items for the alternate-group checks; containers are named by where they start.
+    items: Items,
     blocks: Vec<Block>,
     role: Option<RoleBuilder>,
     order: Vec<RoleKey>,
@@ -388,7 +478,10 @@ struct SectionBuilder {
 }
 
 impl SectionBuilder {
-    fn open(heading: &HeadingNode, sink: &mut Sink<'_>) -> Self {
+    fn open(heading: &HeadingNode, above: Option<Marked>, sink: &mut Sink<'_>) -> Self {
+        let trailing = annotation::trailing(&heading.content, sink);
+        let mut marked = annotation::combine(above, trailing, sink);
+        annotation::forbid_alternate(&mut marked, "section heading", sink);
         let text = heading_text(heading, sink);
         let title = match SectionTitle::try_new(text) {
             Ok(title) => Some(title),
@@ -403,6 +496,8 @@ impl SectionBuilder {
         };
         Self {
             title,
+            annotations: annotation::annotations_of(marked),
+            items: Items::default(),
             blocks: Vec::new(),
             role: None,
             order: Vec::new(),
@@ -413,17 +508,24 @@ impl SectionBuilder {
         }
     }
 
-    fn start_role(&mut self, heading: &HeadingNode, src: &Source<'_>, sink: &mut Sink<'_>) {
+    fn start_role(&mut self, heading: &HeadingNode, above: Option<Marked>, src: &Source<'_>, sink: &mut Sink<'_>) {
         self.close_role();
+        let trailing = annotation::trailing(&heading.content, sink);
+        let mut marked = annotation::combine(above, trailing, sink);
+        annotation::forbid_alternate(&mut marked, "role line", sink);
         let head = role::role_line(heading, src, sink);
         self.role = Some(RoleBuilder {
+            start: heading.range.start,
             head,
+            annotations: annotation::annotations_of(marked),
+            blurb_annotations: Annotations::default(),
             blurb: None,
             body: Vec::new(),
             era: None,
             started: false,
             outline: RoleParts::default(),
         });
+        self.boundary(heading.range.clone());
     }
 
     /// Closes the open role into the section, recording its end for the chronology lint.
@@ -451,6 +553,8 @@ impl SectionBuilder {
             period: head.period,
             blurb: role.blurb,
             body: role.body,
+            annotations: role.annotations,
+            blurb_annotations: role.blurb_annotations,
         }));
     }
 
@@ -468,51 +572,115 @@ impl SectionBuilder {
         }
         self.close_role();
         self.blocks.push(Block::PageBreak);
+        self.boundary(range);
     }
 
-    fn paragraph(&mut self, paragraph: &ParagraphNode, src: &Source<'_>, sink: &mut Sink<'_>) {
+    fn paragraph(&mut self, paragraph: &ParagraphNode, above: Option<Marked>, src: &Source<'_>, sink: &mut Sink<'_>) {
         check_heading_marker(paragraph, src, sink);
+        let trailing = annotation::trailing(&paragraph.content, sink);
+        let mut marked = annotation::combine(above, trailing, sink);
         match (role::era_line(paragraph, src, sink), self.role.as_mut()) {
-            (EraCheck::Era(head), Some(role)) => role.start_era(head),
+            (EraCheck::Era(head), Some(role)) => {
+                annotation::forbid_alternate(&mut marked, "era line", sink);
+                role.start_era(paragraph.range.start, head, annotation::annotations_of(marked));
+                self.boundary(paragraph.range.clone());
+            }
             (EraCheck::Era(_), None) => {
                 let message = "an era line must be inside a role";
                 let finding = Finding::new(DiagnosticCode::EraOutsideRole, paragraph.range.clone(), message)
                     .hint("put it under a `### Company · Title · Period` role line");
                 sink.report(finding);
-                self.plain_paragraph(paragraph, src, sink);
+                self.plain_paragraph(paragraph, marked, src, sink);
             }
-            _ => self.plain_paragraph(paragraph, src, sink),
+            _ => self.plain_paragraph(paragraph, marked, src, sink),
         }
     }
 
-    fn plain_paragraph(&mut self, paragraph: &ParagraphNode, src: &Source<'_>, sink: &mut Sink<'_>) {
+    fn plain_paragraph(
+        &mut self,
+        paragraph: &ParagraphNode,
+        marked: Option<Marked>,
+        src: &Source<'_>,
+        sink: &mut Sink<'_>,
+    ) {
         let content = inline::convert(&paragraph.content, src, sink);
         if content.is_empty() {
+            annotation::unclaimed(marked, annotation::SHOWS_NOTHING, sink);
             return;
         }
+        let range = marked
+            .as_ref()
+            .map_or_else(|| paragraph.range.clone(), |m| m.range.clone());
+        let annotations = annotation::annotations_of(marked);
         let located = Located::of(&paragraph.content);
+        let container = self.container();
+        self.items
+            .push(&annotations, range, container, ItemKind::Paragraph, located.clone());
         match self.role.as_mut() {
-            Some(role) => role.paragraph(content, located),
+            Some(role) => role.paragraph(content, annotations, located),
             None => {
                 self.prose.push(located);
-                self.blocks.push(Block::Paragraph { content });
+                self.blocks.push(Block::Paragraph { content, annotations });
             }
         }
     }
 
-    fn list(&mut self, list: &ListNode, src: &Source<'_>, sink: &mut Sink<'_>) {
+    /// Adds a list's bullets; `continues` joins them to the bullets just before, split off by a comment line.
+    fn list(&mut self, list: &ListNode, above: Option<Marked>, continues: bool, src: &Source<'_>, sink: &mut Sink<'_>) {
         let mut items = Vec::new();
         let mut located = Vec::new();
-        bullets(list, src, sink, &mut items, &mut located);
+        bullets(list, above, None, src, sink, &mut items, &mut located);
         if items.is_empty() {
             return;
         }
+        let records: Vec<_> = items
+            .iter()
+            .zip(&located)
+            .map(|(bullet, outline)| {
+                let range = outline.annotation.clone().unwrap_or_else(|| outline.item.clone());
+                (
+                    bullet.annotations.clone(),
+                    range,
+                    outline.nested_in,
+                    outline.content.clone(),
+                )
+            })
+            .collect();
         match self.role.as_mut() {
-            Some(role) => role.bullets(items, located),
+            Some(role) => role.bullets(items, located, continues),
             None => {
                 self.bullets.extend(located);
-                self.blocks.push(Block::Bullets { items });
+                match self.blocks.last_mut() {
+                    Some(Block::Bullets { items: before }) if continues => before.extend(items),
+                    _ => self.blocks.push(Block::Bullets { items }),
+                }
             }
+        }
+        let container = self.container();
+        for (annotations, range, nested_in, text) in records {
+            // A nested bullet is in its parent bullet's container, so a parent and its child are never variants.
+            let container = nested_in.unwrap_or(container);
+            self.items.push(&annotations, range, container, ItemKind::Bullet, text);
+        }
+    }
+
+    /// Records a line that is never a variant (a role line, era line, or page break), so no group spans it.
+    fn boundary(&mut self, range: Range<usize>) {
+        let container = self.container();
+        self.items.push(
+            &Annotations::default(),
+            range,
+            container,
+            ItemKind::Boundary,
+            Located::default(),
+        );
+    }
+
+    /// The innermost open container: the era, else the role, else the section, named by where it starts.
+    fn container(&self) -> usize {
+        match &self.role {
+            Some(role) => role.era.as_ref().map_or(role.start, |era| era.start),
+            None => self.heading.start,
         }
     }
 
@@ -531,6 +699,7 @@ impl SectionBuilder {
             Section {
                 title,
                 blocks: self.blocks,
+                annotations: self.annotations,
             },
             outline,
         ))
@@ -539,7 +708,11 @@ impl SectionBuilder {
 
 /// A role in progress; `head: None` means the role line was unrecoverable, so the body is dropped.
 struct RoleBuilder {
+    /// Where the role line starts, which names the role as a container of alternates.
+    start: usize,
     head: Option<RoleHead>,
+    annotations: Annotations,
+    blurb_annotations: Annotations,
     blurb: Option<Vec<Inline>>,
     body: Vec<RoleBlock>,
     era: Option<EraBuilder>,
@@ -559,49 +732,63 @@ struct RoleParts {
 }
 
 struct EraBuilder {
+    /// Where the era line starts, which names the era as a container of alternates.
+    start: usize,
     head: EraHead,
+    annotations: Annotations,
     items: Vec<Bullet>,
 }
 
 impl RoleBuilder {
-    fn start_era(&mut self, head: EraHead) {
+    fn start_era(&mut self, start: usize, head: EraHead, annotations: Annotations) {
         self.close_era();
         self.started = true;
         self.outline.eras.push(head.period.clone());
         self.era = Some(EraBuilder {
+            start,
             head,
+            annotations,
             items: Vec::new(),
         });
     }
 
     fn close_era(&mut self) {
-        if let Some(EraBuilder { head, items }) = self.era.take() {
+        if let Some(EraBuilder {
+            head,
+            annotations,
+            items,
+            ..
+        }) = self.era.take()
+        {
             self.body.push(RoleBlock::Era {
                 name: head.name,
                 period: head.period,
                 items,
+                annotations,
             });
         }
     }
 
-    fn paragraph(&mut self, content: Vec<Inline>, located: Located) {
+    fn paragraph(&mut self, content: Vec<Inline>, annotations: Annotations, located: Located) {
         if !self.started {
             self.started = true;
             self.blurb = Some(content);
+            self.blurb_annotations = annotations;
             self.outline.blurb = Some(located);
             return;
         }
         self.close_era();
         self.outline.paragraphs.push(located);
-        self.body.push(RoleBlock::Paragraph { content });
+        self.body.push(RoleBlock::Paragraph { content, annotations });
     }
 
-    fn bullets(&mut self, items: Vec<Bullet>, located: Vec<BulletOutline>) {
+    fn bullets(&mut self, items: Vec<Bullet>, located: Vec<BulletOutline>, continues: bool) {
         self.started = true;
         self.outline.bullets.extend(located);
-        match self.era.as_mut() {
-            Some(era) => era.items.extend(items),
-            None => self.body.push(RoleBlock::Bullets { items }),
+        match (self.era.as_mut(), self.body.last_mut()) {
+            (Some(era), _) => era.items.extend(items),
+            (None, Some(RoleBlock::Bullets { items: before })) if continues => before.extend(items),
+            (None, _) => self.body.push(RoleBlock::Bullets { items }),
         }
     }
 }
@@ -611,8 +798,11 @@ impl RoleBuilder {
 // ---------------------------------------------------------------------------------------------
 
 /// Converts a list into bullets, flattening nested lists depth-first after their parent.
+/// `above` is the full-line annotation over the list, which marks its first bullet.
 fn bullets(
     list: &ListNode,
+    above: Option<Marked>,
+    nested_in: Option<usize>,
     src: &Source<'_>,
     sink: &mut Sink<'_>,
     out: &mut Vec<Bullet>,
@@ -627,13 +817,16 @@ fn bullets(
             sink,
         );
     }
+    let mut above = above;
     for item in &list.items {
-        bullet(item, src, sink, out, located);
+        bullet(item, above.take(), nested_in, src, sink, out, located);
     }
 }
 
 fn bullet(
     item: &ItemNode,
+    above: Option<Marked>,
+    nested_in: Option<usize>,
     src: &Source<'_>,
     sink: &mut Sink<'_>,
     out: &mut Vec<Bullet>,
@@ -641,38 +834,66 @@ fn bullet(
 ) {
     let mut paragraphs = Vec::new();
     let mut nested = Vec::new();
-    for block in &item.blocks {
+    let skip = annotation::opening_line(&item.blocks, src, sink);
+    let inside = std::iter::repeat_n(None, skip).chain(annotation::leading(
+        &item.blocks[skip..],
+        src,
+        "to mark the next bullet, start the comment where that bullet's `-` starts",
+        sink,
+    ));
+    for (block, marked) in item.blocks.iter().zip(inside) {
         match block {
-            BlockNode::Paragraph(paragraph) => paragraphs.push(paragraph),
-            BlockNode::List(list) => nested.push(list),
-            BlockNode::Html(html) => {
-                if html_block(html, src, sink) == HtmlClass::PageBreak {
-                    unsupported(
-                        html.range.clone(),
-                        "a page break inside a bullet is not supported",
-                        "remove it",
-                        sink,
-                    );
-                }
-            }
-            BlockNode::Heading(heading) => {
-                unsupported(
-                    heading.range.clone(),
-                    "a heading inside a bullet is not supported",
-                    "remove the `#` markers",
+            BlockNode::List(list) => nested.push((list, marked)),
+            BlockNode::Paragraph(paragraph) => {
+                annotation::unclaimed(
+                    marked,
+                    "a bullet's later paragraph takes no annotation of its own",
                     sink,
                 );
+                paragraphs.push(paragraph);
             }
-            BlockNode::Unsupported(node) => report_unsupported(node, sink),
+            other => {
+                annotation::unclaimed(marked, annotation::NOT_ANNOTATABLE, sink);
+                report_inside_bullet(other, src, sink);
+            }
         }
     }
-    if let Some((bullet, outline)) = bullet_from(&paragraphs, src, sink) {
+    let parent = paragraphs.first().map_or(0, |p| p.range.start);
+    if let Some((bullet, mut outline)) = bullet_from(&paragraphs, above, src, sink) {
+        outline.nested_in = nested_in;
         out.push(bullet);
         located.push(outline);
     }
-    for list in nested {
+    // One warning per bullet: an annotation line between nested bullets splits their list in two.
+    if let Some((list, _)) = nested.first() {
         lint::nested_list(list, sink);
-        bullets(list, src, sink, out, located);
+    }
+    for (list, marked) in nested {
+        bullets(list, marked, Some(parent), src, sink, out, located);
+    }
+}
+
+/// Reports a block a bullet cannot hold: a page break, a heading, or an unsupported construct.
+fn report_inside_bullet(block: &BlockNode, src: &Source<'_>, sink: &mut Sink<'_>) {
+    match block {
+        BlockNode::Html(html) => {
+            if html_block(html, src, sink) == HtmlClass::PageBreak {
+                unsupported(
+                    html.range.clone(),
+                    "a page break inside a bullet is not supported",
+                    "remove it",
+                    sink,
+                );
+            }
+        }
+        BlockNode::Heading(heading) => unsupported(
+            heading.range.clone(),
+            "a heading inside a bullet is not supported",
+            "remove the `#` markers",
+            sink,
+        ),
+        BlockNode::Unsupported(node) => report_unsupported(node, sink),
+        BlockNode::Paragraph(_) | BlockNode::List(_) => {}
     }
 }
 
@@ -680,16 +901,23 @@ fn bullet(
 /// with a space.
 fn bullet_from(
     paragraphs: &[&ParagraphNode],
+    above: Option<Marked>,
     src: &Source<'_>,
     sink: &mut Sink<'_>,
 ) -> Option<(Bullet, BulletOutline)> {
-    let (first, extra) = paragraphs.split_first()?;
+    let Some((first, extra)) = paragraphs.split_first() else {
+        annotation::unclaimed(above, annotation::SHOWS_NOTHING, sink);
+        return None;
+    };
+    let trailing = annotation::trailing(&first.content, sink);
+    let marked = annotation::combine(above, trailing, sink);
     let (label, mut content) = inline::label_and_content(&first.content, src, sink);
     let (label_text, mut content_text) = match inline::split_bullet_label(&first.content) {
         Some((children, rest)) => (Some(Located::of(children)), Located::of(rest)),
         None => (None, Located::of(&first.content)),
     };
     for paragraph in extra {
+        annotation::reject_in(&paragraph.content, sink);
         let message = "a bullet has more than one paragraph";
         unsupported(
             paragraph.range.clone(),
@@ -704,15 +932,25 @@ fn bullet_from(
         );
     }
     if label.is_none() && content.is_empty() {
+        annotation::unclaimed(marked, annotation::SHOWS_NOTHING, sink);
         return None;
     }
     let outline = BulletOutline {
+        nested_in: None,
+        annotation: marked.as_ref().map(|m| m.range.clone()),
         item: first.range.clone(),
         // The model drops a label that is empty after its colon is stripped; the outline must agree.
         label: label.is_some().then_some(label_text).flatten(),
         content: content_text,
     };
-    Some((Bullet { label, content }, outline))
+    Some((
+        Bullet {
+            label,
+            content,
+            annotations: annotation::annotations_of(marked),
+        },
+        outline,
+    ))
 }
 
 #[cfg(test)]
