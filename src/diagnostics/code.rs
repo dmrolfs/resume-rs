@@ -68,6 +68,16 @@ pub enum DiagnosticCode {
     AlternateGroupReused,
     AlternateVariantRepeated,
     AlternatePriorityConflict,
+    LetterMissingSection,
+    LetterUnknownSection,
+    LetterDuplicateSection,
+    LetterSectionOrder,
+    LetterSectionShape,
+    LetterUnsupportedBlock,
+    LetterAnnotationUnsupported,
+    PlaceholderUnknown,
+    PlaceholderMalformed,
+    PlaceholderPosition,
     // Content (doctor)
     LongBullet,
     UnquantifiedBullet,
@@ -142,7 +152,17 @@ impl DiagnosticCode {
             | AlternateNotAdjacent
             | AlternateGroupReused
             | AlternateVariantRepeated
-            | AlternatePriorityConflict => Category::Format,
+            | AlternatePriorityConflict
+            | LetterMissingSection
+            | LetterUnknownSection
+            | LetterDuplicateSection
+            | LetterSectionOrder
+            | LetterSectionShape
+            | LetterUnsupportedBlock
+            | LetterAnnotationUnsupported
+            | PlaceholderUnknown
+            | PlaceholderMalformed
+            | PlaceholderPosition => Category::Format,
             LongBullet | UnquantifiedBullet | WeakOpener | FirstPerson | SloppyPhrase | LongSummary
             | EducationNotLast | OldRoleDetail | AlternateFactsDiffer => Category::Content,
             PageLimitExceeded
@@ -196,7 +216,17 @@ impl DiagnosticCode {
             | AlternateNotAdjacent
             | AlternateGroupReused
             | AlternateVariantRepeated
-            | AlternatePriorityConflict => Severity::Error,
+            | AlternatePriorityConflict
+            | LetterMissingSection
+            | LetterUnknownSection
+            | LetterDuplicateSection
+            | LetterSectionOrder
+            | LetterSectionShape
+            | LetterUnsupportedBlock
+            | LetterAnnotationUnsupported
+            | PlaceholderUnknown
+            | PlaceholderMalformed
+            | PlaceholderPosition => Severity::Error,
             PeriodHyphen
             | PeriodPresentSpelling
             | NestedList

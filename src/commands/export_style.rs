@@ -89,7 +89,7 @@ fn file_line(written: &Written, path: &Path) -> String {
 }
 
 /// A path relative to the current directory when it is under it.
-fn shown<'p>(path: &'p Path, cwd: &Path) -> &'p Path {
+pub(super) fn shown<'p>(path: &'p Path, cwd: &Path) -> &'p Path {
     path.strip_prefix(cwd).unwrap_or(path)
 }
 

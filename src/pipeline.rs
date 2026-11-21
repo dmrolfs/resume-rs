@@ -61,6 +61,16 @@ impl Session {
         self.fonts.as_ref()
     }
 
+    /// Resolves the style again, keeping the fonts, for a caller that builds many times and wants a style that
+    /// appeared or changed on disk since the last build. A second [`Session`] would scan the fonts again.
+    ///
+    /// # Errors
+    /// The style cannot be resolved now. The previous style is kept, so the next build still has one.
+    pub fn resolve_style_again(&mut self, render: &RenderArgs) -> Result<(), Error> {
+        self.style = Ok(style::resolve(&render.style, render.styles_dir.as_deref())?);
+        Ok(())
+    }
+
     /// The first setup failure, if the style or the fonts could not be set up.
     ///
     /// # Errors

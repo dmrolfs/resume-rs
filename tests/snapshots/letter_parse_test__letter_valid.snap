@@ -1,0 +1,123 @@
+---
+source: tests/letter_parse_test.rs
+expression: assert_some!(valid.valid())
+---
+LetterSource {
+    name: Name(
+        "Alex Example",
+    ),
+    contact: [
+        Link {
+            url: LinkUrl(
+                Url {
+                    scheme: "mailto",
+                    cannot_be_a_base: true,
+                    username: "",
+                    password: None,
+                    host: None,
+                    port: None,
+                    path: "alex@example.invalid",
+                    query: None,
+                    fragment: None,
+                },
+            ),
+            content: [
+                Text {
+                    text: "alex@example.invalid",
+                },
+            ],
+        },
+    ],
+    greeting: Piece {
+        content: [
+            Text(
+                "Dear ",
+            ),
+            Placeholder {
+                key: Recipient,
+                range: 87..100,
+            },
+            Text(
+                ",",
+            ),
+        ],
+        range: 82..101,
+    },
+    body: [
+        Piece {
+            content: [
+                Text(
+                    "I am applying for ",
+                ),
+                Strong(
+                    [
+                        Placeholder {
+                            key: Title,
+                            range: 132..141,
+                        },
+                    ],
+                ),
+                Text(
+                    " at ",
+                ),
+                Placeholder {
+                    key: Company,
+                    range: 147..178,
+                },
+                Text(
+                    ".",
+                ),
+            ],
+            range: 112..179,
+        },
+        Piece {
+            content: [
+                Text(
+                    "My work includes ",
+                ),
+                Link {
+                    url: LinkUrl(
+                        Url {
+                            scheme: "https",
+                            cannot_be_a_base: false,
+                            username: "",
+                            password: None,
+                            host: Some(
+                                Domain(
+                                    "example.invalid",
+                                ),
+                            ),
+                            port: None,
+                            path: "/",
+                            query: None,
+                            fragment: None,
+                        },
+                    ),
+                    content: [
+                        Text(
+                            "shared platforms",
+                        ),
+                    ],
+                },
+                Text(
+                    " and ",
+                ),
+                Code(
+                    "Rust",
+                ),
+                Text(
+                    ".",
+                ),
+            ],
+            range: 181..253,
+        },
+    ],
+    closing: Piece {
+        content: [
+            Text(
+                "Sincerely,",
+            ),
+        ],
+        range: 267..277,
+    },
+}

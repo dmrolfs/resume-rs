@@ -115,6 +115,17 @@ impl Workspace {
         self.run(&self.assess_args("check", files, extra))
     }
 
+    /// `resume export <file> <dir> --out-less`: `export` has no fonts and writes no PDF, so only the extras follow.
+    pub fn export(&self, file: &Path, dir: &Path, extra: &[&str]) -> Run {
+        let mut args = vec![
+            "export".to_string(),
+            file.display().to_string(),
+            dir.display().to_string(),
+        ];
+        args.extend(extra.iter().map(|a| (*a).to_string()));
+        self.run(&args)
+    }
+
     pub fn build(&self, files: &[&Path], extra: &[&str]) -> Run {
         self.run(&self.build_args(files, extra))
     }

@@ -41,8 +41,8 @@ To customize, run `resume export-style mono <dir>` and edit `theme.typ` in the c
 Everything else is shared with pragmatic and was approved for it: Calibri/Carlito at 11 pt, the role line with
 the title, company, and period all bold, company after the title, the `Summary` heading, bullets at 0.15 in, the
 spacing, line pitch, and footer. The guarantees are shared too: a role heading never ends a page, a bullet never
-splits across pages, and line positions are the same with Calibri and Carlito. The theme keys are described in
-the pragmatic README; `header.gap` is mono's own.
+splits across pages, and line positions are the same with Calibri and Carlito. Every theme key is
+described in the guide's [theme keys](https://github.com/dmrolfs/resume-rs/blob/main/docs/User-Guide.md#theme-keys); `header.gap` is mono's own.
 
 ## Where it differs from the template, and why
 

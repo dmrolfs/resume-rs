@@ -1,0 +1,198 @@
+---
+source: tests/letter_parse_test.rs
+expression: invalid.diagnostics()
+---
+[
+    Diagnostic {
+        severity: Error,
+        code: LetterUnknownSection,
+        message: "expected Greeting, Body or Closing",
+        span: Some(
+            Span {
+                file: "invalid.md",
+                kind: Markdown,
+                range: 45..56,
+            },
+        ),
+        hints: [
+            "Use exactly ## Greeting, ## Body and ## Closing, each once after # Name.",
+        ],
+        fix: None,
+    },
+    Diagnostic {
+        severity: Error,
+        code: PlaceholderUnknown,
+        message: "unknown letter field",
+        span: Some(
+            Span {
+                file: "invalid.md",
+                kind: Markdown,
+                range: 58..69,
+            },
+        ),
+        hints: [
+            "use company, title or recipient without internal spaces or formatting",
+        ],
+        fix: None,
+    },
+    Diagnostic {
+        severity: Error,
+        code: ContentBeforeSection,
+        message: "paragraph outside a letter section",
+        span: Some(
+            Span {
+                file: "invalid.md",
+                kind: Markdown,
+                range: 58..83,
+            },
+        ),
+        hints: [
+            "Move the content under a `## ` section.",
+        ],
+        fix: None,
+    },
+    Diagnostic {
+        severity: Error,
+        code: PlaceholderMalformed,
+        message: "malformed or escaped letter placeholder",
+        span: Some(
+            Span {
+                file: "invalid.md",
+                kind: Markdown,
+                range: 74..83,
+            },
+        ),
+        hints: [
+            "keep {{company}}, {{title}} or {{recipient}} in one text run without backslashes",
+        ],
+        fix: None,
+    },
+    Diagnostic {
+        severity: Error,
+        code: LetterSectionOrder,
+        message: "letter sections must be Greeting, Body, Closing",
+        span: Some(
+            Span {
+                file: "invalid.md",
+                kind: Markdown,
+                range: 85..95,
+            },
+        ),
+        hints: [
+            "Use exactly ## Greeting, ## Body and ## Closing, each once after # Name.",
+        ],
+        fix: None,
+    },
+    Diagnostic {
+        severity: Error,
+        code: PlaceholderPosition,
+        message: "placeholder outside paragraph text or a link label",
+        span: Some(
+            Span {
+                file: "invalid.md",
+                kind: Markdown,
+                range: 97..108,
+            },
+        ),
+        hints: [
+            "put application fields in the Greeting, Body or Closing text",
+        ],
+        fix: None,
+    },
+    Diagnostic {
+        severity: Error,
+        code: LetterAnnotationUnsupported,
+        message: "letter annotation cannot be honored before tailoring support",
+        span: Some(
+            Span {
+                file: "invalid.md",
+                kind: Markdown,
+                range: 110..125,
+            },
+        ),
+        hints: [
+            "remove the annotation only if this content is ready to include",
+        ],
+        fix: None,
+    },
+    Diagnostic {
+        severity: Error,
+        code: LetterDuplicateSection,
+        message: "repeated letter section",
+        span: Some(
+            Span {
+                file: "invalid.md",
+                kind: Markdown,
+                range: 127..138,
+            },
+        ),
+        hints: [
+            "Use exactly ## Greeting, ## Body and ## Closing, each once after # Name.",
+        ],
+        fix: None,
+    },
+    Diagnostic {
+        severity: Error,
+        code: LetterSectionOrder,
+        message: "letter sections must be Greeting, Body, Closing",
+        span: Some(
+            Span {
+                file: "invalid.md",
+                kind: Markdown,
+                range: 127..138,
+            },
+        ),
+        hints: [
+            "Use exactly ## Greeting, ## Body and ## Closing, each once after # Name.",
+        ],
+        fix: None,
+    },
+    Diagnostic {
+        severity: Error,
+        code: LetterSectionShape,
+        message: "greeting/closing need one paragraph; body needs at least one",
+        span: Some(
+            Span {
+                file: "invalid.md",
+                kind: Markdown,
+                range: 127..138,
+            },
+        ),
+        hints: [
+            "Write one greeting, one closing, and at least one body paragraph.",
+        ],
+        fix: None,
+    },
+    Diagnostic {
+        severity: Error,
+        code: LetterUnsupportedBlock,
+        message: "unsupported cover-letter construct",
+        span: Some(
+            Span {
+                file: "invalid.md",
+                kind: Markdown,
+                range: 140..164,
+            },
+        ),
+        hints: [
+            "use paragraphs with text, emphasis, links or inline code",
+        ],
+        fix: None,
+    },
+    Diagnostic {
+        severity: Error,
+        code: LetterMissingSection,
+        message: "missing ## Body",
+        span: Some(
+            Span {
+                file: "invalid.md",
+                kind: Markdown,
+                range: 165..165,
+            },
+        ),
+        hints: [
+            "Use exactly ## Greeting, ## Body and ## Closing, each once after # Name.",
+        ],
+        fix: None,
+    },
+]

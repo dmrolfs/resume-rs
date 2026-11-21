@@ -4,10 +4,12 @@
 mod build;
 mod doctor;
 mod emit;
+mod export;
 mod export_style;
 mod licenses;
 pub mod report;
 mod styles;
+mod watch;
 
 use std::ffi::OsString;
 use std::io;
@@ -82,6 +84,8 @@ pub fn run(cli: &Cli, env: &Env, io: &mut Io<'_>) -> Outcome {
         Command::Check(args) => doctor::run_check(cli, args, env, &mut streams),
         Command::Styles(args) => styles::run(cli, args, env, &mut streams),
         Command::ExportStyle(args) => export_style::run(cli, args, env, &mut streams),
+        Command::Export(args) => export::run(cli, args, env, &mut streams),
+        Command::Watch(args) => watch::run(cli, args, env, &mut streams),
         Command::Licenses => licenses::run(cli, env, &mut streams),
     };
     // Report delayed errors here; immediate write errors were already reported by Reporter.

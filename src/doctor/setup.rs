@@ -16,7 +16,10 @@ pub fn finding_of(error: &Error) -> Option<Diagnostic> {
     let code = match error {
         Error::UnknownStyle { .. } => DiagnosticCode::UnknownStyle,
         Error::StyleMissingMain { .. } => DiagnosticCode::StyleMissingMain,
-        Error::StyleRoot { .. } | Error::StyleOutsideRoot { .. } => DiagnosticCode::StylesDirUnusable,
+        Error::StyleRoot { .. }
+        | Error::StyleOutsideRoot { .. }
+        | Error::StyleDirectory { .. }
+        | Error::StyleFile { .. } => DiagnosticCode::StylesDirUnusable,
         Error::FontDirectory { .. } => DiagnosticCode::FontPathUnusable,
         Error::CreateOutputDir { .. }
         | Error::OutputIsDirectory { .. }
@@ -26,6 +29,8 @@ pub fn finding_of(error: &Error) -> Option<Diagnostic> {
         | Error::OutputExists { .. } => DiagnosticCode::OutputNotWritable,
         Error::ReadInput { .. }
         | Error::InputChanged { .. }
+        | Error::Watch { .. }
+        | Error::WatchInput { .. }
         | Error::SerializeResume { .. }
         | Error::FontScanPanicked { .. }
         | Error::Probe { .. }
