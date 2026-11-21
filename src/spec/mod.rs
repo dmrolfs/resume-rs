@@ -12,6 +12,7 @@ pub mod error;
 pub mod layer;
 pub mod merge;
 pub mod names;
+pub mod overrides;
 mod raw;
 mod read;
 pub mod resolved;
@@ -22,6 +23,10 @@ pub use self::chain::{DirSource, ProfileSource};
 pub use self::error::{Located, PickProblem, PickProblemKind, SpecError};
 pub use self::layer::{Kind, Layer, Position, SpecLayer};
 pub use self::merge::{ChoiceKey, Choices, SelectChoices};
+pub use self::overrides::{
+    Admitted, Applied, Explicit, Override, OverrideFlag, OverridePolicy, Refused, Replaced, ScopeFlag, apply,
+    paper_name,
+};
 pub use self::resolved::{ChainLink, ContentRef, ResolvedSpec};
 
 /// Resolves the spec at `spec`: loads it and the profiles it extends, orders them, and merges their choices.
@@ -46,7 +51,7 @@ pub fn resolve(spec: &Path, profiles: Option<&Path>) -> Result<ResolvedSpec, Spe
             if !default.is_dir() {
                 return error::ProfilesDirectoryMissingSnafu {
                     spec,
-                    searched: default,
+                    searched: error::searched_path(&default),
                 }
                 .fail();
             }

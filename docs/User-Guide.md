@@ -219,7 +219,7 @@ resume check Resume.md --format json
 
 **`doctor --explain CODE`** prints what a finding means, the reason for it, how to fix it, and usually a before-and-after example. The code is written exactly as the report shows it, in lowercase. Every example it prints is one that really produces its code; the one for `font-fallback-metric` needs `--format json`, because that note is not shown in a human report.
 
-**Where output goes.** A human report is written to standard error, so `resume check Resume.md > report.txt` leaves the file empty. With `--format json`, each finding is one JSON object per line on standard output, for scripts. A JSON finding has the fields `type` (`diagnostic`; a tailored build also writes one `selection` record, see [Annotations](#annotations)), `severity`, `code`, `category`, `message`, `file`, `line`, `column`, `end_line`, `end_column`, `hints`, and `fixable`. Operational problems (a file that cannot be read, an unknown style) are still plain lines on standard error with exit code 1, so standard output stays machine-readable.
+**Where output goes.** A human report is written to standard error, so `resume check Resume.md > report.txt` leaves the file empty. With `--format json`, each finding is one JSON object per line on standard output, for scripts. A JSON finding has the fields `type` (`diagnostic`; a tailored build also writes one `selection` record, see [Annotations](#annotations), and a build from a spec one `spec` record, see [Profiles and position specs](#profiles-and-position-specs)), `severity`, `code`, `category`, `message`, `file`, `line`, `column`, `end_line`, `end_column`, `hints`, and `fixable`. Operational problems (a file that cannot be read, an unknown style) are still plain lines on standard error with exit code 1, so standard output stays machine-readable.
 
 **Exit codes.** 0 means success, and warnings are allowed. 1 means an error finding, a failed build, or an operational error such as an unreadable file. 2 means the command line itself was wrong.
 
@@ -534,7 +534,7 @@ resume letter tests/fixtures/letters/valid.md --company Acme --title Architect -
 
 ### resume build
 
-Typesets one or more resumes into PDFs. The PDF is named after the input file and written to the output directory, which is created if it does not exist. If the resume has format errors, nothing is written. If it compiles but a layout check fails, such as the page limit, the PDF is still written so you can see what overflowed, and the command exits 1. With several files, each is built and each gets its own summary line; one failing never skips the others. Two inputs with the same file name, such as `Resume.md` and `sub/Resume.md`, would write the same PDF, so `build` refuses them with exit code 2: rename one or build them separately.
+Typesets one or more resumes into PDFs, or the resume a [position spec](#profiles-and-position-specs) names. The PDF is named after the input file, or after the spec, and written to the output directory, which is created if it does not exist. If the resume has format errors, nothing is written. If it compiles but a layout check fails, such as the page limit, the PDF is still written so you can see what overflowed, and the command exits 1. With several files, each is built and each gets its own summary line; one failing never skips the others. Two inputs with the same file name, such as `Resume.md` and `sub/Resume.md`, would write the same PDF, so `build` refuses them with exit code 2: rename one or build them separately.
 
 ```sh
 resume build Resume.md
@@ -543,7 +543,11 @@ resume build Resume.md Other.md --out pdfs
 
 | Option | Values and default | What it does |
 |---|---|---|
-| `<FILE>...` | one or more Markdown files | The resumes to build. |
+| `<FILE>...` | one or more Markdown files; not needed with `--spec` | The resumes to build. |
+| `--spec <FILE>` | a position spec | Build from this spec instead of a FILE. See [Profiles and position specs](#profiles-and-position-specs). |
+| `--profiles <DIR>` | none; needs `--spec` | Where the profiles are found; without it, `profiles` beside the spec's directory. |
+| `--allow-overrides` | a switch; needs `--spec` | Let `--tags`, `--core-only`, `--prefer`, `--style`, and `--paper` replace the spec's choices; the summary lists each. |
+| `--print-spec` | a switch; needs `--spec` | Print the spec as resolved, as one TOML file, and build nothing. |
 | `-o, --out <DIR>` | default `out` | The directory the PDFs are written to. |
 | `-s, --style <NAME>` | default `pragmatic` | The style to render with. |
 | `--styles-dir <DIR>` | none | A directory of styles to use besides the built-in ones. A style here wins over a built-in of the same name. |
@@ -833,15 +837,192 @@ ok out/Resume.pdf  pragmatic  2 pages  0 errors, 0 warnings  built in 90ms
 
 Routine choices are counted; what can surprise you is listed with its line. `core alone` is the page count of the `@core` content by itself, with the same style, paper, fonts, and wordings: it is what a `--core-only` build would print. A build of a file without annotations, with no options, prints none of these lines.
 
-With `--format json`, the same facts are one JSON object on standard output, with `type` `selection`, after the build's findings. Each item it names has its `line`.
+With `--format json`, the same facts are one JSON object on standard output, with `type` `selection`, before the build's findings. Each item it names has its `line`.
 
 To see what a file's annotations offer, use [`resume tags`](#resume-tags).
 
 ## Profiles and position specs
 
-<!-- guide:planned rsm-141.23 witness=option:--spec -->
+One annotated baseline can serve every application. A **position spec** is one small file that records the choices for one application: which baseline to use, which tags and wordings to keep, the style, and the paper. A **profile** is a named set of choices that several specs share, such as "principal-level positions" or "AI platform positions". `resume build --spec positions/acme.toml` builds the PDF from the spec and its profiles, so the PDF you sent can be rebuilt from the spec and the same version of the program.
 
-**Planned, not available yet.** Profiles and position specs are planned. Nothing in this section works today, and nothing reads such files.
+### A worked example
+
+Keep the files side by side. The spec sits in `positions/`, the profiles it extends in `profiles/` beside it, and the baseline wherever the spec says.
+
+```text
+baselines/baseline.md
+profiles/principal.toml
+profiles/ai-platform.toml
+positions/acme.toml
+```
+
+Two profiles, one for the level and one for the topic:
+
+```toml profiles/principal.toml
+[build]
+style = "pragmatic"
+
+[select]
+tags = ["leadership"]
+prefer = ["technical", "short"]
+pick = { gateway = "long" }
+```
+
+```toml profiles/ai-platform.toml
+[build]
+paper = "a4"
+
+[select]
+tags = ["ai", "platform"]
+prefer = ["business"]
+pick = { gateway = "short", summary = "ai" }
+```
+
+And the spec for one application, which extends both and adds its own choices:
+
+```toml positions/acme.toml
+extends = ["principal", "ai-platform"]
+
+[position]
+company = "Acme"
+title = "Principal Architect, AI Platform"
+level = "principal"
+date = 2026-11-19
+posting = "https://example.com/jobs/123"
+
+[build]
+content = "../baselines/baseline.md"
+style = "mono"
+
+[select]
+tags = ["iceberg"]
+prefer = ["short"]
+pick = { summary = "acme" }
+```
+
+Build it, and print what it resolves to:
+
+```sh
+resume build --spec positions/acme.toml
+resume build --spec positions/acme.toml --print-spec
+```
+
+The second command prints the choices of all three files as one flat spec and builds nothing. It does not read the baseline, so it works before the baseline exists:
+
+```toml resolved
+# Resolved from: principal, ai-platform, the spec
+
+[position]
+company = "Acme"
+title = "Principal Architect, AI Platform"
+level = "principal"
+date = 2026-11-19
+posting = "https://example.com/jobs/123"
+
+[build]
+content = "../baselines/baseline.md"
+style = "mono"
+paper = "a4"
+
+[select]
+tags = ["ai", "iceberg", "leadership", "platform"]
+prefer = ["short", "business", "technical"]
+
+[select.pick]
+gateway = "short"
+summary = "acme"
+```
+
+The `style` is the spec's `mono`, because the spec is more specific than `principal`'s `pragmatic`. The `paper` comes from `ai-platform`, the only file that chose one. The `gateway` pick is `short`, from `ai-platform`, because it is listed after `principal`. Saved beside the original (the path in `content` is relative to the spec's own directory), the printed file resolves to the same choices and needs no profiles.
+
+### The files
+
+Both kinds of file are TOML and strict: a key the program does not know is an error that names the file and line and suggests the key you probably meant. A name (a tag, a group, a wording, a profile) follows the rule in [Annotations](#annotations): lowercase letters and digits, starting with a letter, with single hyphens, at most 40 characters.
+
+| Key | In | What it says |
+|---|---|---|
+| `extends` | spec or profile | The profiles to start from, least specific first. A name is a file name without `.toml`, in lowercase. |
+| `[position]` | spec only | What the application is for: `company`, `title`, `level`, `domain`, `audience`, `date` (`2026-11-19`), `posting` (a web address), and `emphasis` with `business`, `org`, and `technical`, each `low`, `medium`, or `high`. Every key is optional. The summary prints them; they never change a build, and they never reach the PDF. |
+| `content` | spec only, under `[build]` | The baseline to build: a relative path, written with forward slashes, from the spec's own directory. It may climb with `..`. |
+| `style`, `paper` | under `[build]` | The style, and the paper (`letter` or `a4`). |
+| `tags` | under `[select]` | The tags to keep, as `--tags` does. |
+| `prefer` | under `[select]` | The wordings to prefer, most preferred first, as `--prefer` does. |
+| `pick` | under `[select]` | The wording a named group must use: `pick = { gateway = "short" }`. A group or wording the baseline does not have is an error that names the line that wrote it, and no PDF is made. |
+| `core-only` | under `[select]` | `true` keeps only `@core` items. It cannot be combined with `tags` in the files that are merged. |
+| `promote` | under `[select]` | Reserved for ordering, which is not available yet. A spec or profile that has it is refused, so a build is never different from what the files say. |
+
+`drafts` is never a key. Whether to preview drafts is a choice you make at the command line, so a file can never put unfinished text into a PDF you send.
+
+### How the choices merge
+
+The files are applied from the least specific to the most specific: each profile after the profiles it extends, the profiles in the order `extends` lists them, and the spec last. Later is more specific. A profile that two files extend, such as a shared base, is applied once.
+
+- `tags` are a union of every file's tags.
+- `prefer` lists the most specific file's wordings first, then the wordings of less specific files that are not listed yet.
+- `pick`, `style`, `paper`, and `core-only` are decided by the most specific file that has one. A pick is decided for each group on its own.
+
+If the files cannot be put in one order, because a spec lists `["b", "base"]` while `b` extends `base`, the build stops and names both. A cycle is an error that prints the way round. The most you can nest is 8 levels and 32 profiles.
+
+Profiles are looked for in the directory given with `--profiles`, and otherwise in `profiles` beside the spec's own directory: `positions/acme.toml` finds `positions/../profiles`. There is no other place, so the result cannot depend on where you run the command. A spec that extends nothing needs no profiles directory. Give a profile's file the lowercase name it is called by: `principal.toml`. Do not make the spec's directory a link, because `..` after a link does not mean the same thing on every system.
+
+### What a spec build prints
+
+With the worked example above and a baseline whose wordings are `acme`, `ai`, `default`, `long`, and `short`, `resume build --spec positions/acme.toml --fonts bundled` prints:
+
+```text
+ok out/acme.pdf  mono  1 page  0 errors, 0 warnings, 1 note  built in 65ms
+  spec: positions/acme.toml
+  position: Acme; Principal Architect, AI Platform; level principal; dated 2026-11-19; posting https://example.com/jobs/123
+  profiles: principal -> ai-platform -> the spec
+  content: baselines/baseline.md
+  environment: --fonts bundled
+  fonts: body Carlito (fallback for Calibri); display Carlito (fallback for Calibri); mono DejaVu Sans Mono (bundled)
+  selection: tags ai, iceberg, leadership, platform; prefer short, business, technical; picks gateway.short, summary.acme
+  kept: 2 sections, 1 role, 1 blurb, 1 paragraph, 3 bullets; dropped: 2 paragraphs, 3 bullets (of which 4 other wordings)
+  wordings: 2 chosen (2 pick)
+  core alone: not measured (no-core)
+note[unknown-wording]: profile wordings `business` (profiles/ai-platform.toml:6:11), `technical` (profiles/principal.toml:6:11): not used in baselines/baseline.md
+ = help: the resume's wordings are `acme`, `ai`, `default`, `long`, `short`
+ = help: `resume tags <file>` lists every tag and wording
+ = help: a profile can name what this resume lacks, so this is only a note
+```
+
+The spec lines come before anything else is said, so you see which spec and which file were used first. `profiles` is the order the files were applied in. `environment` echoes the options that are about your machine and not about the resume (`--fonts`, `--font-path`, `--styles-dir`, `--max-pages`, `-o`) when you change them. Then come the lines of an ordinary [tailored build](#tailoring-from-the-command-line).
+
+The PDF is named after the spec, not the baseline: `positions/acme.toml` builds `acme.pdf`, and that name is also the identity written into the PDF. Two specs over one baseline therefore write two files. Two specs with the same name in different directories would write the same file, and so would two names that differ only in capitals on macOS and Windows, so give each application its own file name.
+
+With `--format json`, a build writes one object with `type` `spec` on standard output, before the `selection` object and the findings. Every key is always there: `file`, `position` (the fields of `[position]`, each `null` when unset; `null` itself when the spec has no `[position]`), `chain` (the `name` and `file` of each link; the spec's `name` is `null`), `content`, `pdf` (the file written or, with `--dry-run`, the file that would be written; `null` when there is none), `style`, `paper`, `drafts`, `overrides`, `environment`, and `version`. Each override has the `flag`, the values it `set` (none for a switch), what it `replaced` (`null` when the spec chose nothing, else the `setting` and its `value` list), and `at`, where the spec chose it, one place for each file. The `selection` object also has `picks`, which is empty for a build of a file.
+
+### Flags beside a spec
+
+A spec is the whole recipe, so the options that choose what goes into the resume are refused beside it, and the error names every one:
+
+```text
+error: --tags and --paper cannot be used beside --spec: the spec is the whole recipe, so a flag would silently change what it rebuilds; put the choice in the spec or a profile, or add --allow-overrides to experiment
+```
+
+Those options are `--tags`, `--core-only`, `--prefer`, `--style`, and `--paper`. To experiment with one, add `--allow-overrides`:
+
+```sh
+resume build --spec positions/acme.toml --allow-overrides --tags ai
+resume build --spec positions/acme.toml --allow-overrides --core-only --style pragmatic
+```
+
+Each option you type then **replaces** the spec's choice. `--tags` or `--core-only` replaces the whole scope, so `--tags ai` narrows a spec that keeps four tags to one, and `--core-only` is allowed over a spec that has tags. `--prefer` replaces the whole list. A pick can only come from a file. The summary says `spec: positions/acme.toml, plus overrides` and lists each override with what it replaced and where that was written, and the JSON `overrides` lists the same. The PDF you send should be built without them.
+
+The options about your machine (`--fonts`, `--font-path`, `--styles-dir`, `--max-pages`, `-o`) and `--dry-run` are always allowed. So is `--drafts`, to preview the spec with its unfinished items; the summary says `with drafts`, and the PDF is written as `acme.drafts.pdf`, so a preview never replaces the `acme.pdf` you built to send. A spec file whose name ends in `.drafts` is refused for that reason.
+
+### Rebuilding what you sent
+
+Two builds of one spec are byte for byte the same PDF, and a build from a spec is the same as the build from the options it resolves to, when the file is named like the spec. That holds for the same version of the program, the same fonts, and the same style: the version is written into the PDF, and `--fonts auto` can use fonts installed on your machine. Build the copy you send with `--fonts bundled`, so it does not depend on the machine. Keep the spec, its profiles, the baseline, and the version of `resume` together, for example in one repository.
+
+Nothing from `[position]`, the profiles' names, or the tags reaches the PDF: the PDF holds the resume's own text, the name for its title and author, the program's version, and an identity made from the spec's file name. The spec lines in the summary and the JSON record do hold the company, the title, and the posting address. They are printed to your terminal and to whatever captures its output, such as a log or a continuous-integration job.
+
+A spec can name any file you can read as its `content`, and the summary prints the resolved path before anything is read from it. Build only specs you wrote or have read.
+
+### Names a profile uses that the baseline does not
+
+A tag or wording written in the spec itself that the baseline does not use is a warning that names the line, as for the options: it is probably a misspelling. A profile is shared by baselines that use different tags and wordings, and a `prefer` list means "where a group has it", so a name only a profile writes is a note, not a warning. The note names the profile and the line. The two codes are [`unknown-tag`](#code-unknown-tag) and [`unknown-wording`](#code-unknown-wording).
 
 ## Troubleshooting
 
@@ -971,8 +1152,8 @@ The environment: styles, fonts, and the output location. `doctor` and `check` re
 | <a id="code-output-not-writable"></a>`output-not-writable` | error | The output directory cannot be created or written, so build would fail. |
 | <a id="code-typst-error"></a>`typst-error` | error | The style's Typst code failed to compile. |
 | <a id="code-typst-warning"></a>`typst-warning` | warning | Typst reported a warning while rendering the style. |
-| <a id="code-unknown-tag"></a>`unknown-tag` | warning | A tag given with --tags is not used anywhere in the resume. |
-| <a id="code-unknown-wording"></a>`unknown-wording` | warning | A wording given with --prefer is not a variant of any group in the resume. |
+| <a id="code-unknown-tag"></a>`unknown-tag` | warning | A tag given with --tags, or written in a spec, is not used anywhere in the resume. |
+| <a id="code-unknown-wording"></a>`unknown-wording` | warning | A wording given with --prefer, or written in a spec, is not a variant of any group in the resume. |
 
 <!-- /guide:generated -->
 

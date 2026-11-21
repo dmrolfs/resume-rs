@@ -12,6 +12,7 @@ pub mod commands;
 pub mod diagnostics;
 pub mod doctor;
 pub mod error;
+pub mod input;
 pub mod layout;
 pub mod letter;
 pub mod markdown;

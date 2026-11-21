@@ -2,7 +2,7 @@
 //! ABOUTME: Each message names the file, and where it can the line, the column, and the key.
 
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use snafu::Snafu;
@@ -24,7 +24,16 @@ pub struct Located {
 
 impl fmt::Display for Located {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:{}:{}", self.path.display(), self.line, self.column)
+        // Shown without the `..` that led to a profile (`positions/../profiles/a.toml` is `profiles/a.toml`); the path
+        // itself is untouched, because it is what was opened. A path with nothing to remove is shown as it was
+        // written, so a user's own separators are not rewritten.
+        let has_parent = self.path.components().any(|part| matches!(part, Component::ParentDir));
+        let shown = if has_parent {
+            tidy_path(&self.path)
+        } else {
+            self.path.to_path_buf()
+        };
+        write!(f, "{}:{}:{}", shown.display(), self.line, self.column)
     }
 }
 
@@ -36,6 +45,34 @@ pub enum NameKind {
     Group,
     Variant,
     Profile,
+}
+
+/// `path` without the `..` that follow a named part (`positions/../profiles` is `profiles`), for showing only.
+///
+/// Textual: a link in the path is not followed, so this is never used to find a file. A spec's directory must not be
+/// a link, which is also why `positions/..` is the spec's parent.
+#[must_use]
+pub fn tidy_path(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::CurDir => {}
+            Component::ParentDir if matches!(out.components().next_back(), Some(Component::Normal(_))) => {
+                out.pop();
+            }
+            // Nothing is above the root, so `/..` is `/`.
+            Component::ParentDir if matches!(out.components().next_back(), Some(Component::RootDir)) => {}
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// A directory that was searched, as an error shows it: made absolute (a spec in the working directory has no
+/// directory part, and `./../profiles` would not say which) and tidied.
+#[must_use]
+pub fn searched_path(path: &Path) -> PathBuf {
+    tidy_path(&std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()))
 }
 
 /// A value of a file as it is safe to print: cut short, with control characters escaped.
@@ -329,6 +366,54 @@ impl SpecError {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn a_parent_part_cancels_the_named_part_before_it_and_only_that() {
+        let cases = [
+            ("two/positions/../profiles/a.toml", "two/profiles/a.toml"),
+            ("a/../../b", "../b"),
+            ("../../a", "../../a"),
+            ("../a", "../a"),
+            ("./a/./b", "a/b"),
+            ("a/b/../../c", "c"),
+            ("/../a", "/a"),
+        ];
+        for (path, shown) in cases {
+            assert_eq!(tidy_path(Path::new(path)), Path::new(shown), "{path}");
+        }
+    }
+
+    #[test]
+    fn a_location_without_a_parent_part_is_shown_exactly_as_written() {
+        // Mixed separators, as a path joined by hand has on Windows: nothing to remove, so nothing is rewritten.
+        let place = Located {
+            path: Path::new("positions/sub\\acme.toml").into(),
+            line: 1,
+            column: 2,
+        };
+        assert_eq!(
+            place.to_string(),
+            format!("{}:1:2", Path::new("positions/sub\\acme.toml").display())
+        );
+    }
+
+    #[test]
+    fn a_location_is_shown_without_the_parent_part_that_led_to_its_file_and_keeps_its_path() {
+        let place = Located {
+            path: Path::new("positions/../profiles/a.toml").into(),
+            line: 3,
+            column: 9,
+        };
+        assert_eq!(
+            place.to_string(),
+            format!("{}:3:9", Path::new("profiles").join("a.toml").display())
+        );
+        assert_eq!(
+            place.path.as_ref(),
+            Path::new("positions/../profiles/a.toml"),
+            "what was opened is untouched"
+        );
+    }
 
     fn at() -> Located {
         Located {

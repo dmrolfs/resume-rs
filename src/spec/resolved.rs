@@ -30,6 +30,8 @@ pub struct ContentRef {
     pub declared: DeclaredPath,
     /// The path joined onto the spec's directory: where to read it from. Not canonicalized, not opened.
     pub path: PathBuf,
+    /// Where the spec wrote `content =`, so an error about the file can point at the line that named it.
+    pub at: Located,
 }
 
 /// Everything a build needs from a spec and its profiles.
@@ -62,15 +64,17 @@ impl ResolvedSpec {
         let Some(spec) = spec else {
             unreachable!("a chain ends in its spec");
         };
-        let Some(declared) = spec.content.map(|c| c.value) else {
+        let Some(content) = spec.content else {
             unreachable!("loading a spec requires its content path");
         };
+        let (declared, at) = (content.value, content.at);
         let dir = spec.path.parent().map(std::path::Path::to_path_buf).unwrap_or_default();
         Self {
             position: spec.position,
             content: ContentRef {
                 path: declared.resolve_against(&dir),
                 declared,
+                at,
             },
             choices: merged.choices,
             chain,

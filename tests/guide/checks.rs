@@ -1163,3 +1163,152 @@ pub fn private_details(dir: &Path) -> BTreeSet<String> {
     });
     details
 }
+
+// ---- the worked example of specs and profiles ----------------------------------------------------------
+
+/// The worked example under "Profiles and position specs": the files the guide shows resolve, every profile it
+/// shows is used, and what it says `--print-spec` prints is what the program prints.
+///
+/// A `toml` fence names its file in the info string (`toml positions/acme.toml`), or is `toml resolved` for the
+/// printed spec.
+pub fn spec_examples(guide: &Guide) -> Vec<String> {
+    use std::fs;
+
+    let heading = match section(guide, 2, "Profiles and position specs") {
+        Ok(h) => h,
+        Err(e) => return vec![e],
+    };
+    let range = Guide::range(heading);
+    let mut files: Vec<(String, String)> = Vec::new();
+    let mut resolved: Option<String> = None;
+    let mut problems = Vec::new();
+    for fence in guide
+        .fences
+        .iter()
+        .filter(|f| range.contains(&f.start) && f.language() == "toml")
+    {
+        let words = fence.words();
+        let body = fence.body.replace("\r\n", "\n");
+        match words.get(1).map(String::as_str) {
+            Some("resolved") => resolved = Some(body),
+            Some(name) if name.ends_with(".toml") => files.push((name.to_string(), body)),
+            _ => problems.push(format!(
+                "line {}: a `toml` example here must name its file (`toml positions/acme.toml`) or be `toml resolved`",
+                fence.line
+            )),
+        }
+    }
+    let specs: Vec<&String> = files
+        .iter()
+        .map(|(name, _)| name)
+        .filter(|name| name.starts_with("positions/"))
+        .collect();
+    let [spec_name] = specs.as_slice() else {
+        problems.push(format!(
+            "the worked example needs exactly one spec under positions/, found {}",
+            specs.len()
+        ));
+        return problems;
+    };
+    let Some(printed) = resolved else {
+        problems.push("the worked example has no `toml resolved` example of what --print-spec prints".to_string());
+        return problems;
+    };
+    let dir = match tempfile::tempdir() {
+        Ok(dir) => dir,
+        Err(e) => return vec![format!("cannot make a temporary directory: {e}")],
+    };
+    for (name, body) in &files {
+        let path = dir.path().join(name);
+        let written = path
+            .parent()
+            .map_or(Ok(()), fs::create_dir_all)
+            .and_then(|()| fs::write(&path, body));
+        if let Err(e) = written {
+            return vec![format!("cannot write {name}: {e}")];
+        }
+    }
+    match resume::spec::resolve(&dir.path().join(spec_name.as_str()), None) {
+        Err(e) => problems.push(format!("the spec in the guide does not resolve: {e}")),
+        Ok(spec) => {
+            let text = spec.to_toml();
+            if text.trim() != printed.trim() {
+                problems.push(format!(
+                    "the `toml resolved` example differs from what --print-spec prints:\n--- the guide\n{}\n--- the program\n{}",
+                    printed.trim(),
+                    text.trim()
+                ));
+            }
+            let used: BTreeSet<String> = spec
+                .chain
+                .iter()
+                .filter_map(|l| l.name.as_ref().map(ToString::to_string))
+                .collect();
+            for (name, _) in files.iter().filter(|(n, _)| n.starts_with("profiles/")) {
+                let profile = name.trim_start_matches("profiles/").trim_end_matches(".toml");
+                if !used.contains(profile) {
+                    problems.push(format!("the guide shows `{name}`, which the spec does not extend"));
+                }
+            }
+            if problems.is_empty() {
+                problems.extend(spec_build_sample(guide, &range, dir.path(), spec_name));
+            }
+        }
+    }
+    problems
+}
+
+/// The sample of what a spec build prints must be what the program prints for the example's own files.
+///
+/// The baseline is the synthetic fixture the spec tests use; the sample says which wordings it has. Everything but the
+/// timing on the first line is compared, so a changed line, a renamed label, or a reordered line is caught.
+fn spec_build_sample(guide: &Guide, range: &std::ops::Range<usize>, dir: &std::path::Path, spec: &str) -> Vec<String> {
+    use std::fs;
+    use std::process::Command;
+
+    let Some(sample) = guide
+        .fences
+        .iter()
+        .find(|f| range.contains(&f.start) && f.language() == "text" && f.body.starts_with("ok out/"))
+    else {
+        return vec!["the worked example has no `text` sample of what a spec build prints".to_string()];
+    };
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/specs/baseline.md");
+    let baseline = dir.join("baselines/baseline.md");
+    let copied = baseline
+        .parent()
+        .map_or(Ok(()), fs::create_dir_all)
+        .and_then(|()| fs::copy(&fixture, &baseline).map(|_| ()));
+    if let Err(e) = copied {
+        return vec![format!("cannot stage the baseline: {e}")];
+    }
+    let output = Command::new(env!("CARGO_BIN_EXE_resume"))
+        .current_dir(dir)
+        .args([
+            "--color", "never", "build", "--spec", spec, "--fonts", "bundled", "-o", "out",
+        ])
+        .output();
+    let output = match output {
+        Ok(output) => output,
+        Err(e) => return vec![format!("cannot run resume: {e}")],
+    };
+    // Paths print with the platform's separator; the guide shows `/`.
+    let actual = String::from_utf8_lossy(&output.stderr)
+        .replace("\r\n", "\n")
+        .replace('\\', "/");
+    let timeless = |text: &str| -> Vec<String> {
+        text.trim_end()
+            .lines()
+            .map(|line| line.split("  built in ").next().unwrap_or(line).trim_end().to_string())
+            .collect()
+    };
+    let (shown, real) = (timeless(&sample.body.replace("\r\n", "\n")), timeless(&actual));
+    if shown == real {
+        return Vec::new();
+    }
+    vec![format!(
+        "the sample of what a spec build prints differs from the program (the first line is compared without its time):\n--- the guide\n{}\n--- the program\n{}",
+        shown.join("\n"),
+        real.join("\n")
+    )]
+}

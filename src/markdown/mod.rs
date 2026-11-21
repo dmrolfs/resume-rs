@@ -153,7 +153,9 @@ fn analyze(path: &Path, text: &str) -> Parsed {
 /// Shared bounded lowering for resumes and letters, retaining original byte coordinates.
 fn lower_document(text: &str, sink: &mut Sink<'_>) -> Option<tree::Document> {
     if text.len() > MAX_INPUT_BYTES {
-        let message = format!("input is {} bytes; the limit is {MAX_INPUT_BYTES}", text.len());
+        // The text may be a prefix cut at the limit by the reader (`input::read_text`), so its length is not the
+        // file's: the message states only the limit.
+        let message = format!("input is over the limit of {MAX_INPUT_BYTES} bytes");
         sink.report(Finding::new(DiagnosticCode::InputLimit, 0..0, message).hint("split the resume or remove content"));
         return None;
     }
@@ -378,6 +380,11 @@ mod tests {
     fn oversized_input_is_input_limit_error() {
         let parsed = parsed(&"a".repeat(MAX_INPUT_BYTES + 1));
         assert_eq!(codes(&parsed), vec![DiagnosticCode::InputLimit]);
+        assert_eq!(
+            parsed.diagnostics()[0].message,
+            format!("input is over the limit of {MAX_INPUT_BYTES} bytes"),
+            "no length: the text may be a prefix cut at the limit by the reader"
+        );
         assert!(parsed.has_errors());
         assert_none!(parsed.best_effort());
     }

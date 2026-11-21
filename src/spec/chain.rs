@@ -71,7 +71,7 @@ impl ProfileSource for DirSource {
                 return MissingProfileSnafu {
                     at: at.clone(),
                     name: name.to_string(),
-                    searched: self.root.clone(),
+                    searched: super::error::searched_path(&self.root),
                     available: self.available(),
                 }
                 .fail();

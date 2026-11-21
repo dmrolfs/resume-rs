@@ -2,7 +2,9 @@
 //! ABOUTME: Options and defaults are documented here; checks clap cannot express run in `Cli::try_parse_validated`.
 
 mod letter;
+mod spec;
 pub use letter::{LetterArgs, LetterRenderArgs, LetterTextSettings};
+pub use spec::{Given, SpecArgs};
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -15,6 +17,7 @@ use crate::diagnostics::DiagnosticCode;
 use crate::model::options::{ColorMode, FontsMode, OutputFormat, PageLimit, Paper};
 use crate::model::{StyleName, Tag, VariantName};
 use crate::select::{Scope, SelectedTags, Selection};
+use crate::spec::{Explicit, OverrideFlag, OverridePolicy, ScopeFlag};
 
 /// Command-line arguments for `resume`.
 #[derive(Debug, Parser)]
@@ -165,13 +168,17 @@ pub struct ExportStyleArgs {
 /// Arguments of `resume build`.
 #[derive(Debug, Args)]
 pub struct BuildArgs {
-    /// The Markdown resumes to build.
-    #[arg(required = true, value_name = "FILE")]
+    /// The Markdown resumes to build; not needed with `--spec`.
+    #[arg(required_unless_present = "spec", value_name = "FILE")]
     pub files: Vec<PathBuf>,
 
     /// The directory the PDFs are written to; it is created if it does not exist.
     #[arg(short, long, default_value = "out", value_name = "DIR")]
     pub out: PathBuf,
+
+    /// Declared before `render` and `select`, which it asks about: see [`Given`].
+    #[command(flatten)]
+    pub spec: SpecArgs,
 
     #[command(flatten)]
     pub render: RenderArgs,
@@ -313,7 +320,7 @@ impl SelectArgs {
 }
 
 /// The options that decide how a resume is rendered, shared by the commands that render.
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args)]
 pub struct RenderArgs {
     /// The style to render with.
     #[arg(short, long, default_value = "pragmatic", value_name = "NAME")]
@@ -362,6 +369,7 @@ impl Cli {
             Command::Letter(args) => args.validate(self.format).map_err(usage_error),
             Command::Build(build) => {
                 build.render.validate()?;
+                build.validate_spec()?;
                 build.validate_outputs()
             }
             // No PDF is written, so two inputs with the same name are fine.
@@ -453,6 +461,68 @@ impl BuildArgs {
         format!("{}.pdf", Self::pdf_stem(input))
     }
 
+    /// The settings typed on the command line that choose what a spec chooses, and only those.
+    ///
+    /// A value that was not typed is `None`, even where the flag has a default, so a default is never taken for
+    /// a choice.
+    #[must_use]
+    pub fn explicit(&self) -> Explicit {
+        let given = &self.spec.given;
+        let scope = if given.has(OverrideFlag::CoreOnly) {
+            Some(ScopeFlag::CoreOnly)
+        } else if given.has(OverrideFlag::Tags) {
+            SelectedTags::new(self.select.tags.iter().cloned().collect()).map(ScopeFlag::Tags)
+        } else {
+            None
+        };
+        Explicit {
+            style: given.has(OverrideFlag::Style).then(|| self.render.style.clone()),
+            paper: given.has(OverrideFlag::Paper).then_some(self.render.paper),
+            scope,
+            prefer: given.has(OverrideFlag::Prefer).then(|| self.select.prefer.clone()),
+        }
+    }
+
+    /// Whether settings typed beside `--spec` are let through.
+    #[must_use]
+    pub fn override_policy(&self) -> OverridePolicy {
+        if self.spec.allow_overrides {
+            OverridePolicy::Allow
+        } else {
+            OverridePolicy::Refuse
+        }
+    }
+
+    /// What clap cannot say about `--spec`: a file beside it, and settings that it would be silently changed by.
+    ///
+    /// `--profiles`, `--allow-overrides`, and `--print-spec` need `--spec` by clap's own `requires`. This check
+    /// stays out of clap on purpose: a `conflicts_with` between `--spec` and FILE makes clap stop enforcing
+    /// those `requires` whenever a FILE is given.
+    fn validate_spec(&self) -> Result<(), clap::Error> {
+        if self.spec.spec.is_none() {
+            return Ok(());
+        }
+        if let Some(file) = self.files.first() {
+            return Err(usage_error(format!(
+                "--spec builds the file the spec names, so {} cannot be given too; build either a spec or files",
+                file.display()
+            )));
+        }
+        let explicit = self.explicit();
+        if self.spec.print_spec {
+            let flags = explicit.flags();
+            if !flags.is_empty() {
+                let names: Vec<String> = flags.iter().map(ToString::to_string).collect();
+                return Err(usage_error(format!(
+                    "--print-spec shows the spec as written, so {} cannot be given with it; leave the flags out",
+                    names.join(", ")
+                )));
+            }
+            return Ok(());
+        }
+        explicit.admit(self.override_policy()).map(|_| ()).map_err(usage_error)
+    }
+
     /// Two inputs with the same name would write the same PDF; on macOS and Windows names that differ only in
     /// case name the same file, so case is ignored. Nothing has been written when this is checked.
     fn validate_outputs(&self) -> Result<(), clap::Error> {
@@ -475,6 +545,7 @@ impl BuildArgs {
 mod tests {
     use super::*;
     use claims::{assert_err, assert_ok};
+    use clap::FromArgMatches as _;
     use clap::error::ErrorKind;
     use pretty_assertions::assert_eq;
 
@@ -882,5 +953,202 @@ mod tests {
             let err = assert_err!(parse(args));
             assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument, "{args:?}: {err}");
         }
+    }
+
+    // ========================================================================
+    // `build --spec`
+    // ========================================================================
+
+    fn flags_of(args: &[&str]) -> Vec<OverrideFlag> {
+        build_of(&cli(args)).explicit().flags()
+    }
+
+    #[test]
+    fn a_spec_needs_no_file_and_a_file_needs_no_spec() {
+        let by_spec = cli(&["build", "--spec", "positions/acme.toml"]);
+        let build = build_of(&by_spec);
+        assert_eq!(build.spec.spec, Some(PathBuf::from("positions/acme.toml")));
+        assert!(build.files.is_empty());
+        assert_eq!(
+            assert_err!(parse(&["build"])).kind(),
+            ErrorKind::MissingRequiredArgument
+        );
+        assert!(build_of(&cli(&["build", "a.md"])).spec.spec.is_none());
+    }
+
+    #[test]
+    fn a_spec_with_a_file_is_a_usage_error_naming_the_file() {
+        let err = assert_err!(parse(&["build", "a.md", "--spec", "s.toml"]));
+        assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
+        assert!(err.to_string().contains("a.md"), "{err}");
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    #[test]
+    fn profiles_allow_overrides_and_print_spec_each_need_a_spec_even_beside_a_file() {
+        // clap stops enforcing `requires` once FILE has `conflicts_with = "spec"`, so the check is ours; this
+        // pins that a file beside the flag does not hide the missing spec.
+        for flag in [
+            &["--profiles", "p"][..],
+            &["--allow-overrides"][..],
+            &["--print-spec"][..],
+        ] {
+            for file in [&[][..], &["a.md"][..]] {
+                let args: Vec<&str> = ["build"].iter().chain(file).chain(flag).copied().collect();
+                let err = assert_err!(parse(&args));
+                assert!(
+                    matches!(err.kind(), ErrorKind::MissingRequiredArgument),
+                    "{args:?}: {:?} {err}",
+                    err.kind()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_repeated_spec_is_refused() {
+        let err = assert_err!(parse(&["build", "--spec", "a.toml", "--spec", "b.toml"]));
+        assert_eq!(err.exit_code(), 2);
+    }
+
+    #[test]
+    fn a_style_typed_equal_to_the_default_is_still_given() {
+        assert_eq!(flags_of(&["build", "a.md"]), []);
+        assert_eq!(
+            flags_of(&["build", "a.md", "--paper", "letter", "-s", "pragmatic"]),
+            [OverrideFlag::Style, OverrideFlag::Paper]
+        );
+    }
+
+    #[test]
+    fn every_flag_that_chooses_is_detected_by_the_line_that_types_it() {
+        let cases: [(&[&str], OverrideFlag); 6] = [
+            (&["--tags", "ai"], OverrideFlag::Tags),
+            (&["--tags=ai,platform"], OverrideFlag::Tags),
+            (&["--core-only"], OverrideFlag::CoreOnly),
+            (&["--prefer", "short"], OverrideFlag::Prefer),
+            (&["--style", "mono"], OverrideFlag::Style),
+            (&["--paper", "a4"], OverrideFlag::Paper),
+        ];
+        for (typed, flag) in cases {
+            let args: Vec<&str> = ["build", "a.md"].iter().chain(typed).copied().collect();
+            assert_eq!(flags_of(&args), [flag], "{typed:?}");
+        }
+    }
+
+    #[test]
+    fn the_probe_sees_typed_flags_whichever_way_the_line_is_parsed() {
+        // `try_parse_from` is what library callers and tests use; `try_parse_validated` adds only checks.
+        let cli = assert_ok!(Cli::try_parse_from(["resume", "build", "a.md", "--paper", "a4"]));
+        assert_eq!(build_of(&cli).explicit().flags(), [OverrideFlag::Paper]);
+    }
+
+    #[test]
+    fn the_probe_asks_about_ids_that_build_really_has() {
+        // `value_source` panics in debug builds for an id a command lacks, and returns `None` for one that was
+        // renamed: either would turn detection off silently. Every id the probe asks about must exist.
+        let command = Cli::command();
+        let build = command.find_subcommand("build").expect("build exists");
+        let ids: Vec<&str> = build.get_arguments().map(|arg| arg.get_id().as_str()).collect();
+        for id in Given::ids() {
+            assert!(ids.contains(&id), "`build` has no argument `{id}`: {ids:?}");
+        }
+    }
+
+    #[test]
+    fn the_probe_does_not_panic_on_a_command_without_the_ids() {
+        // `watch` has style, paper, tags, core-only, and prefer too, but a command with none must not panic.
+        let matches = clap::Command::new("none").get_matches_from(["none"]);
+        assert_eq!(assert_ok!(Given::from_arg_matches(&matches)), Given::default());
+    }
+
+    #[test]
+    fn every_stray_flag_is_named_in_one_usage_error() {
+        let err = assert_err!(parse(&[
+            "build", "--spec", "s.toml", "--tags", "a", "--prefer", "b", "--style", "mono", "--paper", "a4"
+        ]));
+        assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
+        assert_eq!(err.exit_code(), 2);
+        let text = err.to_string();
+        assert!(
+            text.contains("--tags, --prefer, --style and --paper cannot be used beside --spec"),
+            "{text}"
+        );
+        assert!(text.contains("--allow-overrides"), "{text}");
+    }
+
+    #[test]
+    fn core_only_beside_a_spec_is_named_too() {
+        let err = assert_err!(parse(&["build", "--spec", "s.toml", "--core-only"]));
+        assert!(
+            err.to_string().contains("--core-only cannot be used beside --spec"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn allow_overrides_admits_every_choosing_flag() {
+        let cli = cli(&[
+            "build",
+            "--spec",
+            "s.toml",
+            "--allow-overrides",
+            "--tags",
+            "a",
+            "--prefer",
+            "b",
+            "--style",
+            "mono",
+            "--paper",
+            "a4",
+        ]);
+        assert_eq!(build_of(&cli).explicit().flags().len(), 4);
+        assert_eq!(build_of(&cli).override_policy(), OverridePolicy::Allow);
+    }
+
+    #[test]
+    fn drafts_and_environment_flags_are_allowed_beside_a_spec_without_overrides() {
+        let parsed = cli(&[
+            "build",
+            "--spec",
+            "s.toml",
+            "--drafts",
+            "--fonts",
+            "bundled",
+            "--styles-dir",
+            "d",
+            "--max-pages",
+            "2",
+            "-o",
+            "pdfs",
+        ]);
+        let build = build_of(&parsed);
+        assert!(build.select.drafts);
+        assert_eq!(build.override_policy(), OverridePolicy::Refuse);
+        assert_eq!(build.explicit().flags(), []);
+        let with_path = cli(&["build", "--spec", "s.toml", "--font-path", "f"]);
+        assert_eq!(build_of(&with_path).render.font_path, [PathBuf::from("f")]);
+    }
+
+    #[test]
+    fn print_spec_with_a_choosing_flag_is_refused_even_with_allow_overrides() {
+        for extra in [&[][..], &["--allow-overrides"][..]] {
+            let args: Vec<&str> = ["build", "--spec", "s.toml", "--print-spec", "--tags", "a"]
+                .iter()
+                .chain(extra)
+                .copied()
+                .collect();
+            let err = assert_err!(parse(&args));
+            assert_eq!(err.exit_code(), 2);
+            assert!(err.to_string().contains("--print-spec"), "{err}");
+            assert!(err.to_string().contains("--tags"), "{err}");
+        }
+        assert_ok!(parse(&["build", "--spec", "s.toml", "--print-spec"]));
+    }
+
+    #[test]
+    fn profiles_is_taken_with_a_spec() {
+        let cli = cli(&["build", "--spec", "s.toml", "--profiles", "p"]);
+        assert_eq!(build_of(&cli).spec.profiles, Some(PathBuf::from("p")));
     }
 }

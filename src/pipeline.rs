@@ -1,16 +1,17 @@
 //! ABOUTME: The read-only part of building a resume: parse, compile, and measure the layout.
 //! ABOUTME: `build` and `doctor` both start here, so what each reports about a resume cannot drift apart.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
 use crate::cli::RenderArgs;
-use crate::diagnostics::{Diagnostic, DiagnosticCode};
+use crate::diagnostics::{Diagnostic, DiagnosticCode, Severity};
 use crate::error::Error;
 use crate::layout::LayoutReport;
 use crate::markdown::{Parsed, parse};
-use crate::model::Priority;
 use crate::model::Resume;
+use crate::model::{Priority, Tag, VariantName};
 use crate::select::{self, CorePages, CoreSkip, Scope, Selection, SelectionReport, SelectionSummary, UnknownNames};
 use crate::style::{self, StyleSource};
 use crate::typeset::fonts::{FontSet, FontSetBuilder};
@@ -110,10 +111,24 @@ impl Session {
     /// `--fix` read every item whatever the selection leaves out.
     #[must_use]
     pub fn assess(&self, file: &Path, text: &str, render: &RenderArgs, selection: &Selection) -> Assessment {
+        self.assess_with(file, text, render, selection, &NameOrigins::default())
+    }
+
+    /// [`Self::assess`] for a selection that a spec chose: `names` say where each tag and wording was written,
+    /// so a finding about one points at that line and not at a flag nobody typed.
+    #[must_use]
+    pub fn assess_with(
+        &self,
+        file: &Path,
+        text: &str,
+        render: &RenderArgs,
+        selection: &Selection,
+        names: &NameOrigins,
+    ) -> Assessment {
         let parsed = parse(file, text);
         // Selection needs no fonts or style, so its result and its errors are known even when setup failed.
         let tailored = parsed.valid().map(|baseline| {
-            let findings = unknown_names(file, &UnknownNames::of(baseline, selection));
+            let findings = unknown_names_from(file, &UnknownNames::of(baseline, selection), names);
             select::select(baseline, selection).map(|(resume, report)| Selected {
                 summary: SelectionSummary::new(baseline, &resume, selection, &report),
                 resume,
@@ -225,60 +240,199 @@ pub struct Selected {
     pub findings: Vec<Diagnostic>,
 }
 
+/// Where a tag or a wording a selection asks for was written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NameOrigin {
+    /// Typed on the command line, as `--tags` or `--prefer`.
+    Flag,
+    /// Written in the spec itself, at this place. A spec is written for one resume, so a name that resume lacks
+    /// is probably a typo.
+    Spec(String),
+    /// Written only in a profile, at this place. A profile is meant to be shared by resumes that use different
+    /// names, so a name this resume lacks is expected.
+    Profile(String),
+}
+
+/// Where each name a selection asks for was written; a name not listed was typed as a flag.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NameOrigins {
+    tags: BTreeMap<Tag, NameOrigin>,
+    wordings: BTreeMap<VariantName, NameOrigin>,
+}
+
+impl NameOrigins {
+    pub fn tag(&mut self, tag: Tag, origin: NameOrigin) {
+        self.tags.insert(tag, origin);
+    }
+
+    pub fn wording(&mut self, wording: VariantName, origin: NameOrigin) {
+        self.wordings.insert(wording, origin);
+    }
+}
+
 /// One warning per unknown kind of name, listing what the file does use, so a typo is caught before it quietly
 /// selects nothing.
 pub(crate) fn unknown_names(file: &Path, unknown: &UnknownNames) -> Vec<Diagnostic> {
+    unknown_names_from(file, unknown, &NameOrigins::default())
+}
+
+/// [`unknown_names`] for names that may come from a spec: one finding per kind of name and place it was written.
+///
+/// A name typed as a flag, or written in the spec's own file, is a warning. A name written only in a profile is a
+/// note, because a profile is shared by resumes that do not all use the same tags and wordings.
+pub(crate) fn unknown_names_from(file: &Path, unknown: &UnknownNames, origins: &NameOrigins) -> Vec<Diagnostic> {
     unknown_name_findings(
         file,
         unknown,
+        origins,
         "resume",
         Some("`resume tags <file>` lists every tag and wording"),
     )
 }
 
 pub(crate) fn unknown_letter_names(file: &Path, unknown: &UnknownNames) -> Vec<Diagnostic> {
-    unknown_name_findings(file, unknown, "letter", None)
+    unknown_name_findings(file, unknown, &NameOrigins::default(), "letter", None)
 }
 
-fn unknown_name_findings(file: &Path, unknown: &UnknownNames, document: &str, hint: Option<&str>) -> Vec<Diagnostic> {
-    let finding = |code: DiagnosticCode, asked: String, what: &str, known: String| {
-        let has = if known.is_empty() {
+fn unknown_name_findings(
+    file: &Path,
+    unknown: &UnknownNames,
+    origins: &NameOrigins,
+    document: &'static str,
+    tags_hint: Option<&'static str>,
+) -> Vec<Diagnostic> {
+    let origin_of = |name: String, origin: Option<&NameOrigin>| (name, origin.cloned().unwrap_or(NameOrigin::Flag));
+    let kinds = [
+        UnknownKind {
+            code: DiagnosticCode::UnknownTag,
+            what: "tag",
+            flag: "--tags",
+            document,
+            tags_hint,
+            asked: unknown
+                .tags
+                .iter()
+                .map(|t| origin_of(t.to_string(), origins.tags.get(t)))
+                .collect(),
+            known: unknown.known_tags.iter().map(ToString::to_string).collect(),
+        },
+        UnknownKind {
+            code: DiagnosticCode::UnknownWording,
+            what: "wording",
+            flag: "--prefer",
+            document,
+            tags_hint,
+            asked: unknown
+                .wordings
+                .iter()
+                .map(|w| origin_of(w.to_string(), origins.wordings.get(w)))
+                .collect(),
+            known: unknown.known_wordings.iter().map(ToString::to_string).collect(),
+        },
+    ];
+    kinds
+        .iter()
+        .flat_map(|kind| {
+            [Class::Flag, Class::Spec, Class::Profile]
+                .into_iter()
+                .filter_map(move |class| kind.finding(file, class))
+        })
+        .collect()
+}
+
+/// The names of one kind (tags or wordings) a selection asked for that the document lacks, and where each was written.
+struct UnknownKind {
+    code: DiagnosticCode,
+    what: &'static str,
+    /// The flag a name of this kind is typed with.
+    flag: &'static str,
+    /// What the names were looked for in: `resume` or `letter`.
+    document: &'static str,
+    /// The line that says where to see every name, when there is a command for it.
+    tags_hint: Option<&'static str>,
+    asked: Vec<(String, NameOrigin)>,
+    /// What the document does use.
+    known: Vec<String>,
+}
+
+impl UnknownKind {
+    /// The finding for the names written in places of `class`; `None` when there are none.
+    fn finding(&self, file: &Path, class: Class) -> Option<Diagnostic> {
+        let names: Vec<&(String, NameOrigin)> = self.asked.iter().filter(|(_, o)| Class::of(o) == class).collect();
+        if names.is_empty() {
+            return None;
+        }
+        let listed = |names: &[String]| names.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join(", ");
+        let (what, document) = (self.what, self.document);
+        let known = listed(&self.known);
+        let mut hints = vec![if known.is_empty() {
             format!("the {document} uses no {what}s")
         } else {
             format!("the {document}'s {what}s are {known}")
+        }];
+        hints.extend(self.tags_hint.map(str::to_owned));
+        let (severity, subject) = match class {
+            Class::Flag => {
+                let typed: Vec<String> = names.iter().map(|(name, _)| name.clone()).collect();
+                (
+                    self.code.default_severity(),
+                    format!("{} {}", self.flag, listed(&typed)),
+                )
+            }
+            Class::Spec | Class::Profile => {
+                let each: Vec<String> = names
+                    .iter()
+                    .map(|(name, origin)| format!("`{name}` ({})", origin.place()))
+                    .collect();
+                if class == Class::Profile {
+                    hints.push(format!(
+                        "a profile can name what this {document} lacks, so this is only a note"
+                    ));
+                }
+                let (who, severity) = if class == Class::Spec {
+                    ("spec", self.code.default_severity())
+                } else {
+                    ("profile", Severity::Note)
+                };
+                (severity, format!("{who} {what}s {}", each.join(", ")))
+            }
         };
-        Diagnostic {
-            severity: code.default_severity(),
-            code,
-            message: format!("{asked}: not used in {}", file.display()),
+        Some(Diagnostic {
+            severity,
+            code: self.code,
+            message: format!("{subject}: not used in {}", file.display()),
             span: None,
-            hints: std::iter::once(has).chain(hint.map(str::to_owned)).collect(),
+            hints,
             fix: None,
+        })
+    }
+}
+
+/// What kind of place a name was written in, for grouping findings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Class {
+    Flag,
+    Spec,
+    Profile,
+}
+
+impl Class {
+    fn of(origin: &NameOrigin) -> Self {
+        match origin {
+            NameOrigin::Flag => Self::Flag,
+            NameOrigin::Spec(_) => Self::Spec,
+            NameOrigin::Profile(_) => Self::Profile,
         }
-    };
-    let listed = |names: Vec<String>| names.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join(", ");
-    let mut out = Vec::new();
-    if !unknown.tags.is_empty() {
-        let asked = listed(unknown.tags.iter().map(ToString::to_string).collect());
-        let known = listed(unknown.known_tags.iter().map(ToString::to_string).collect());
-        out.push(finding(
-            DiagnosticCode::UnknownTag,
-            format!("--tags {asked}"),
-            "tag",
-            known,
-        ));
     }
-    if !unknown.wordings.is_empty() {
-        let asked = listed(unknown.wordings.iter().map(ToString::to_string).collect());
-        let known = listed(unknown.known_wordings.iter().map(ToString::to_string).collect());
-        out.push(finding(
-            DiagnosticCode::UnknownWording,
-            format!("--prefer {asked}"),
-            "wording",
-            known,
-        ));
+}
+
+impl NameOrigin {
+    fn place(&self) -> &str {
+        match self {
+            Self::Flag => "the command line",
+            Self::Spec(at) | Self::Profile(at) => at,
+        }
     }
-    out
 }
 
 /// What rendering a file came to.
@@ -324,6 +478,109 @@ mod tests {
     }
 
     const TEXT: &str = "# Ada Lovelace\n\nLondon · a@b.co\n\n## S\n\n- Ready. <!-- =g.default -->\n- Later. <!-- =g.short @draft -->\n- Draft. <!-- @draft -->\n";
+
+    fn tag(name: &str) -> Tag {
+        assert_ok!(Tag::try_new(name))
+    }
+
+    fn wording(name: &str) -> VariantName {
+        assert_ok!(VariantName::try_new(name))
+    }
+
+    fn unknown(tags: &[&str], wordings: &[&str]) -> UnknownNames {
+        UnknownNames {
+            tags: tags.iter().map(|t| tag(t)).collect(),
+            known_tags: vec![tag("real")],
+            wordings: wordings.iter().map(|w| wording(w)).collect(),
+            known_wordings: vec![wording("default")],
+        }
+    }
+
+    #[test]
+    fn names_typed_as_flags_are_the_warnings_they_always_were() {
+        let found = unknown_names_from(
+            Path::new("r.md"),
+            &unknown(&["a", "b"], &["w"]),
+            &NameOrigins::default(),
+        );
+        let messages: Vec<&str> = found.iter().map(|d| d.message.as_str()).collect();
+        assert_eq!(
+            messages,
+            ["--tags `a`, `b`: not used in r.md", "--prefer `w`: not used in r.md"]
+        );
+        assert!(found.iter().all(|d| d.severity == Severity::Warning));
+        assert_eq!(found[0].code, DiagnosticCode::UnknownTag);
+        assert_eq!(found[1].code, DiagnosticCode::UnknownWording);
+        assert_eq!(found, unknown_names(Path::new("r.md"), &unknown(&["a", "b"], &["w"])));
+    }
+
+    #[test]
+    fn a_name_the_spec_wrote_is_a_warning_and_one_only_a_profile_wrote_is_a_note() {
+        let mut origins = NameOrigins::default();
+        origins.tag(tag("typo"), NameOrigin::Spec("positions/acme.toml:4:9".into()));
+        origins.tag(tag("shared"), NameOrigin::Profile("profiles/p.toml:2:9".into()));
+        origins.wording(wording("w"), NameOrigin::Profile("profiles/p.toml:3:11".into()));
+        let found = unknown_names_from(Path::new("r.md"), &unknown(&["typo", "shared"], &["w"]), &origins);
+        let by_severity: Vec<(Severity, &str)> = found.iter().map(|d| (d.severity, d.message.as_str())).collect();
+        assert_eq!(
+            by_severity,
+            [
+                (
+                    Severity::Warning,
+                    "spec tags `typo` (positions/acme.toml:4:9): not used in r.md"
+                ),
+                (
+                    Severity::Note,
+                    "profile tags `shared` (profiles/p.toml:2:9): not used in r.md"
+                ),
+                (
+                    Severity::Note,
+                    "profile wordings `w` (profiles/p.toml:3:11): not used in r.md"
+                ),
+            ]
+        );
+        assert!(
+            found[1].hints.iter().any(|h| h.contains("only a note")),
+            "{:?}",
+            found[1].hints
+        );
+        assert!(!found[0].hints.iter().any(|h| h.contains("only a note")));
+        assert!(
+            found[0].hints.iter().any(|h| h.contains("`real`")),
+            "lists what the resume uses"
+        );
+    }
+
+    #[test]
+    fn a_flag_name_a_spec_name_and_a_profile_name_of_one_kind_are_three_findings_in_that_order() {
+        let mut origins = NameOrigins::default();
+        origins.tag(tag("b"), NameOrigin::Profile("p:1:1".into()));
+        origins.tag(tag("c"), NameOrigin::Spec("s:1:1".into()));
+        let found = unknown_names_from(Path::new("r.md"), &unknown(&["a", "b", "c"], &[]), &origins);
+        let starts: Vec<&str> = found
+            .iter()
+            .map(|d| d.message.split(' ').next().unwrap_or(""))
+            .collect();
+        assert_eq!(starts, ["--tags", "spec", "profile"]);
+    }
+
+    #[test]
+    fn a_resume_that_uses_no_tags_says_so_and_every_finding_points_at_the_tags_command() {
+        let none = UnknownNames {
+            tags: vec![tag("a")],
+            ..UnknownNames::default()
+        };
+        let found = unknown_names_from(Path::new("r.md"), &none, &NameOrigins::default());
+        assert_eq!(found[0].hints[0], "the resume uses no tags");
+        assert_eq!(found[0].hints[1], "`resume tags <file>` lists every tag and wording");
+        let some = unknown_names_from(Path::new("r.md"), &unknown(&["a"], &[]), &NameOrigins::default());
+        assert_eq!(some[0].hints[0], "the resume's tags are `real`");
+    }
+
+    #[test]
+    fn nothing_unknown_is_nothing_said() {
+        assert!(unknown_names_from(Path::new("r.md"), &unknown(&[], &[]), &NameOrigins::default()).is_empty());
+    }
 
     #[test]
     fn assess_compiles_the_tailored_resume_and_keeps_the_baseline_in_parsed() {

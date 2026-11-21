@@ -495,15 +495,15 @@ impl DiagnosticCode {
                 )),
             },
             UnknownTag => &Advice {
-                summary: "A tag given with --tags is not used anywhere in the resume.",
-                why: "Project convention: a tag selects the items that carry it, so a misspelled tag selects nothing, and the build silently keeps only core and untagged items.",
-                fix: "Use one of the tags the finding lists, or run `resume tags <file>` to see them all.",
+                summary: "A tag given with --tags, or written in a spec, is not used anywhere in the resume.",
+                why: "Project convention: a tag selects the items that carry it, so a misspelled tag selects nothing, and the build silently keeps only core and untagged items. A profile is shared by resumes that use different tags, so a tag only a profile names is a note, not a warning.",
+                fix: "Use one of the tags the finding lists, or run `resume tags <file>` to see them all. For a spec, correct the line the finding names.",
                 example: Some(("resume check resume.md --tags platfrom", "resume check resume.md")),
             },
             UnknownWording => &Advice {
-                summary: "A wording given with --prefer is not a variant of any group in the resume.",
-                why: "Project convention: a preferred wording applies only to groups that have it, so a misspelled name changes nothing, and every group renders its default.",
-                fix: "Use one of the wordings the finding lists, or run `resume tags <file>` to see each group's wordings.",
+                summary: "A wording given with --prefer, or written in a spec, is not a variant of any group in the resume.",
+                why: "Project convention: a preferred wording applies only to groups that have it, so a misspelled name changes nothing, and every group renders its default. A profile is shared by resumes that use different wordings, so a wording only a profile names is a note, not a warning.",
+                fix: "Use one of the wordings the finding lists, or run `resume tags <file>` to see each group's wordings. For a spec, correct the line the finding names.",
                 example: Some(("resume check resume.md --prefer shrot", "resume check resume.md")),
             },
             UnknownStyle => &Advice {

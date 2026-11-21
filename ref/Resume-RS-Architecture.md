@@ -933,6 +933,48 @@ core-only = false
 - **Parsing** is `toml` 0.8 (already in the lock through Typst) with `serde_path_to_error` and `Spanned` string leaves, so a wrong type names its key path and a semantic error (a bad name, a bad path) carries the exact span.
 - **Output.** `ResolvedSpec::to_toml()` prints the choices as one flat spec with no `extends`; saved beside the original it resolves to the same choices. `to_selection()` makes the `Selection` (core-only with tags is `ScopeConflict`, and drafts are always off); `check_picks` turns the report's unknown picks into an error that names the line that wrote each.
 
+#### Building from a spec (`build --spec`; rsm-141.23.2)
+
+```plantuml
+@startuml
+!include <C4/C4_Component>
+Person(author, "Author", "Writes the baseline, the profiles, and one position spec per application")
+Container_Boundary(cli, "resume") {
+  Component(args, "clap args", "cli::SpecArgs, cli::Given", "--spec, --profiles, --allow-overrides, --print-spec; Given records which choosing flags were typed")
+  Component(policy, "override policy", "spec::overrides", "Explicit -> admit -> apply: refuse every typed flag at once, or let each replace one setting")
+  Component(spec, "spec resolver", "spec::resolve", "Profile chain, merged choices, origin of each value; to_toml for --print-spec")
+  Component(plan, "plan builder", "commands::build_plan", "Content path, PdfStem, Selection, RenderArgs, SpecFacts, NameOrigins; refuses promote")
+  Component(read, "bounded reader", "input::read_text", "Regular file, at most MAX_INPUT_BYTES; names the shown path")
+  Component(select, "assess", "pipeline::Session::assess_with", "Selection and findings; unknown names named by where they were written")
+  Component(pdf, "typeset and writer", "typeset, output::Writer", "Resume, style, paper, stem only; no spec data")
+  Component(report, "spec report", "commands::spec_report", "spec: lines, or the JSON spec record, before any finding")
+}
+Rel(author, args, "resume build --spec positions/acme.toml")
+Rel(args, policy, "Explicit settings (typed flags only) and the policy")
+Rel(args, spec, "Spec path, --profiles")
+Rel(spec, plan, "ResolvedSpec with origins")
+Rel(policy, plan, "Applied: style, paper, Selection, overrides")
+Rel(plan, read, "content path")
+Rel(read, select, "text")
+Rel(plan, select, "Selection, NameOrigins")
+Rel(select, pdf, "tailored Resume")
+Rel(plan, pdf, "RenderArgs, PdfStem")
+Rel(plan, report, "SpecFacts")
+@enduml
+```
+
+`BuildArgs` flattens `SpecArgs`, whose first field is `Given`: a probe that adds no argument and, while the line is parsed, asks clap whether `--tags`, `--core-only`, `--prefer`, `--style`, and `--paper` were typed (`ValueSource` is anything but `DefaultValue`). The defaults stay documented in `--help`, and a flag typed equal to its default still counts. The probe sits first because a derived `from_arg_matches` takes each value out of the matches as it reads it; a test pins the order and the ids. `Cli::validate` (not clap's `conflicts_with`, which switches off `requires` on the companions whenever FILE is given) refuses a FILE beside `--spec`, and refuses the typed choosing flags unless `--allow-overrides`, naming every one at once. `--print-spec` beside any of them is a usage error. Library callers that skip `validate` meet `Error::OverridesRefused`.
+
+`spec::overrides` is pure and shared by `letter --spec` (rsm-vqr.5): `Explicit` holds only what was typed, `Explicit::admit(OverridePolicy)` is the only way to an `Admitted`, and `apply(&ResolvedSpec, &Admitted)` validates the spec alone first (`to_selection`, so a flag cannot hide a `ScopeConflict`), then lets each typed setting **replace** the spec's. Scope is one unit (`--tags` or `--core-only` replaces tags and core-only together, so a flag can narrow, which layering as one more chain file could not), `--prefer` replaces the list, and a pick has no flag. Each `Override` records what it set and what it replaced, and the places that decided it (one per file). The named tests in that module are the policy's specification.
+
+`commands::build_plan::plan` is the only place spec data meets the build. It refuses `promote` (`Error::PromoteNotApplied`, with the line that wrote it; rsm-141.23.3 deletes the function, the variant and the test), applies the overrides, builds the effective `RenderArgs`, and makes the `PdfStem`. A build from a spec is named after the spec (`acme.toml` writes `acme.pdf`, and `acme` is the PDF's ident); with `--drafts` it is `acme.drafts` so a preview never replaces the PDF built to be sent, and a spec stem that ends in `.drafts`, starts with a dot, or is not UTF-8 is `Error::SpecName`. Nothing but the resume, the style and the paper reaches the typesetter, so the position, the profile names and the tags cannot enter the PDF; tests compare bytes across edits to every `[position]` field.
+
+`Session::assess_with` takes `NameOrigins`, which says where each tag and wording was written. An unknown name typed as a flag is the old warning; one written in the spec's own file is a warning naming `file:line`; one written only in profiles is one `Note` naming them, because a profile is shared by baselines that use different names and `prefer` means "where a group has it". Errors that trace to a choice carry its line: `Error::Chosen` (an unknown style, a draft picked), `Error::SpecContent` (the `content =` line), and `check_picks` runs before the write.
+
+`commands::spec_report::SpecFacts` feeds both the human lines (`spec:`, `position:`, `profiles:`, `content:`, one `override:` per override, `environment:` for the options that changed) and the JSON `spec` record (always every key, in order: `type file position chain content pdf style paper drafts overrides environment version`), printed after the build line and before the fonts, selection and findings. Paths are shown without the `..` that led there (`spec::error::tidy_path`) and relative to the working directory. `--print-spec` writes `to_toml()` to stdout whatever `--format` is, reads no content, and writes nothing.
+
+`input::read_text` replaced `fs::read_to_string` in `build`: it asks `metadata` before opening (a FIFO waits for a writer forever), refuses anything but a regular file (`Error::InputNotAFile`), caps the read at `MAX_INPUT_BYTES + 1` and hands an over-long text to the parser, which reports the size limit with its own finding.
+
 ### Errors (`src/error.rs`)
 
 `snafu` errors, following the guidelines, for operational failures: reading input, writing output, an unknown style, a style directory missing `style.typ`, an unreadable style file (`StyleFile`), PDF export failure, and watcher failure (`Watch { path, source: notify::Error }`). Writing output has one variant per cause, so each can say what to do: `CreateOutputDir` and `WriteOutput` (a failure with a cause and nothing more specific to suggest), `OutputLocked` (another program holds the file open, common on Windows), `OutputReadOnly`, `OutputIsDirectory`, and `OutputExists` (the target exists and may not be replaced, as in `export-style` without `--force`). `Error::hint()` returns the one-line advice for the four that have a specific one (`OutputLocked`: "close the PDF viewer or use -o <DIR>"). Content problems are `Diagnostic`s, not `Error`s, so one run can report all of them, and `doctor` can advise on each. `main` prints the errors and diagnostics and picks the exit code.
@@ -1037,3 +1079,4 @@ Total: about 11.5 working days.
 - 2026-11-21 (rsm-141.22.2, oracle design in history/rsm-141.22.2_oracle-analysis-and-plan.md): selection. Leaves are judged, containers are kept only when something under them is; a draft container drops its subtree; a draft `default` falls back to the first ready wording; a pick of a draft is an error; the kept wording carries its group's tags so selection is idempotent; `Session::assess` takes a `Selection` and compiles the tailored resume, so a plain build now leaves `@draft` items out.
 - 2026-11-21 (rsm-141.22.3, design in history/rsm-141.22.3_oracle-design-*.md): tailoring from the command line. Shared `SelectArgs` on build, watch, doctor, check, export; `unknown-tag` and `unknown-wording` warnings; a silent-by-default selection summary that counts routine events and lists the surprises with their source lines (measured on a merged baseline of the two real drafts: 9 and 14 lines), the same facts as a JSON `selection` record; the core-only page count; `resume tags`. Report nodes carry their index in `Resume::nodes()`, mapped to a source line by `Parsed::node_lines`.
 - 2026-11-21 (rsm-141.23.1): position specs and profiles (`src/spec/`). Decisions from the owner after analysis (history/rsm-141.23.1_design-note.md): `extends` is top-level, not in `[build]`; profiles live in `--profiles DIR` or `profiles/` beside the spec's directory, with no second fallback; `content` has no `.md` rule (the summary prints the resolved path instead); a spec whose `extends` order contradicts another file's is an error. `paper` is spelled `letter` or `a4`, as `--paper` spells it. `drafts` is never a file key. The ordering rule is a topological sort over two kinds of fact, not a check of a depth-first walk, after a test against an exhaustive search showed the check refused orders that exist. The cover-letter documents' examples were edited to match (`extends` moved, `paper` respelled).
+- 2026-11-21 (rsm-141.23.2, oracle in history/rsm-141.23.2_oracle-analysis-and-plan.md, decisions in history/rsm-141.23.2_decisions-analysis.md): `build --spec`. Decisions from the owner after analysis: with `--allow-overrides` a flag replaces the spec's setting (scope as one unit, `--prefer` as a list), because layering could neither narrow tags nor allow `--core-only` over tags; a `--drafts` build beside a spec writes `<stem>.drafts.pdf`; an unknown name from the spec's own file is a warning naming the line and one from a profile only is a note; one bounded regular-file reader for `build` (a FIFO named by a spec hung the build); no excerpt suppression by directory (the documented layout puts the baseline outside the spec's directory); `--print-spec` prints and builds nothing, and is refused beside choosing flags; `build` only, one `--spec`. Ordering (`promote`) is refused until rsm-141.23.3. The guide's worked example is checked against the program (`tests/guide`, `spec_examples`).

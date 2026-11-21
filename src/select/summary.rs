@@ -212,6 +212,8 @@ pub struct SelectionRecord<'a> {
     scope: &'static str,
     tags: Vec<String>,
     prefer: Vec<String>,
+    /// The wording each named group was told to render, by group name; empty unless a spec picked.
+    picks: BTreeMap<String, String>,
     drafts: bool,
     counts: BTreeMap<NodeKind, KindCount>,
     chosen: Vec<ChosenRecord>,
@@ -270,6 +272,10 @@ pub(crate) fn selection_line(selection: &Selection) -> String {
                 .join(", ")
         ));
     }
+    if !selection.picks.is_empty() {
+        let picks: Vec<String> = selection.picks.iter().map(|(g, v)| format!("{g}.{v}")).collect();
+        parts.push(format!("picks {}", picks.join(", ")));
+    }
     if selection.drafts {
         parts.push("with drafts".to_string());
     }
@@ -301,6 +307,11 @@ impl<'a> SelectionRecord<'a> {
                 Scope::All | Scope::CoreOnly => Vec::new(),
             },
             prefer: names(&selection.prefer),
+            picks: selection
+                .picks
+                .iter()
+                .map(|(g, v)| (g.to_string(), v.to_string()))
+                .collect(),
             drafts: selection.drafts,
             counts: summary.counts.clone(),
             chosen: report

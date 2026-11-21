@@ -140,7 +140,7 @@ impl UnknownNames {
 }
 
 /// A selection that cannot be met as written.
-#[derive(Debug, Snafu, PartialEq, Eq)]
+#[derive(Debug, Clone, Snafu, PartialEq, Eq)]
 pub enum SelectError {
     /// Picks name wordings that are still drafts, and drafts are off. Every such pick, in document order.
     #[snafu(display(

@@ -100,6 +100,18 @@ fn a_diamond_applies_its_shared_base_once_and_the_last_arm_wins() {
 }
 
 #[test]
+fn the_content_keeps_the_place_where_the_spec_named_it() {
+    let path = fixtures().join("path-relative/positions/2026-11-acme.toml");
+    let spec = assert_ok!(resolve(&path, None));
+    assert_eq!(
+        (spec.content.at.line, spec.content.at.column),
+        (5, 11),
+        "`content = ` is on line 5"
+    );
+    assert_eq!(spec.content.at.path.as_ref(), path.as_path());
+}
+
+#[test]
 fn the_content_path_is_relative_to_the_spec_and_not_to_the_working_directory() {
     let relative = Path::new("tests/fixtures/specs/path-relative/positions/2026-11-acme.toml");
     let absolute = fixtures().join("path-relative/positions/2026-11-acme.toml");
@@ -252,7 +264,14 @@ fn a_missing_profile_lists_the_ones_that_exist_and_where_it_looked() {
                 ("acme.toml".to_string(), 4, "ai-platfrom")
             );
             assert_eq!(available, ["principal"]);
-            assert!(searched.ends_with("positions/../profiles"), "{}", searched.display());
+            // Shown as a person would write it: absolute, and without the `positions/..` that led there.
+            assert!(searched.is_absolute(), "{}", searched.display());
+            assert!(
+                !searched.components().any(|c| c.as_os_str() == ".."),
+                "{}",
+                searched.display()
+            );
+            assert!(searched.ends_with("missing-profile/profiles"), "{}", searched.display());
         }
         other => panic!("{other:?}"),
     }

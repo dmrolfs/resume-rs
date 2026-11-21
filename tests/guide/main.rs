@@ -335,6 +335,68 @@ fn a_shell_example_with_a_renamed_option_or_a_foreign_command_is_caught() {
     );
 }
 
+// ---- the worked example of specs and profiles ------------------------------------------------------
+
+#[test]
+fn the_worked_spec_example_resolves_and_prints_what_the_guide_says() {
+    assert_clean(checks::spec_examples(&load()));
+}
+
+#[test]
+fn a_worked_example_that_does_not_resolve_or_misprints_or_shows_an_unused_profile_is_caught() {
+    let text = guide_text();
+    let with = |from: &str, to: &str| Guide::parse(&replaced(&text, from, to));
+    assert_problem(
+        &checks::spec_examples(&with("tags = [\"iceberg\"]\nprefer", "tag = [\"iceberg\"]\nprefer")),
+        "does not resolve",
+    );
+    assert_problem(
+        &checks::spec_examples(&with(
+            "paper = \"a4\"\n\n[select]\ntags = [\"ai\", \"iceberg\"",
+            "paper = \"letter\"\n\n[select]\ntags = [\"ai\", \"iceberg\"",
+        )),
+        "differs from what --print-spec prints",
+    );
+    assert_problem(
+        &checks::spec_examples(&with(
+            "extends = [\"principal\", \"ai-platform\"]",
+            "extends = [\"principal\"]",
+        )),
+        "which the spec does not extend",
+    );
+    assert_problem(
+        &checks::spec_examples(&with("```toml profiles/principal.toml", "```toml")),
+        "must name its file",
+    );
+    // The printed example and the sample of a build are each compared with the program.
+    assert_problem(
+        &checks::spec_examples(&with(
+            "  profiles: principal -> ai-platform -> the spec",
+            "  profiles: ai-platform -> principal -> the spec",
+        )),
+        "sample of what a spec build prints differs",
+    );
+    assert_problem(
+        &checks::spec_examples(&with("  wordings: 2 chosen (2 pick)", "  wordings: 3 chosen (3 pick)")),
+        "sample of what a spec build prints differs",
+    );
+    assert_problem(
+        &checks::spec_examples(&with("```text\nok out/acme.pdf", "```text\nnot a sample out/acme.pdf")),
+        "no `text` sample",
+    );
+    assert_problem(
+        &checks::spec_examples(&with("```toml resolved", "```toml positions/other.toml")),
+        "exactly one spec under positions/",
+    );
+}
+
+#[test]
+fn a_worked_example_without_its_printed_resolution_is_caught() {
+    let text = guide_text();
+    let without = Guide::parse(&replaced(&text, "```toml resolved", "```text"));
+    assert_problem(&checks::spec_examples(&without), "no `toml resolved` example");
+}
+
 // ---- theme keys, components, styles ------------------------------------------------------------------
 
 #[test]

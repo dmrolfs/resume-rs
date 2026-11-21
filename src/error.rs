@@ -10,6 +10,19 @@ use crate::diagnostics::{Diagnostic, Severity};
 use crate::model::StyleName;
 use crate::model::options::FontOrigin;
 
+/// Why a spec's file name cannot be the name and the identity of its PDF.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Display)]
+pub enum StemProblem {
+    #[strum(to_string = "it has no file name")]
+    NoName,
+    #[strum(to_string = "its name is not valid UTF-8")]
+    NotUtf8,
+    #[strum(to_string = "its name starts with a dot, so the PDF would be a hidden file")]
+    Hidden,
+    #[strum(to_string = "its name ends in `.drafts`, which is how the preview of the spec before it is named")]
+    DraftsSuffix,
+}
+
 /// A style source file as Typst read it, so a renderer can show excerpts of it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StyleFile {
@@ -97,6 +110,9 @@ pub enum Error {
         source: std::string::FromUtf8Error,
     },
 
+    #[snafu(display("{} is not a regular file; a resume is read from a file, not a directory or a pipe", path.display()))]
+    InputNotAFile { path: PathBuf },
+
     #[snafu(display("cannot create the output directory {}: {source}", path.display()))]
     CreateOutputDir { path: PathBuf, source: std::io::Error },
 
@@ -122,7 +138,41 @@ pub enum Error {
 
     /// A position spec or a profile could not be loaded or resolved.
     #[snafu(display("{source}"))]
-    Spec { source: Box<crate::spec::SpecError> },
+    Spec {
+        #[snafu(source(from(crate::spec::SpecError, Box::new)))]
+        source: Box<crate::spec::SpecError>,
+    },
+
+    /// Settings typed beside `--spec` that the policy refuses. The command line is checked first, so this is
+    /// reached only by a caller that built its arguments without that check.
+    #[snafu(display("{source}"))]
+    OverridesRefused { source: crate::spec::Refused },
+
+    /// A spec's file name cannot name its PDF.
+    #[snafu(display("{} cannot name a PDF: {problem}", path.display()))]
+    SpecName { path: PathBuf, problem: StemProblem },
+
+    /// A spec's `content` file could not be read. `at` is the `content =` line, because the path was not typed.
+    #[snafu(display("{at}: the `content` file cannot be used: {source}"))]
+    SpecContent {
+        at: crate::spec::Located,
+        #[snafu(source(from(Error, Box::new)))]
+        source: Box<Error>,
+    },
+
+    /// A choice written in a spec or a profile led to this error; `at` is every place that wrote the choice.
+    #[snafu(display("{source} (chosen at {})", located_list(at)))]
+    TracedToChoice {
+        at: Vec<crate::spec::Located>,
+        #[snafu(source(from(Error, Box::new)))]
+        source: Box<Error>,
+    },
+
+    /// A spec or profile has `promote`, and ordering is not built, so a build would not be what the file says.
+    #[snafu(display("`promote` is not applied by this version: {}", promoted(promote)))]
+    PromoteNotApplied {
+        promote: Vec<(crate::model::Tag, crate::spec::Located)>,
+    },
 
     /// The operating system would not report changes to a path, so `watch` cannot see edits there.
     #[snafu(display("cannot watch {} for changes: {source}", path.display()))]
@@ -161,9 +211,29 @@ impl Error {
             Self::InputChanged { .. } => Some("the file was edited meanwhile; nothing was changed, run doctor again"),
             Self::Select { .. } => Some("pick a ready wording, finish the draft, or build with --drafts to preview it"),
             Self::Spec { source } => source.hint(),
+            Self::SpecContent { source, .. } | Self::TracedToChoice { source, .. } => source.hint(),
+            Self::SpecName { .. } => Some("rename the spec file"),
+            Self::OverridesRefused { .. } => Some("add --allow-overrides to replace the spec's choices"),
+            Self::PromoteNotApplied { .. } => {
+                Some("remove `promote` from the profile or spec that wrote it; ordering is not available yet")
+            }
             _ => None,
         }
     }
+}
+
+/// `positions/acme.toml:9:5, profiles/base.toml:2:8`: every place a choice was written.
+fn located_list(at: &[crate::spec::Located]) -> String {
+    at.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
+}
+
+/// `` `leadership` (profiles/principal.toml:7:12), `ai` (positions/acme.toml:9:5) ``: each tag and where it was written.
+fn promoted(promote: &[(crate::model::Tag, crate::spec::Located)]) -> String {
+    promote
+        .iter()
+        .map(|(tag, at)| format!("`{tag}` ({at})"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// `; available styles: mono, pragmatic`, or nothing when no style is known.
@@ -182,7 +252,7 @@ fn errors_in(diagnostics: &[Diagnostic]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use claims::assert_some;
+    use claims::{assert_ok, assert_some};
 
     fn path() -> PathBuf {
         PathBuf::from("out/Resume.pdf")
@@ -210,6 +280,51 @@ mod tests {
         };
         assert_eq!(error.to_string(), text);
         assert_some!(error.hint());
+    }
+
+    #[test]
+    fn the_errors_that_trace_a_spec_say_what_to_do() {
+        let at = crate::spec::Located {
+            path: PathBuf::from("positions/acme.toml").into(),
+            line: 4,
+            column: 9,
+        };
+        let name = Error::SpecName {
+            path: PathBuf::from("positions/.toml"),
+            problem: StemProblem::Hidden,
+        };
+        assert_eq!(name.hint(), Some("rename the spec file"));
+        let refused = Error::OverridesRefused {
+            source: crate::spec::Refused {
+                flags: vec![crate::spec::OverrideFlag::Tags],
+            },
+        };
+        assert_eq!(
+            refused.hint(),
+            Some("add --allow-overrides to replace the spec's choices")
+        );
+        let promote = Error::PromoteNotApplied {
+            promote: vec![(assert_ok!(crate::model::Tag::try_new("ai")), at.clone())],
+        };
+        assert!(assert_some!(promote.hint()).contains("remove `promote`"));
+        assert!(
+            promote.to_string().contains("`ai` (positions/acme.toml:4:9)"),
+            "{promote}"
+        );
+        // A wrapper lends the hint of the error it wraps, and names the places in its own text.
+        let wrapped = Error::TracedToChoice {
+            at: vec![at.clone(), at],
+            source: Box::new(Error::OutputExists {
+                path: PathBuf::from("x.pdf"),
+            }),
+        };
+        assert_eq!(wrapped.hint(), Some("use --force to replace it"));
+        assert!(
+            wrapped
+                .to_string()
+                .ends_with("(chosen at positions/acme.toml:4:9, positions/acme.toml:4:9)"),
+            "{wrapped}"
+        );
     }
 
     #[test]

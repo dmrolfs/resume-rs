@@ -29,6 +29,12 @@ pub fn finding_of(error: &Error) -> Option<Diagnostic> {
         | Error::OutputExists { .. } => DiagnosticCode::OutputNotWritable,
         Error::ReadInput { .. }
         | Error::InputUtf8 { .. }
+        | Error::InputNotAFile { .. }
+        | Error::SpecContent { .. }
+        | Error::SpecName { .. }
+        | Error::OverridesRefused { .. }
+        | Error::TracedToChoice { .. }
+        | Error::PromoteNotApplied { .. }
         | Error::InputChanged { .. }
         | Error::Spec { .. }
         | Error::Watch { .. }

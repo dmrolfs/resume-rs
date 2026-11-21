@@ -2,6 +2,7 @@
 //! ABOUTME: `main` builds the real streams and environment, calls `run`, and turns the `Outcome` into an exit code.
 
 mod build;
+mod build_plan;
 mod doctor;
 mod emit;
 mod export;
@@ -11,6 +12,7 @@ mod letter_pdf;
 mod letter_report;
 mod licenses;
 pub mod report;
+mod spec_report;
 mod styles;
 mod tags;
 mod watch;
