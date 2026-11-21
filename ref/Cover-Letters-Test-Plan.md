@@ -72,6 +72,20 @@ Cross-compilation alone does not verify Windows runtime behavior such as locked 
 Owner review reads a real selected letter end to end in text and PDF; no lint claims to establish prose coherence.
 Two target forms validate practical counter ergonomics without changing the precise output-count contract.
 
+## D6 release evidence protocol
+
+The release candidate extends the existing native macOS/Windows CI matrix, not a separate workflow.
+Each release binary builds the synthetic `tests/fixtures/letters/valid.md` as LF and CRLF input with identical stems and explicit fields/date.
+The existing fail-closed artifact comparator checks all four letter PDFs and, separately, all four stdout text products.
+Missing or empty artifacts fail; PDF comparison also forbids Calibri in bundled mode.
+`tests/guide/letters.rs` executes the guide's letter commands unchanged in an isolated checkout-shaped directory and checks exact text plus PDF content.
+
+Record candidate SHA, CI run URL, native job results and artifact hashes in `rsm-5q1.6` notes.
+Local `just verify` covers the quality gate, release build, docs/workflow lint and macOS/Windows cross-builds, not Windows runtime behavior.
+The owner's private real-letter text/PDF read-through is a separate required gate.
+Until those findings are supplied, leave the bead open even when every automated check passes.
+Keep private input, fields, paths and products out of public Git and CI artifacts.
+
 ## Planning-only validation
 
 This session validates task types, parent relationships, blocker direction, absence of dependency cycles, document references, and raw appendix preservation.

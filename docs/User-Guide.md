@@ -456,9 +456,13 @@ Use `{{company}}`, `{{title}}` and `{{recipient}}` in letter paragraphs; HTML ch
 Values are inserted literally, never reparsed as Markdown.
 Real annotation comments are refused until letter tailoring support exists.
 
+From a source checkout, these examples use the [synthetic letter](../tests/fixtures/letters/valid.md).
+For your own application, copy that file, edit its paragraphs, and substitute its path and your fields.
+Read the complete text and PDF before submission; checks cannot establish truthful claims or paragraph coherence.
+
 ```sh
-resume letter Cover.md --company Acme --title Architect --recipient Team
-resume letter Cover.md --company Acme --title Architect --max-length 2000 --length-unit utf16
+resume letter tests/fixtures/letters/valid.md --company Acme --title Architect --recipient Team
+resume letter tests/fixtures/letters/valid.md --company Acme --title Architect --recipient Team --max-length 2000 --length-unit utf16
 ```
 
 | Option | Values and default | What it does |
@@ -506,7 +510,7 @@ Each compile reserves both payload paths and refuses the other document kind's p
 `resume export` still previews resumes only.
 
 ```sh
-resume letter Cover.md --company Acme --title Architect --recipient Team --output-format both --fonts bundled
+resume letter tests/fixtures/letters/valid.md --company Acme --title Architect --recipient Team --date 2028-02-29 --output-format both --fonts bundled
 ```
 
 ### resume build

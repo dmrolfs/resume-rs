@@ -6,6 +6,7 @@ mod checks;
 mod common;
 mod extract;
 mod facts;
+mod letters;
 mod synthetic;
 mod theme_keys;
 

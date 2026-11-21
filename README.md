@@ -129,6 +129,13 @@ off color. The [User Guide](docs/User-Guide.md) has every option.
 The built-in styles are `pragmatic` (the default, modeled on the Pragmatic Engineer's template), `mono` (the same
 body, no color, a centered header), and `experienced` (section labels in a left gutter).
 
+## Cover letters
+
+The letter command prints authored cover letters as website-ready text, with optional PDF or both outputs.
+See the [letter guide and runnable synthetic examples](docs/User-Guide.md#resume-letter) for fields, length limits, and PDF settings.
+Text mode needs no fonts or Typst setup; PDF mode checks the letter before saving it.
+Read both products before submitting: the program validates structure, not the truth or coherence of your prose.
+
 ## Fonts
 
 The program contains fonts, so a resume looks the same on every machine. Each stands in for a proprietary font the

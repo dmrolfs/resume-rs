@@ -180,8 +180,19 @@ jobs:
           if [ "$(grep -c $'\r' "$dir/in-crlf/Resume.md")" -ne "$(wc -l < "$dir/in-lf/Resume.md")" ]; then
             echo "::error::the CRLF input does not have a carriage return on every line"; exit 1
           fi
+          cp tests/fixtures/letters/valid.md "$dir/in-lf/Cover.md"
+          perl -pe 's/\r?\n/\r\n/' tests/fixtures/letters/valid.md > "$dir/in-crlf/Cover.md"
+          if grep -q $'\r' "$dir/in-lf/Cover.md"; then echo "::error::letter LF input has a carriage return"; exit 1; fi
+          if [ "$(grep -c $'\r' "$dir/in-crlf/Cover.md")" -ne "$(wc -l < "$dir/in-lf/Cover.md")" ]; then
+            echo "::error::letter CRLF input premise failed"; exit 1
+          fi
           for kind in lf crlf; do
             target/release/${{ matrix.binary }} build "$dir/in-$kind/Resume.md" --fonts bundled --out "$dir/out-$kind"
+            # Redirection opens the text file before resume starts, so create its directory first.
+            mkdir -p "$dir/out-$kind"
+            target/release/${{ matrix.binary }} letter "$dir/in-$kind/Cover.md" \
+              --company Acme --title Architect --recipient Team --date 2028-02-29 \
+              --output-format both --fonts bundled --out "$dir/out-$kind" > "$dir/out-$kind/Cover.txt"
           done
 
       - name: Upload the PDFs built by the release binary
@@ -191,6 +202,10 @@ jobs:
           path: |
             target/determinism/cli/out-lf/Resume.pdf
             target/determinism/cli/out-crlf/Resume.pdf
+            target/determinism/cli/out-lf/Cover-letter.pdf
+            target/determinism/cli/out-crlf/Cover-letter.pdf
+            target/determinism/cli/out-lf/Cover.txt
+            target/determinism/cli/out-crlf/Cover.txt
           if-no-files-found: error
           retention-days: 7
 
@@ -254,6 +269,22 @@ jobs:
             macOS-LF=pdf-cli/macos/out-lf/Resume.pdf macOS-CRLF=pdf-cli/macos/out-crlf/Resume.pdf \
             Windows-LF=pdf-cli/windows/out-lf/Resume.pdf Windows-CRLF=pdf-cli/windows/out-crlf/Resume.pdf \
             --forbid Calibri
+
+      - name: Compare the four letter PDFs byte for byte
+        shell: bash
+        run: |
+          bash scripts/compare-pdfs.sh \
+            macOS-LF=pdf-cli/macos/out-lf/Cover-letter.pdf macOS-CRLF=pdf-cli/macos/out-crlf/Cover-letter.pdf \
+            Windows-LF=pdf-cli/windows/out-lf/Cover-letter.pdf Windows-CRLF=pdf-cli/windows/out-crlf/Cover-letter.pdf \
+            --forbid Calibri
+
+      # The comparator checks arbitrary file bytes; text must also be nonempty and identical.
+      - name: Compare the four letter text products byte for byte
+        shell: bash
+        run: |
+          bash scripts/compare-pdfs.sh \
+            macOS-LF=pdf-cli/macos/out-lf/Cover.txt macOS-CRLF=pdf-cli/macos/out-crlf/Cover.txt \
+            Windows-LF=pdf-cli/windows/out-lf/Cover.txt Windows-CRLF=pdf-cli/windows/out-crlf/Cover.txt
 
   # The macOS universal2 build runs on main and release tags only, so the `just build-macos` recipe
   # cannot rot unnoticed without spending minutes on every branch push.
