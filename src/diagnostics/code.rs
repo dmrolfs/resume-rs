@@ -105,6 +105,8 @@ pub enum DiagnosticCode {
     OutputNotWritable,
     TypstError,
     TypstWarning,
+    UnknownTag,
+    UnknownWording,
 }
 
 impl DiagnosticCode {
@@ -175,7 +177,7 @@ impl DiagnosticCode {
             | FontFallbackLayout
             | FontMissing => Category::Layout,
             UnknownStyle | StyleMissingMain | StylesDirUnusable | FontPathUnusable | OutputNotWritable | TypstError
-            | TypstWarning => Category::Setup,
+            | TypstWarning | UnknownTag | UnknownWording => Category::Setup,
         }
     }
 
@@ -248,7 +250,7 @@ impl DiagnosticCode {
             UnknownStyle | StyleMissingMain | StylesDirUnusable | FontPathUnusable | OutputNotWritable | TypstError => {
                 Severity::Error
             }
-            TypstWarning => Severity::Warning,
+            TypstWarning | UnknownTag | UnknownWording => Severity::Warning,
         }
     }
 }
@@ -328,7 +330,15 @@ mod tests {
         for code in DiagnosticCode::iter() {
             let severity = code.default_severity();
             match code.category() {
-                Category::Setup if code == DiagnosticCode::TypstWarning => assert_eq!(severity, Severity::Warning),
+                // A Typst warning and a name the resume does not use leave the run usable, so they only warn.
+                Category::Setup
+                    if matches!(
+                        code,
+                        DiagnosticCode::TypstWarning | DiagnosticCode::UnknownTag | DiagnosticCode::UnknownWording
+                    ) =>
+                {
+                    assert_eq!(severity, Severity::Warning);
+                }
                 Category::Setup => assert_eq!(severity, Severity::Error, "{code}: an unusable setup must fail the run"),
                 Category::Content => assert_eq!(severity, Severity::Warning, "{code}: advice never fails a run"),
                 Category::Format | Category::Layout => {}

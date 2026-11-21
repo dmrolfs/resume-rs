@@ -583,6 +583,17 @@ proptest! {
                 }
             }
         }
+        // Every node a report names is the input's node at that index, of the same kind.
+        let nodes = resume.nodes();
+        for node in report.dropped.iter().map(|d| &d.node).chain(&report.verify) {
+            let found = nodes.get(node.index);
+            prop_assert!(found.is_some_and(|n| n.kind == node.kind), "{:?} is not node {}", node, node.index);
+            // A leaf's text is a unique id, so the index names exactly the leaf the label came from.
+            if let Some(content) = found.and_then(|n| n.content) {
+                let text = resume::model::plain_text(content);
+                prop_assert_eq!(text.trim(), node.label.as_str());
+            }
+        }
         // Every leaf and container marked @draft is counted once; with drafts off, not what a draft container
         // holds (it is dropped with the container, which is counted).
         let shut = |l: &Leaf| !selection.drafts && l.containers.iter().any(draft);

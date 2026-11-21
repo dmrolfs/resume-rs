@@ -87,6 +87,16 @@ impl Formatter for LineSafe {
     }
 }
 
+/// Writes any record as one line-safe JSON line and its `\n`, with the same escaping as a finding, so every
+/// record type on the stream splits the same way.
+pub(super) fn write_record(out: &mut dyn io::Write, record: &impl Serialize) -> Result<(), RenderError> {
+    let mut line = Vec::new();
+    let mut serializer = serde_json::Serializer::with_formatter(&mut line, LineSafe);
+    record.serialize(&mut serializer).context(JsonSnafu)?;
+    line.push(b'\n');
+    out.write_all(&line).context(WriteSnafu)
+}
+
 /// Writes one record and its `\n`.
 ///
 /// The terminator is `\n` on every OS, so the stream reads the same through a pipe on Windows.

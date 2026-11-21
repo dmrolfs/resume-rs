@@ -482,6 +482,18 @@ impl DiagnosticCode {
                     "- Served 5,000+ users. <!-- =reach.default -->\n- Reached 5,000+ users. <!-- =reach.short -->",
                 )),
             },
+            UnknownTag => &Advice {
+                summary: "A tag given with --tags is not used anywhere in the resume.",
+                why: "Project convention: a tag selects the items that carry it, so a misspelled tag selects nothing, and the build silently keeps only core and untagged items.",
+                fix: "Use one of the tags the finding lists, or run `resume tags <file>` to see them all.",
+                example: Some(("resume check resume.md --tags platfrom", "resume check resume.md")),
+            },
+            UnknownWording => &Advice {
+                summary: "A wording given with --prefer is not a variant of any group in the resume.",
+                why: "Project convention: a preferred wording applies only to groups that have it, so a misspelled name changes nothing, and every group renders its default.",
+                fix: "Use one of the wordings the finding lists, or run `resume tags <file>` to see each group's wordings.",
+                example: Some(("resume check resume.md --prefer shrot", "resume check resume.md")),
+            },
             UnknownStyle => &Advice {
                 summary: "No style of this name exists in --styles-dir or among the built-in styles.",
                 why: "Project convention: `--style` looks in `--styles-dir` first and then among the built-in styles; a name that is in neither cannot be rendered.",

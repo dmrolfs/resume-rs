@@ -950,3 +950,80 @@ fn an_invalid_group_gets_no_facts_lint_even_when_its_numbers_differ() {
         "{lints:?}"
     );
 }
+
+// ---- node lines (rsm-141.22.3): the parser's lines line up with `Resume::nodes` ----------------------
+
+#[test]
+fn every_node_has_its_own_start_line_in_model_order() {
+    let markdown = format!(
+        "{HEAD}## Summary\n\nIntro.\n\n- S1\n- S2\n\n## Experience\n\n### Acme · Engineer · 2015 – 2020\n\nThe blurb.\n\n\
+         - R1\n  - N1\n- R2\n\n**AI · 2016 – 2017**\n\n- E1\n\nClosing.\n\n<div class=\"page-break\"></div>\n\n\
+         ### Beta · 2010 – 2014\n\n- B1\n<!-- #x -->\n- B2\n"
+    );
+    let parsed = parse("r.md", &markdown);
+    let resume = assert_some!(parsed.valid());
+    let lines = parsed.node_lines(&markdown);
+    let nodes = resume.nodes();
+    assert_eq!(lines.len(), nodes.len());
+    let source: Vec<&str> = markdown.lines().collect();
+    let first_words: Vec<String> = nodes
+        .iter()
+        .zip(&lines)
+        .map(|(node, line)| {
+            format!(
+                "{} {}",
+                node.kind,
+                source[line - 1].trim_start_matches(['#', '-', ' ', '*'])
+            )
+        })
+        .collect();
+    assert_eq!(
+        first_words,
+        vec![
+            "section Summary",
+            "paragraph Intro.",
+            "bullet S1",
+            "bullet S2",
+            "section Experience",
+            "role Acme · Engineer · 2015 – 2020",
+            "blurb The blurb.",
+            "bullet R1",
+            "bullet N1",
+            "bullet R2",
+            "era AI · 2016 – 2017**",
+            "bullet E1",
+            "paragraph Closing.",
+            "role Beta · 2010 – 2014",
+            "bullet B1",
+            "bullet B2",
+        ]
+    );
+}
+
+#[test]
+fn node_lines_name_the_survivors_after_a_dropped_role_in_lf_and_crlf() {
+    let lf = format!("{HEAD}## S\n\n- A\n\n### Acme · bad · role\n\n- Lost\n\n## T\n\n- B\n");
+    for markdown in [lf.clone(), lf.replace('\n', "\r\n")] {
+        let parsed = parse("r.md", &markdown);
+        let resume = assert_some!(parsed.best_effort());
+        let lines = parsed.node_lines(&markdown);
+        let source: Vec<&str> = markdown.lines().collect();
+        let named: Vec<String> = resume
+            .nodes()
+            .iter()
+            .zip(&lines)
+            .map(|(node, line)| {
+                format!(
+                    "{} {line} {}",
+                    node.kind,
+                    source[line - 1].trim_start_matches(['#', '-', ' '])
+                )
+            })
+            .collect();
+        assert_eq!(
+            named,
+            ["section 5 S", "bullet 7 A", "section 13 T", "bullet 15 B"],
+            "{markdown:?}"
+        );
+    }
+}

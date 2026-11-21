@@ -5,15 +5,20 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use snafu::Snafu;
 
-use crate::model::{Alternate, GroupName, Tag, VariantName};
+use crate::model::{Alternate, GroupName, Resume, Tag, VariantName};
 
+mod inventory;
 mod resume;
 pub mod rules;
+mod summary;
 #[cfg(test)]
 mod tests;
 
-pub use self::resume::{Chosen, Dropped, NodeKind, NodeRef, SelectionReport, UnknownPick, select};
+pub use self::inventory::{GroupUse, Inventory, KeywordUse, TagUse, VariantUse};
+pub use self::resume::{Chosen, Dropped, NodeRef, SelectionReport, UnknownPick, select};
 pub use self::rules::{ChosenBy, DropReason};
+pub use self::summary::{CorePages, CoreSkip, KindCount, SelectionRecord, SelectionSummary};
+pub use crate::model::NodeKind;
 
 /// What to keep and which wordings to use. The default keeps everything except drafts and renders each
 /// group's `default`.
@@ -54,6 +59,56 @@ impl SelectedTags {
     #[must_use]
     pub fn as_set(&self) -> &BTreeSet<Tag> {
         &self.0
+    }
+}
+
+/// The names a selection asks for that the resume does not use, with what it does use, so a typo is caught
+/// before a build quietly selects nothing.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UnknownNames {
+    /// Tags asked for that no node carries, in the order asked.
+    pub tags: Vec<Tag>,
+    /// Every tag the resume uses, sorted.
+    pub known_tags: Vec<Tag>,
+    /// Preferred wordings that no group has, in the order asked.
+    pub wordings: Vec<VariantName>,
+    /// Every wording name the resume's groups use, sorted.
+    pub known_wordings: Vec<VariantName>,
+}
+
+impl UnknownNames {
+    /// Checks `selection`'s tags and preferred wordings against the names `resume` uses, drafts included.
+    #[must_use]
+    pub fn of(resume: &Resume, selection: &Selection) -> Self {
+        let nodes = resume.nodes();
+        let known_tags: BTreeSet<&Tag> = nodes.iter().flat_map(|n| &n.annotations.tags).collect();
+        let known_wordings: BTreeSet<&VariantName> = nodes
+            .iter()
+            .filter_map(|n| n.annotations.alternate.as_ref())
+            .map(|a| &a.variant)
+            .collect();
+        let asked: Vec<&Tag> = match &selection.scope {
+            Scope::Tags(tags) => tags.as_set().iter().collect(),
+            Scope::All | Scope::CoreOnly => Vec::new(),
+        };
+        let mut wordings: Vec<VariantName> = Vec::new();
+        for name in selection.prefer.iter().filter(|n| !known_wordings.contains(n)) {
+            if !wordings.contains(name) {
+                wordings.push(name.clone());
+            }
+        }
+        Self {
+            tags: asked.into_iter().filter(|t| !known_tags.contains(t)).cloned().collect(),
+            known_tags: known_tags.into_iter().cloned().collect(),
+            wordings,
+            known_wordings: known_wordings.into_iter().cloned().collect(),
+        }
+    }
+
+    /// True when every name asked for is used.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.tags.is_empty() && self.wordings.is_empty()
     }
 }
 

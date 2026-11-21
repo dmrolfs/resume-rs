@@ -591,3 +591,88 @@ fn skipped_draft_wordings_are_reported_only_for_groups_that_render() {
             .is_empty()
     );
 }
+
+// ---- summary and inventory (rsm-141.22.3) ------------------------------------------------------------------
+
+use super::{CorePages, Inventory, SelectionSummary};
+
+fn summary(body: &str, selection: &Selection) -> SelectionSummary {
+    let input = resume(body);
+    let (tailored, report) = assert_ok!(select(&input, selection));
+    SelectionSummary::new(&input, &tailored, selection, &report)
+}
+
+#[test]
+fn the_summary_is_silent_for_a_default_selection_that_changed_nothing() {
+    let quiet = summary(&format!("## S\n\n{ROLE}- A\n- B\n"), &Selection::default());
+    assert!(quiet.is_silent());
+    assert_eq!(quiet.lines(&|_| None), Vec::<String>::new());
+    // Defaults chosen in groups say nothing new either.
+    assert!(summary(GATEWAY, &Selection::default()).is_silent());
+    // A draft left out, a flag, or a @verify item speaks.
+    assert!(!summary("## S\n\n- A <!-- @draft -->\n- B\n", &Selection::default()).is_silent());
+    assert!(!summary("## S\n\n- A <!-- @verify -->\n", &Selection::default()).is_silent());
+    assert!(!summary("## S\n\n- A\n", &tags(&["x"])).is_silent());
+}
+
+#[test]
+fn the_summary_counts_routine_wordings_and_lists_first_ready_fallbacks() {
+    let body = "## S\n\n- A <!-- =a.default @draft -->\n- A2 <!-- =a.short -->\n- B <!-- =b.default -->\n- B2 <!-- =b.short -->\n";
+    let lines = summary(body, &Selection::default()).lines(&|i| Some(i + 100));
+    assert!(
+        lines.contains(&"wordings: 2 chosen (1 default, 1 first-ready)".to_string()),
+        "{lines:?}"
+    );
+    assert!(
+        lines.contains(&"wording a.short: its default is a draft, so the first ready wording is used".to_string()),
+        "{lines:?}"
+    );
+    let mut core = summary(body, &Selection::default());
+    core.core = Some(CorePages::Measured { pages: 2 });
+    assert_eq!(
+        core.lines(&|_| None).last().map(String::as_str),
+        Some("core alone: 2 pages")
+    );
+}
+
+#[test]
+fn the_inventory_counts_own_and_inherited_tags_and_marks_drafts_under_a_container() {
+    let body = "## S <!-- #ai -->\n\n- A <!-- #ai -->\n- B\n\n## T\n\n### Acme · Eng · 2015 – 2017 <!-- @draft -->\n\n- C <!-- =g.default -->\n- D <!-- =g.short -->\n".to_string();
+    let input = resume(&body);
+    let lines: Vec<usize> = (1..=input.nodes().len()).collect();
+    let inventory = Inventory::of(&input, &lines);
+    assert_eq!(inventory.tags.len(), 1);
+    assert_eq!(inventory.tags[0].own.len(), 2, "the section and A");
+    assert_eq!(inventory.tags[0].inherited, 1, "B inherits; A carries it itself");
+    assert!(
+        inventory.groups[0].variants.iter().all(|v| v.draft),
+        "under a draft role"
+    );
+    assert_eq!(
+        inventory.keywords.iter().map(|k| k.name).collect::<Vec<_>>(),
+        ["core", "extra", "draft", "verify"]
+    );
+}
+
+#[test]
+fn the_inventory_does_not_carry_tags_or_drafts_across_siblings() {
+    let body = "## S <!-- #ai -->\n\n### Acme · Eng · 2015 – 2017 <!-- @draft #data -->\n\n- In draft role. <!-- =g.default -->\n- Its short. <!-- =g.short -->\n\n\
+         ### Beta · Eng · 2013 – 2015\n\n- After it. <!-- =h.default -->\n- After short. <!-- =h.short -->\n\n## T\n\n- Untagged.\n".to_string();
+    let input = resume(&body);
+    let lines: Vec<usize> = (1..=input.nodes().len()).collect();
+    let inventory = Inventory::of(&input, &lines);
+    let tag = |name: &str| assert_some!(inventory.tags.iter().find(|t| t.name == name)).clone();
+    // #ai: the section owns it; both roles and the four bullets under it inherit it; T's bullet does not.
+    assert_eq!((tag("ai").own.len(), tag("ai").inherited), (1, 6));
+    // #data: the Acme role owns it; only its two bullets inherit it.
+    assert_eq!((tag("data").own.len(), tag("data").inherited), (1, 2));
+    let drafts = |group: &str| -> Vec<bool> {
+        assert_some!(inventory.groups.iter().find(|g| g.name == group))
+            .variants
+            .iter()
+            .map(|v| v.draft)
+            .collect()
+    };
+    assert_eq!(drafts("g"), [true, true], "under the draft role");
+    assert_eq!(drafts("h"), [false, false], "the next role is not under it");
+}

@@ -85,6 +85,16 @@ impl Parsed {
         self.outline.as_ref()
     }
 
+    /// The 1-based source line where each node of the model starts, in [`Resume::nodes`] order; empty without a
+    /// model. `text` must be the text this was parsed from.
+    #[must_use]
+    pub fn node_lines(&self, text: &str) -> Vec<usize> {
+        let source = Source { text };
+        self.outline.as_ref().map_or_else(Vec::new, |outline| {
+            outline.starts.iter().map(|&at| source.line_of(at)).collect()
+        })
+    }
+
     /// The model, only when there is no error-severity diagnostic.
     #[must_use]
     pub fn valid(&self) -> Option<&Resume> {

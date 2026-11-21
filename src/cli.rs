@@ -12,8 +12,9 @@ use clap::error::ErrorKind;
 use clap::{Args, CommandFactory, Parser, Subcommand};
 
 use crate::diagnostics::DiagnosticCode;
-use crate::model::StyleName;
 use crate::model::options::{ColorMode, FontsMode, OutputFormat, PageLimit, Paper};
+use crate::model::{StyleName, Tag, VariantName};
+use crate::select::{Scope, SelectedTags, Selection};
 
 /// Command-line arguments for `resume`.
 #[derive(Debug, Parser)]
@@ -61,8 +62,18 @@ pub enum Command {
     Export(ExportArgs),
     /// Rebuild the PDF whenever the resume or a style file changes.
     Watch(WatchArgs),
+    /// List the tags, keywords, and alternate wordings a resume's annotations offer.
+    Tags(TagsArgs),
     /// Print the license notices of the fonts built into this program.
     Licenses,
+}
+
+/// Arguments of `resume tags`.
+#[derive(Debug, Args)]
+pub struct TagsArgs {
+    /// The Markdown resume to list.
+    #[arg(value_name = "FILE")]
+    pub file: PathBuf,
 }
 
 /// Arguments of `resume export`.
@@ -88,6 +99,9 @@ pub struct ExportArgs {
     /// overwritten. `resume.json` is always replaced.
     #[arg(long)]
     pub force: bool,
+
+    #[command(flatten)]
+    pub select: SelectArgs,
 }
 
 /// Arguments of `resume watch`.
@@ -103,6 +117,9 @@ pub struct WatchArgs {
 
     #[command(flatten)]
     pub render: RenderArgs,
+
+    #[command(flatten)]
+    pub select: SelectArgs,
 
     /// How long to wait after the last change before rebuilding, such as `150ms` or `1s`.
     #[arg(long, default_value = "150ms", value_name = "DURATION", value_parser = parse_debounce)]
@@ -158,6 +175,9 @@ pub struct BuildArgs {
 
     #[command(flatten)]
     pub render: RenderArgs,
+
+    #[command(flatten)]
+    pub select: SelectArgs,
 }
 
 /// What `doctor` and `check` assess, shared so the two reports cannot drift apart.
@@ -169,6 +189,9 @@ pub struct AssessArgs {
 
     #[command(flatten)]
     pub render: RenderArgs,
+
+    #[command(flatten)]
+    pub select: SelectArgs,
 }
 
 /// Arguments of `resume check`: no `--fix` and no `--explain`, so it cannot change a file by construction.
@@ -234,6 +257,61 @@ fn parse_code(text: &str) -> Result<DiagnosticCode, String> {
     })
 }
 
+/// What to keep of an annotated resume and which wordings to use: the tailoring options every command that
+/// renders a resume shares, and that cover letters reuse (rsm-vqr.3).
+///
+/// A position spec (rsm-141.23) resolves to the same [`Selection`] these do, and names are checked by the same
+/// model types, so a flag and a spec reject the same names.
+#[derive(Debug, Clone, Default, Args)]
+pub struct SelectArgs {
+    /// Keep only items tagged with one of these tags, besides `@core` and untagged items; comma-separated or
+    /// repeated.
+    #[arg(long, value_name = "TAG", value_delimiter = ',', conflicts_with = "core_only", value_parser = parse_tag)]
+    pub tags: Vec<Tag>,
+
+    /// Keep only `@core` items.
+    #[arg(long)]
+    pub core_only: bool,
+
+    /// The wordings to use where a group has them, most preferred first; comma-separated or repeated.
+    #[arg(long, value_name = "NAME", value_delimiter = ',', value_parser = parse_variant)]
+    pub prefer: Vec<VariantName>,
+
+    /// Keep what is marked `@draft`, to preview the resume once the drafts are ready.
+    #[arg(long)]
+    pub drafts: bool,
+}
+
+/// The rule every tag, group, and variant name follows, as a usage error says it.
+const NAME_RULE: &str =
+    "names are lowercase letters and digits, starting with a letter, with single hyphens, at most 40 characters";
+
+fn parse_tag(text: &str) -> Result<Tag, String> {
+    Tag::try_new(text).map_err(|_| format!("`{text}` is not a tag name: {NAME_RULE}"))
+}
+
+fn parse_variant(text: &str) -> Result<VariantName, String> {
+    VariantName::try_new(text).map_err(|_| format!("`{text}` is not a wording name: {NAME_RULE}"))
+}
+
+impl SelectArgs {
+    /// The selection these options ask for.
+    #[must_use]
+    pub fn selection(&self) -> Selection {
+        let scope = if self.core_only {
+            Scope::CoreOnly
+        } else {
+            SelectedTags::new(self.tags.iter().cloned().collect()).map_or(Scope::All, Scope::Tags)
+        };
+        Selection {
+            scope,
+            drafts: self.drafts,
+            prefer: self.prefer.clone(),
+            picks: std::collections::BTreeMap::new(),
+        }
+    }
+}
+
 /// The options that decide how a resume is rendered, shared by the commands that render.
 #[derive(Debug, Args)]
 pub struct RenderArgs {
@@ -293,7 +371,11 @@ impl Cli {
             }
             Command::Check(check) => check.assess.render.validate(),
             Command::Watch(watch) => watch.validate(self.dry_run),
-            Command::Styles(_) | Command::ExportStyle(_) | Command::Export(_) | Command::Licenses => Ok(()),
+            Command::Styles(_)
+            | Command::ExportStyle(_)
+            | Command::Export(_)
+            | Command::Tags(_)
+            | Command::Licenses => Ok(()),
         }
     }
 }

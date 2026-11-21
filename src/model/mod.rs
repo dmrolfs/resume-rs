@@ -126,7 +126,151 @@ pub enum Inline {
     Code { text: String },
 }
 
+/// The visible text of an inline run, with markup removed and link targets left out.
+#[must_use]
+pub fn plain_text(content: &[Inline]) -> String {
+    content
+        .iter()
+        .map(|inline| match inline {
+            Inline::Text { text } | Inline::Code { text } => text.clone(),
+            Inline::Strong { content } | Inline::Emph { content } | Inline::Link { content, .. } => plain_text(content),
+        })
+        .collect()
+}
+
+/// What kind of node of a resume something is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, strum::Display, strum::AsRefStr, Serialize)]
+#[strum(serialize_all = "kebab-case")]
+#[serde(rename_all = "kebab-case")]
+pub enum NodeKind {
+    Section,
+    Role,
+    Era,
+    Blurb,
+    Paragraph,
+    Bullet,
+}
+
+/// One node of a resume, as [`Resume::nodes`] visits it.
+#[derive(Debug, Clone, Copy)]
+pub struct NodeView<'a> {
+    pub kind: NodeKind,
+    pub annotations: &'a Annotations,
+    /// The section title, era name, or role line, for a container; `None` for a leaf.
+    pub heading: Option<NodeHeading<'a>>,
+    /// The text of a leaf: a paragraph, a blurb, or a bullet's content.
+    pub content: Option<&'a [Inline]>,
+    /// For a bullet, its label.
+    pub label: Option<&'a [Inline]>,
+    /// How many containers are above it: 0 for a section, 1 for what a section holds, and so on.
+    pub depth: usize,
+}
+
+impl<'a> NodeView<'a> {
+    fn container(kind: NodeKind, annotations: &'a Annotations, heading: NodeHeading<'a>, depth: usize) -> Self {
+        Self {
+            kind,
+            annotations,
+            heading: Some(heading),
+            content: None,
+            label: None,
+            depth,
+        }
+    }
+
+    fn leaf(
+        kind: NodeKind,
+        annotations: &'a Annotations,
+        content: &'a [Inline],
+        label: Option<&'a [Inline]>,
+        depth: usize,
+    ) -> Self {
+        Self {
+            kind,
+            annotations,
+            heading: None,
+            content: Some(content),
+            label,
+            depth,
+        }
+    }
+
+    fn bullets(out: &mut Vec<Self>, items: &'a [Bullet], depth: usize) {
+        out.extend(
+            items
+                .iter()
+                .map(|b| Self::leaf(NodeKind::Bullet, &b.annotations, &b.content, b.label.as_deref(), depth)),
+        );
+    }
+}
+
+/// The heading of a container node.
+#[derive(Debug, Clone, Copy)]
+pub enum NodeHeading<'a> {
+    Section(&'a SectionTitle),
+    Role(&'a Role),
+    Era(&'a EraName),
+}
+
 impl Resume {
+    /// Every section, role, era, blurb, paragraph, and bullet, in document order: a container before what it
+    /// holds. The parser records each one's source line in this same order.
+    #[must_use]
+    pub fn nodes(&self) -> Vec<NodeView<'_>> {
+        let mut out = Vec::new();
+        for section in &self.sections {
+            out.push(NodeView::container(
+                NodeKind::Section,
+                &section.annotations,
+                NodeHeading::Section(&section.title),
+                0,
+            ));
+            for block in &section.blocks {
+                match block {
+                    Block::Paragraph { content, annotations } => {
+                        out.push(NodeView::leaf(NodeKind::Paragraph, annotations, content, None, 1));
+                    }
+                    Block::Bullets { items } => NodeView::bullets(&mut out, items, 1),
+                    Block::Role(role) => {
+                        out.push(NodeView::container(
+                            NodeKind::Role,
+                            &role.annotations,
+                            NodeHeading::Role(role),
+                            1,
+                        ));
+                        if let Some(blurb) = &role.blurb {
+                            out.push(NodeView::leaf(NodeKind::Blurb, &role.blurb_annotations, blurb, None, 2));
+                        }
+                        for part in &role.body {
+                            match part {
+                                RoleBlock::Era {
+                                    name,
+                                    items,
+                                    annotations,
+                                    ..
+                                } => {
+                                    out.push(NodeView::container(
+                                        NodeKind::Era,
+                                        annotations,
+                                        NodeHeading::Era(name),
+                                        2,
+                                    ));
+                                    NodeView::bullets(&mut out, items, 3);
+                                }
+                                RoleBlock::Bullets { items } => NodeView::bullets(&mut out, items, 2),
+                                RoleBlock::Paragraph { content, annotations } => {
+                                    out.push(NodeView::leaf(NodeKind::Paragraph, annotations, content, None, 2));
+                                }
+                            }
+                        }
+                    }
+                    Block::PageBreak => {}
+                }
+            }
+        }
+        out
+    }
+
     /// Every annotation in the resume, in document order; for tests that set, clear, or count them all.
     ///
     /// The one place that lists every annotated node, so a test cannot miss a field that a new node adds.

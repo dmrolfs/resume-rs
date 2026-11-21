@@ -115,6 +115,7 @@ struct Run<'a> {
     format: OutputFormat,
     cwd: &'a Path,
     args: &'a AssessArgs,
+    selection: Selection,
     session: Session,
     /// Present only for `doctor --fix`; `check` never has one.
     fixer: Option<Writer>,
@@ -126,6 +127,7 @@ impl<'a> Run<'a> {
             format: cli.format,
             cwd: &env.cwd,
             args,
+            selection: args.select.selection(),
             session: Session::open(&args.render, env.resume_font_path.as_deref()),
             fixer: fix.then(|| {
                 Writer::new(if cli.dry_run {
@@ -158,9 +160,7 @@ impl<'a> Run<'a> {
         if self.format == OutputFormat::Human {
             out.report_line(&self.shown(file));
         }
-        let assessment = self
-            .session
-            .assess(file, &text, &self.args.render, &Selection::default());
+        let assessment = self.session.assess(file, &text, &self.args.render, &self.selection);
         let Some(fixer) = &self.fixer else {
             return self.report(file, &text, &assessment, Fixing::Off, out);
         };
@@ -174,7 +174,7 @@ impl<'a> Run<'a> {
             Fix::Done(fixed) => {
                 let after = self
                     .session
-                    .assess(file, &fixed.text, &self.args.render, &Selection::default());
+                    .assess(file, &fixed.text, &self.args.render, &self.selection);
                 self.report(file, &fixed.text, &after, Fixing::Applied, out)
             }
         }
@@ -236,6 +236,7 @@ impl<'a> Run<'a> {
         let mut sources: Sources<'_> = out.sources();
         sources.insert(file, text);
         let mut findings: Vec<Diagnostic> = assessment.parsed.diagnostics().to_vec();
+        findings.extend(assessment.selected.iter().flat_map(|s| s.findings.iter().cloned()));
         findings.extend(content::lint_parsed(&assessment.parsed, file));
         let mut operational: Vec<&Error> = Vec::new();
         let mut setup_facts: Vec<String> = Vec::new();

@@ -11,6 +11,7 @@ mod letter_pdf;
 mod licenses;
 pub mod report;
 mod styles;
+mod tags;
 mod watch;
 
 use std::ffi::OsString;
@@ -89,6 +90,7 @@ pub fn run(cli: &Cli, env: &Env, io: &mut Io<'_>) -> Outcome {
         Command::ExportStyle(args) => export_style::run(cli, args, env, &mut streams),
         Command::Export(args) => export::run(cli, args, env, &mut streams),
         Command::Watch(args) => watch::run(cli, args, env, &mut streams),
+        Command::Tags(args) => tags::run(cli, args, env, &mut streams),
         Command::Licenses => licenses::run(cli, env, &mut streams),
     };
     // Report delayed errors here; immediate write errors were already reported by Reporter.

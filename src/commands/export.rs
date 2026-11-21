@@ -14,7 +14,7 @@ use crate::diagnostics::{Diagnostic, Summary};
 use crate::error::{Error, ReadInputSnafu, SelectSnafu};
 use crate::markdown::parse;
 use crate::output::{Overwrite, Planned, WriteMode, Writer, Written};
-use crate::select::{Selection, select};
+use crate::select::{UnknownNames, select};
 use crate::style;
 use crate::typeset::resume_json;
 
@@ -65,7 +65,10 @@ fn export(cli: &Cli, args: &ExportArgs, env: &Env, out: &mut Reporter<'_, '_>) -
         return Ok(Outcome::Failure);
     };
     // The same selection `build` makes, so the preview shows what the PDF will say: no drafts, one wording a group.
-    let (resume, _) = select(resume, &Selection::default()).context(SelectSnafu)?;
+    let selection = args.select.selection();
+    let warnings = crate::pipeline::unknown_names(&args.file, &UnknownNames::of(resume, &selection));
+    out.diagnostics(&sources, &warnings.iter().collect::<Vec<_>>());
+    let (resume, _) = select(resume, &selection).context(SelectSnafu)?;
     let style = style::resolve(&args.style, args.styles_dir.as_deref())?;
     let targets = targets(args, style.files()?, resume_json(&resume, true)?);
 
