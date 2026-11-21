@@ -10,6 +10,8 @@ use pretty_assertions::assert_eq;
 use resume::commands::Outcome;
 use resume::diagnostics::termcolor::Buffer;
 
+mod common;
+
 #[path = "common/workspace.rs"]
 mod workspace;
 use workspace::{FailingStdout, Workspace, fixture, sparse_fixture};
@@ -480,4 +482,23 @@ fn commands_never_touch_the_file_system_directly() {
         scanned >= 10,
         "the scan found only {scanned} files; did the layout move?"
     );
+}
+
+// ============================================================================
+// Selection: a build leaves drafts out (rsm-141.22.2)
+// ============================================================================
+
+const WITH_DRAFTS: &str = "# Ada Lovelace\n\nLondon · ada@example.com\n\n## Summary\n\nBuilt engines.\n\n\
+    ## Experience\n\n### Acme · Engineer · 2015 – 2017\n\n- Shipped the ready result.\n- Wrote the unfinished claim. <!-- @draft -->\n";
+
+#[test]
+fn a_plain_build_leaves_draft_items_out_of_the_pdf() {
+    let work = Workspace::new();
+    let input = work.file("Resume.md", WITH_DRAFTS);
+    let run = work.build(&[&input], &[]);
+    assert_eq!(run.outcome, Outcome::Success, "{}", run.stderr);
+    let pdf = assert_ok!(fs::read(work.out().join("Resume.pdf")));
+    let text = common::page_texts(&pdf).join("\n");
+    assert!(text.contains("Shipped the ready result."), "{text}");
+    assert!(!text.contains("unfinished claim"), "a draft reached the PDF: {text}");
 }

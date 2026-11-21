@@ -11,9 +11,10 @@ use super::export_style::shown;
 use super::{Env, Io, Outcome};
 use crate::cli::{Cli, ExportArgs};
 use crate::diagnostics::{Diagnostic, Summary};
-use crate::error::{Error, ReadInputSnafu};
+use crate::error::{Error, ReadInputSnafu, SelectSnafu};
 use crate::markdown::parse;
 use crate::output::{Overwrite, Planned, WriteMode, Writer, Written};
+use crate::select::{Selection, select};
 use crate::style;
 use crate::typeset::resume_json;
 
@@ -63,8 +64,10 @@ fn export(cli: &Cli, args: &ExportArgs, env: &Env, out: &mut Reporter<'_, '_>) -
         ));
         return Ok(Outcome::Failure);
     };
+    // The same selection `build` makes, so the preview shows what the PDF will say: no drafts, one wording a group.
+    let (resume, _) = select(resume, &Selection::default()).context(SelectSnafu)?;
     let style = style::resolve(&args.style, args.styles_dir.as_deref())?;
-    let targets = targets(args, style.files()?, resume_json(resume, true)?);
+    let targets = targets(args, style.files()?, resume_json(&resume, true)?);
 
     // Every target is looked at before any is written, so a file that cannot be written stops the export with
     // nothing changed. A file that is already there and is to be kept is not a problem.

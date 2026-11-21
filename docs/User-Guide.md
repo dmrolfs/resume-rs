@@ -612,7 +612,7 @@ Nothing else is read from the environment. Nothing is read from the current dire
 
 <!-- guide:planned rsm-141.22 witness=option:--tags -->
 
-**Planned, not available yet.** Annotations are planned as a way to produce several tailored resumes from one baseline. Nothing in this section works today. Until then, a comment in your resume is ignored.
+**Planned, not available yet.** Annotations are planned as a way to produce several tailored resumes from one baseline. The parser already reads a comment that starts with `@`, `#`, or `=` as an annotation and reports one it cannot read as an error. Every build already leaves out what is marked `@draft`, and renders the `default` wording of each group. The options that choose tags and wordings are not available yet. Any other comment is ignored.
 
 ## Profiles and position specs
 

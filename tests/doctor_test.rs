@@ -733,3 +733,18 @@ fn json_has_one_record_per_finding_with_its_category_and_nothing_else_on_stdout(
         run.stderr
     );
 }
+
+// ============================================================================
+// Selection: doctor's content lints read the whole baseline (rsm-141.22.2)
+// ============================================================================
+
+#[test]
+fn content_lints_still_see_a_draft_item_that_the_build_leaves_out() {
+    let work = Workspace::new();
+    let text = "# Ada Lovelace\n\nLondon · ada@example.com\n\n## Experience\n\n### Acme · Engineer · 2015 – 2017\n\n\
+        - Shipped 3 releases.\n- I wrote the unfinished claim. <!-- @draft -->\n";
+    let file = work.file("Resume.md", text);
+    let run = work.doctor(&[&file], &[]);
+    // Human findings go to stderr, like cargo and rustc.
+    assert!(run.stderr.contains("warning[first-person]"), "{}", run.stderr);
+}
