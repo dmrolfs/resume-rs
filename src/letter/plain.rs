@@ -6,7 +6,7 @@ use crate::model::Inline;
 use snafu::{Snafu, ensure};
 
 /// How link labels and destinations appear in pasted text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, strum::Display)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, strum::Display, clap::ValueEnum)]
 #[strum(serialize_all = "kebab-case")]
 pub enum LinkStyle {
     #[default]
@@ -15,10 +15,11 @@ pub enum LinkStyle {
 }
 
 /// An explicit counting unit; UTF-16 is the default, not a promise about every website's counter.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, strum::Display)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, strum::Display, clap::ValueEnum)]
 pub enum LengthUnit {
     #[default]
     #[strum(serialize = "utf16")]
+    #[value(name = "utf16")]
     Utf16,
     #[strum(serialize = "scalars")]
     Scalars,

@@ -6,6 +6,7 @@ mod doctor;
 mod emit;
 mod export;
 mod export_style;
+mod letter;
 mod licenses;
 pub mod report;
 mod styles;
@@ -79,6 +80,7 @@ pub fn run(cli: &Cli, env: &Env, io: &mut Io<'_>) -> Outcome {
         stderr: io.stderr,
     };
     let outcome = match &cli.command {
+        Command::Letter(args) => letter::run(cli, args, env, &mut streams),
         Command::Build(args) => build::run(cli, args, env, &mut streams),
         Command::Doctor(args) => doctor::run(cli, args, env, &mut streams),
         Command::Check(args) => doctor::run_check(cli, args, env, &mut streams),

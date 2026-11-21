@@ -245,6 +245,12 @@ impl DiagnosticCode {
                 fix: "Move the placeholder to the greeting, body or closing paragraph text.",
                 example: None,
             },
+            TextLimitExceeded => &Advice {
+                summary: "The letter text exceeds its configured length limit.",
+                why: "Project convention: limits check the exact final text and never truncate a submission.",
+                fix: "Shorten the letter or choose a suitable limit and counting unit.",
+                example: None,
+            },
             PlaceholderUnresolved => &Advice {
                 summary: "A selected letter placeholder has no application field value.",
                 why: "Project convention: every selected placeholder must resolve before text or PDF output.",

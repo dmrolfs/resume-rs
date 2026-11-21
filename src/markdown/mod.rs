@@ -538,6 +538,7 @@ mod tests {
             EmptyHeading,
             InputLimit,
             PlaceholderUnresolved,
+            TextLimitExceeded,
             AnnotationUnknownKeyword,
             AnnotationMalformed,
             AnnotationConflict,

@@ -1,6 +1,9 @@
 //! ABOUTME: Command-line argument definitions for the `resume` binary, built with clap derive.
 //! ABOUTME: Options and defaults are documented here; checks clap cannot express run in `Cli::try_parse_validated`.
 
+mod letter;
+pub use letter::{LetterArgs, LetterRenderArgs, LetterTextSettings};
+
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -42,6 +45,8 @@ pub struct Cli {
 /// What `resume` does.
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Print validated, personalized cover-letter text for a job website.
+    Letter(LetterArgs),
     /// Typeset one or more Markdown resumes into PDFs.
     Build(BuildArgs),
     /// Check resumes, explain what is wrong with them and why it matters, and fix what is safe to fix.
@@ -276,6 +281,7 @@ impl Cli {
 
     fn validate(&self) -> Result<(), clap::Error> {
         match &self.command {
+            Command::Letter(args) => args.validate_text(self.format).map_err(usage_error),
             Command::Build(build) => {
                 build.render.validate()?;
                 build.validate_outputs()

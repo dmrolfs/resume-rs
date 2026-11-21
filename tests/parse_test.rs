@@ -227,6 +227,43 @@ fn every_format_code_is_demonstrated_by_a_fixture() {
                 .map(|d| d.code),
         );
     }
+    // The length finding is emitted by the command after rendering, not by parsing alone.
+    let root = assert_ok!(tempfile::tempdir());
+    let path = root.path().join("letter.md");
+    assert_ok!(std::fs::write(&path, include_str!("fixtures/letters/valid.md")));
+    let cli = assert_ok!(resume::cli::Cli::try_parse_validated([
+        "resume",
+        "letter",
+        path.to_str().expect("temporary path"),
+        "--company",
+        "Acme",
+        "--title",
+        "Architect",
+        "--recipient",
+        "Team",
+        "--max-length",
+        "0",
+    ]));
+    let mut stdout = Vec::new();
+    let mut stderr = resume::diagnostics::termcolor::Buffer::no_color();
+    let env = resume::commands::Env {
+        cwd: root.path().to_owned(),
+        resume_font_path: None,
+    };
+    assert_eq!(
+        resume::commands::run(
+            &cli,
+            &env,
+            &mut resume::commands::Io {
+                stdout: &mut stdout,
+                stderr: &mut stderr
+            }
+        ),
+        resume::commands::Outcome::Failure
+    );
+    assert!(stdout.is_empty());
+    assert!(String::from_utf8_lossy(stderr.as_slice()).contains("text-limit-exceeded"));
+    seen.push(DiagnosticCode::TextLimitExceeded);
     for code in DiagnosticCode::iter().filter(|c| c.category() == Category::Format) {
         assert!(seen.contains(&code), "no fixture produces `{code}`");
     }

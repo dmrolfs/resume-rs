@@ -446,6 +446,48 @@ These work with every command, and so do `-h` and `--help` (a command's usage) a
 | `--format <FORMAT>` | `human` or `json`; default `human` | How findings are written: for people, or as JSON lines on standard output. `styles`, `licenses`, and `export-style` have no findings and ignore it. |
 | `--color <COLOR>` | `auto`, `always`, or `never`; default `auto` | When to color the output. `auto` colors only on an interactive terminal, and turns color off when `NO_COLOR` is set to something or `TERM` is `dumb`. `always` and `never` override both. |
 
+### resume letter
+
+Prints a validated cover letter as website-ready plain text on stdout.
+Findings and counts go to stderr; a parse error, missing application field or exceeded limit prints no letter.
+The letter source uses `# Name`, optional contact, and `## Greeting`, `## Body`, `## Closing`; the name supplies the signature.
+Use `{{company}}`, `{{title}}` and `{{recipient}}` in letter paragraphs; HTML character references can spell the braces too.
+Values are inserted literally, never reparsed as Markdown.
+Real annotation comments are refused until letter tailoring support exists.
+
+```sh
+resume letter Cover.md --company Acme --title Architect --recipient Team
+resume letter Cover.md --company Acme --title Architect --max-length 2000 --length-unit utf16
+```
+
+| Option | Values and default | What it does |
+|---|---|---|
+| `<FILE>` | one Markdown letter | The letter to validate and print. |
+| `--output-format <OUTPUT_FORMAT>` | `text`; none at argument parsing | Product format; `pdf` and `both` are reserved and currently fail with a usage error. |
+| `--company <COMPANY>` | none | Literal company field. |
+| `--title <TITLE>` | none | Literal position title field. |
+| `--recipient <RECIPIENT>` | none | Literal recipient field. |
+| `--date <DATE>` | none | An explicit ISO date; retained but not printed in website text. |
+| `--links <LINKS>` | `text-and-url` or `text-only`; none at argument parsing | Keep labels plus link destinations, or labels only. |
+| `--max-length <MAX_LENGTH>` | none | Inclusive limit; zero is valid. Never truncates. |
+| `--length-unit <LENGTH_UNIT>` | `utf16`, `scalars`, `bytes`, `words`; none at argument parsing | Requires `--max-length`. Counts the exact final text, including newlines. |
+| `-s, --style <STYLE>` | none | Parsed but ignored for text. |
+| `--styles-dir <STYLES_DIR>` | none | Parsed but never opened for text. |
+| `--paper <PAPER>` | `letter` or `a4`; none | Parsed but ignored for text. |
+| `--max-pages <MAX_PAGES>` | none | Parsed but ignored for text. |
+| `--fonts <FONTS>` | `auto` or `bundled`; none | Parsed but ignored for text. |
+| `--font-path <FONT_PATH>` | none; repeatable | Parsed but never opened for text; still conflicts with `--fonts bundled`. |
+
+No style or font setup runs in text mode, including paths from `RESUME_FONT_PATH`.
+Every explicit option is retained separately from defaults for future spec support.
+When omitted, product format resolves to `text`, links to `text-and-url`, and the length unit to `utf16`.
+`--format json` conflicts with letter text, including in dry-run mode, because both would own stdout.
+`--dry-run` performs the same checks but emits no letter bytes or files.
+A failed stdout write or flush, including a closed pipe, returns exit 1 for this command; other listing commands retain their quiet closed-pipe behavior.
+Partial delivery is possible on an output failure, so check the exit status before sending a letter.
+No `.txt` file is created automatically; shell redirection can create or truncate a destination before the command starts.
+Website counters may differ from these exact byte, Unicode scalar, UTF-16 and whitespace-word counts.
+
 ### resume build
 
 Typesets one or more resumes into PDFs. The PDF is named after the input file and written to the output directory, which is created if it does not exist. If the resume has format errors, nothing is written. If it compiles but a layout check fails, such as the page limit, the PDF is still written so you can see what overflowed, and the command exits 1. With several files, each is built and each gets its own summary line; one failing never skips the others. Two inputs with the same file name, such as `Resume.md` and `sub/Resume.md`, would write the same PDF, so `build` refuses them with exit code 2: rename one or build them separately.
@@ -701,6 +743,7 @@ How the Markdown is written. Every command that reads a resume reports these.
 | <a id="code-placeholder-unknown"></a>`placeholder-unknown` | error | The letter placeholder names an unknown application field. |
 | <a id="code-placeholder-malformed"></a>`placeholder-malformed` | error | The letter placeholder is malformed or explicitly escaped. |
 | <a id="code-placeholder-position"></a>`placeholder-position` | error | A placeholder appears outside permitted letter text. |
+| <a id="code-text-limit-exceeded"></a>`text-limit-exceeded` | error | The letter text exceeds its configured length limit. |
 
 ### Content codes
 

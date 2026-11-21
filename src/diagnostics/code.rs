@@ -78,6 +78,7 @@ pub enum DiagnosticCode {
     PlaceholderUnknown,
     PlaceholderMalformed,
     PlaceholderPosition,
+    TextLimitExceeded,
     // Content (doctor)
     LongBullet,
     UnquantifiedBullet,
@@ -162,7 +163,8 @@ impl DiagnosticCode {
             | LetterAnnotationUnsupported
             | PlaceholderUnknown
             | PlaceholderMalformed
-            | PlaceholderPosition => Category::Format,
+            | PlaceholderPosition
+            | TextLimitExceeded => Category::Format,
             LongBullet | UnquantifiedBullet | WeakOpener | FirstPerson | SloppyPhrase | LongSummary
             | EducationNotLast | OldRoleDetail | AlternateFactsDiffer => Category::Content,
             PageLimitExceeded
@@ -226,7 +228,8 @@ impl DiagnosticCode {
             | LetterAnnotationUnsupported
             | PlaceholderUnknown
             | PlaceholderMalformed
-            | PlaceholderPosition => Severity::Error,
+            | PlaceholderPosition
+            | TextLimitExceeded => Severity::Error,
             PeriodHyphen
             | PeriodPresentSpelling
             | NestedList

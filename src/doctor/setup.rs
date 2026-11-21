@@ -28,6 +28,7 @@ pub fn finding_of(error: &Error) -> Option<Diagnostic> {
         | Error::OutputLocked { .. }
         | Error::OutputExists { .. } => DiagnosticCode::OutputNotWritable,
         Error::ReadInput { .. }
+        | Error::InputUtf8 { .. }
         | Error::InputChanged { .. }
         | Error::Watch { .. }
         | Error::WatchInput { .. }
