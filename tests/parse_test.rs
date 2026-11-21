@@ -264,6 +264,26 @@ fn every_format_code_is_demonstrated_by_a_fixture() {
     assert!(stdout.is_empty());
     assert!(String::from_utf8_lossy(stderr.as_slice()).contains("text-limit-exceeded"));
     seen.push(DiagnosticCode::TextLimitExceeded);
+    assert_ok!(std::fs::write(
+        &path,
+        include_str!("fixtures/letters/valid.md").replace("Sincerely,", "Sincerely, <!-- =closing.default -->")
+    ));
+    let mut stdout = Vec::new();
+    let mut stderr = resume::diagnostics::termcolor::Buffer::no_color();
+    assert_eq!(
+        resume::commands::run(
+            &cli,
+            &env,
+            &mut resume::commands::Io {
+                stdout: &mut stdout,
+                stderr: &mut stderr
+            }
+        ),
+        resume::commands::Outcome::Failure
+    );
+    assert!(stdout.is_empty());
+    assert!(String::from_utf8_lossy(stderr.as_slice()).contains("letter-selection-required"));
+    seen.push(DiagnosticCode::LetterSelectionRequired);
     for code in DiagnosticCode::iter().filter(|c| c.category() == Category::Format) {
         assert!(seen.contains(&code), "no fixture produces `{code}`");
     }
@@ -925,6 +945,21 @@ fn many_html_blocks_parse_in_linear_time() {
     ] {
         let text = format!("{head}{}", block.repeat(20_000));
         assert_parses_within(name, &text, Duration::from_secs(5));
+    }
+}
+
+#[test]
+fn many_alternate_groups_and_variants_parse_in_linear_time() {
+    // The group check compared each group name and each variant name with every earlier one: about a second and a
+    // half in a release build at the input cap, and far more in a debug build. Valid groups report nothing, so the
+    // diagnostic cap did not bound it.
+    let head = "# Ada\n\nada@example.invalid\n\n## S\n\n";
+    let groups: String = (0..30_000).map(|i| format!("- A <!-- =g{i}.default -->\n")).collect();
+    let one_group: String = std::iter::once("- A <!-- =g.default -->\n".to_string())
+        .chain((0..30_000).map(|i| format!("- A <!-- =g.v{i} -->\n")))
+        .collect();
+    for (name, body) in [("many groups", groups), ("one big group", one_group)] {
+        assert_parses_within(name, &format!("{head}{body}"), Duration::from_secs(10));
     }
 }
 

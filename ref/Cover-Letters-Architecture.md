@@ -260,6 +260,15 @@ Explicit backslash escapes and placeholders split across comment/formatting boun
 Only actual Markdown comments are annotations; visible escaped/code lookalikes are not instructions.
 This update supersedes any conflicting verbatim-only or broad lexical-ban proposal in the raw reports.
 
+## Annotation integration update, rsm-vqr.1
+
+This update supersedes the earlier parser-reservation baseline below.
+`LetterSource` now holds `SourceItem` paragraphs or alternate groups; each item retains annotations and original comment ranges.
+`SelectedLetter::try_from` accepts only unannotated sources and returns located `SelectionRequired` otherwise, including lone default groups.
+The letter command reports that refusal as `letter-selection-required` before resolution, PDF preparation or text output.
+Annotation syntax uses the shared `annotation-*` and `alternate-*` findings.
+Selection of annotated letters belongs to `rsm-vqr.2`; the command does not guess defaults or publish drafts in its absence.
+
 ## Detailed decisions and final review disposition
 
 The following incorporated decision record is authoritative for edge cases and corrections to the raw reports.

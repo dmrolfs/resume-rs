@@ -7,7 +7,7 @@ use resume::{
     cli::Cli,
     commands::{self, Env, Io, Outcome},
     diagnostics::termcolor::Buffer,
-    letter::{self, FieldValue, Letter, LetterFields},
+    letter::{self, FieldValue, Letter, LetterFields, SelectedLetter},
     model::options::BuiltinStyle,
     style::StyleSource,
     typeset::{RenderOptions, Typesetter},
@@ -25,7 +25,7 @@ fn letter() -> Letter {
         date: Some(assert_ok!("2028-02-29".parse())),
     };
     assert_ok!(letter::resolve(
-        assert_some!(parsed.into_parts().0).into(),
+        assert_ok!(SelectedLetter::try_from(assert_some!(parsed.into_parts().0))),
         &fields,
         Path::new("neutral.md")
     ))
@@ -401,6 +401,100 @@ fn both_product_matches_text_and_pdf_is_committed_at_first_stdout_write() {
 }
 
 #[test]
+fn annotations_require_selection_with_an_exact_located_error_before_output() {
+    let root = assert_ok!(tempfile::tempdir());
+    let target = root.path().join("out").join("neutral-letter.pdf");
+    assert_ok!(std::fs::create_dir(root.path().join("out")));
+    assert_ok!(std::fs::write(&target, b"prior"));
+    for comment in ["<!-- @draft -->", "<!-- =body.default -->", "<!-- #platform -->"] {
+        let source = SOURCE.replace(
+            "My distinctive letter paragraph.",
+            &format!("My distinctive letter paragraph. {comment}"),
+        );
+        let start = assert_some!(source.find(comment));
+        assert_ok!(std::fs::write(root.path().join("neutral.md"), &source));
+        let mut stdout = Vec::new();
+        let (outcome, _) = run(
+            root.path(),
+            &["--output-format", "pdf", "--format", "json"],
+            &mut stdout,
+        );
+        assert_eq!(outcome, Outcome::Failure);
+        let records: Vec<serde_json::Value> = String::from_utf8_lossy(&stdout)
+            .lines()
+            .map(|line| assert_ok!(serde_json::from_str(line)))
+            .collect();
+        let finding = assert_some!(
+            records
+                .iter()
+                .find(|record| record["code"] == "letter-selection-required"),
+            "{records:?}"
+        );
+        assert_eq!(finding["severity"], "error");
+        let prefix = &source[..start];
+        let line = prefix.bytes().filter(|&byte| byte == b'\n').count() + 1;
+        let column = prefix.rsplit('\n').next().unwrap_or("").chars().count() + 1;
+        assert_eq!(finding["line"], line);
+        assert_eq!(finding["column"], column);
+        assert_eq!(finding["end_line"], line);
+        assert_eq!(finding["end_column"], column + comment.chars().count());
+        assert_eq!(finding["file"], "neutral.md");
+        for extra in [
+            vec!["--output-format", "text"],
+            vec!["--output-format", "both"],
+            vec!["--output-format", "both", "--dry-run"],
+        ] {
+            let mut stdout = Vec::new();
+            let (outcome, stderr) = run(root.path(), &extra, &mut stdout);
+            assert_eq!(outcome, Outcome::Failure);
+            assert!(stdout.is_empty());
+            assert!(stderr.contains("letter-selection-required"), "{stderr}");
+            assert_eq!(assert_ok!(std::fs::read(&target)), b"prior");
+        }
+    }
+    let source = SOURCE
+        .replace("Dear {{recipient}},", "Dear {{recipient}}, <!-- =greeting.default -->")
+        .replace(
+            "My distinctive letter paragraph.",
+            "My distinctive letter paragraph. <!-- @draft -->",
+        );
+    assert_ok!(std::fs::write(root.path().join("neutral.md"), source));
+    let input = root.path().join("neutral.md");
+    let cli = assert_ok!(Cli::try_parse_validated([
+        "resume",
+        "letter",
+        assert_some!(input.to_str()),
+        "--format",
+        "json",
+        "--output-format",
+        "pdf"
+    ]));
+    let mut stdout = Vec::new();
+    let mut stderr = Buffer::no_color();
+    let outcome = commands::run(
+        &cli,
+        &Env {
+            cwd: root.path().to_owned(),
+            resume_font_path: None,
+        },
+        &mut Io {
+            stdout: &mut stdout,
+            stderr: &mut stderr,
+        },
+    );
+    assert_eq!(outcome, Outcome::Failure);
+    let records: Vec<serde_json::Value> = String::from_utf8_lossy(&stdout)
+        .lines()
+        .map(|line| assert_ok!(serde_json::from_str(line)))
+        .collect();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["code"], "letter-selection-required");
+    assert_eq!(records[0]["line"], 7);
+    assert_eq!(records[0]["column"], 21);
+    assert_eq!(assert_ok!(std::fs::read(&target)), b"prior");
+}
+
+#[test]
 fn pdf_json_findings_and_pdf_only_dry_run_are_not_text_products() {
     let root = assert_ok!(tempfile::tempdir());
     assert_ok!(std::fs::write(root.path().join("neutral.md"), SOURCE));
@@ -451,7 +545,11 @@ fn pdf_field_strings_remain_literal_and_metadata_ignores_application_fields() {
             recipient: Some(assert_ok!(FieldValue::try_new(recipient))),
             date: Some(assert_ok!(date.parse())),
         };
-        let letter = assert_ok!(letter::resolve(source.into(), &fields, Path::new("neutral.md")));
+        let letter = assert_ok!(letter::resolve(
+            assert_ok!(SelectedLetter::try_from(source)),
+            &fields,
+            Path::new("neutral.md")
+        ));
         let pdf =
             assert_ok!(assert_ok!(ts.compile_letter(&letter, &style, RenderOptions::default())).export_pdf("neutral"));
         let text = common::page_texts(&pdf).join(" ");

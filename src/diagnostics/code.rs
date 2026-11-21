@@ -74,11 +74,11 @@ pub enum DiagnosticCode {
     LetterSectionOrder,
     LetterSectionShape,
     LetterUnsupportedBlock,
-    LetterAnnotationUnsupported,
     PlaceholderUnknown,
     PlaceholderMalformed,
     PlaceholderPosition,
     TextLimitExceeded,
+    LetterSelectionRequired,
     // Content (doctor)
     LongBullet,
     UnquantifiedBullet,
@@ -160,11 +160,11 @@ impl DiagnosticCode {
             | LetterSectionOrder
             | LetterSectionShape
             | LetterUnsupportedBlock
-            | LetterAnnotationUnsupported
             | PlaceholderUnknown
             | PlaceholderMalformed
             | PlaceholderPosition
-            | TextLimitExceeded => Category::Format,
+            | TextLimitExceeded
+            | LetterSelectionRequired => Category::Format,
             LongBullet | UnquantifiedBullet | WeakOpener | FirstPerson | SloppyPhrase | LongSummary
             | EducationNotLast | OldRoleDetail | AlternateFactsDiffer => Category::Content,
             PageLimitExceeded
@@ -225,11 +225,11 @@ impl DiagnosticCode {
             | LetterSectionOrder
             | LetterSectionShape
             | LetterUnsupportedBlock
-            | LetterAnnotationUnsupported
             | PlaceholderUnknown
             | PlaceholderMalformed
             | PlaceholderPosition
-            | TextLimitExceeded => Severity::Error,
+            | TextLimitExceeded
+            | LetterSelectionRequired => Severity::Error,
             PeriodHyphen
             | PeriodPresentSpelling
             | NestedList

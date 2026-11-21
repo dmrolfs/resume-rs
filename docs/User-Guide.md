@@ -454,7 +454,9 @@ Findings and counts go to stderr; a parse error, missing application field or ex
 The letter source uses `# Name`, optional contact, and `## Greeting`, `## Body`, `## Closing`; the name supplies the signature.
 Use `{{company}}`, `{{title}}` and `{{recipient}}` in letter paragraphs; HTML character references can spell the braces too.
 Values are inserted literally, never reparsed as Markdown.
-Real annotation comments are refused until letter tailoring support exists.
+The parser accepts and validates letter annotations using the shared annotation and alternate-group rules.
+Building any annotated letter, even a lone default group, currently fails with `letter-selection-required` at the annotation.
+Until letter selection is available, use an unannotated letter with only the paragraphs you explicitly chose; do not simply remove draft markers from unwanted content.
 
 From a source checkout, these examples use the [synthetic letter](../tests/fixtures/letters/valid.md).
 For your own application, copy that file, edit its paragraphs, and substitute its path and your fields.
@@ -764,11 +766,11 @@ How the Markdown is written. Every command that reads a resume reports these.
 | <a id="code-letter-section-order"></a>`letter-section-order` | error | The letter needs Greeting, Body and Closing sections in that order. |
 | <a id="code-letter-section-shape"></a>`letter-section-shape` | error | The letter section has the wrong number of paragraphs. |
 | <a id="code-letter-unsupported-block"></a>`letter-unsupported-block` | error | This construct is not supported in a cover letter. |
-| <a id="code-letter-annotation-unsupported"></a>`letter-annotation-unsupported` | error | Letter annotations are not supported yet. |
 | <a id="code-placeholder-unknown"></a>`placeholder-unknown` | error | The letter placeholder names an unknown application field. |
 | <a id="code-placeholder-malformed"></a>`placeholder-malformed` | error | The letter placeholder is malformed or explicitly escaped. |
 | <a id="code-placeholder-position"></a>`placeholder-position` | error | A placeholder appears outside permitted letter text. |
 | <a id="code-text-limit-exceeded"></a>`text-limit-exceeded` | error | The letter text exceeds its configured length limit. |
+| <a id="code-letter-selection-required"></a>`letter-selection-required` | error | The annotated letter needs paragraph selection before it can be built. |
 
 ### Content codes
 

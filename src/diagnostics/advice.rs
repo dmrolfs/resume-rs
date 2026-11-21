@@ -211,20 +211,14 @@ impl DiagnosticCode {
             },
             LetterSectionShape => &Advice {
                 summary: "The letter section has the wrong number of paragraphs.",
-                why: "Project convention: the greeting and closing each have one paragraph; the body is nonempty.",
-                fix: "Write one greeting, one closing, and at least one body paragraph.",
+                why: "Project convention: the greeting and closing each have one paragraph, or one group of alternate wordings of it; the body is nonempty.",
+                fix: "Write one greeting, one closing, and at least one body paragraph. To offer several wordings of a greeting or closing, mark every wording `=group.variant` with the same group name and one of them `default`.",
                 example: None,
             },
             LetterUnsupportedBlock => &Advice {
                 summary: "This construct is not supported in a cover letter.",
                 why: "Project convention: letters contain paragraphs with text, emphasis, links and inline code.",
                 fix: "Rewrite the construct as a paragraph; lists and nested sections are not supported.",
-                example: None,
-            },
-            LetterAnnotationUnsupported => &Advice {
-                summary: "Letter annotations are not supported yet.",
-                why: "Project convention: silently ignoring a draft or selection annotation could publish unintended content.",
-                fix: "Remove the annotation only if this text is ready to include, or wait for letter tailoring support.",
                 example: None,
             },
             PlaceholderUnknown => &Advice {
@@ -243,6 +237,12 @@ impl DiagnosticCode {
                 summary: "A placeholder appears outside permitted letter text.",
                 why: "Project convention: application fields fill paragraphs and link labels, never URLs, code or header fields.",
                 fix: "Move the placeholder to the greeting, body or closing paragraph text.",
+                example: None,
+            },
+            LetterSelectionRequired => &Advice {
+                summary: "The annotated letter needs paragraph selection before it can be built.",
+                why: "Project convention: publishing every annotated paragraph could include drafts or multiple alternate wordings.",
+                fix: "Until letter selection is available, use an unannotated letter containing only the paragraphs you chose.",
                 example: None,
             },
             TextLimitExceeded => &Advice {

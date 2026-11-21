@@ -101,8 +101,8 @@ expression: invalid.diagnostics()
     },
     Diagnostic {
         severity: Error,
-        code: LetterAnnotationUnsupported,
-        message: "letter annotation cannot be honored before tailoring support",
+        code: AnnotationDetached,
+        message: "a blank line separates the annotation from the line below it",
         span: Some(
             Span {
                 file: "invalid.md",
@@ -111,7 +111,7 @@ expression: invalid.diagnostics()
             },
         ),
         hints: [
-            "remove the annotation only if this content is ready to include",
+            "a comment alone on a line marks only the line directly below it; remove what is in between",
         ],
         fix: None,
     },
@@ -159,7 +159,7 @@ expression: invalid.diagnostics()
             },
         ),
         hints: [
-            "Write one greeting, one closing, and at least one body paragraph.",
+            "Write one greeting, one closing, and at least one body paragraph. To offer several wordings of a greeting or closing, mark every wording `=group.variant` with the same group name and one of them `default`.",
         ],
         fix: None,
     },

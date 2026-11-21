@@ -3,7 +3,9 @@
 use claims::{assert_none, assert_ok, assert_some};
 use pretty_assertions::assert_eq;
 use proptest::prelude::*;
-use resume::letter::{LetterFields, LetterInline, Placeholder, resolve};
+use resume::letter::{
+    LetterFields, LetterInline, LetterSource, Piece, Placeholder, SelectedLetter, SourceItem, resolve,
+};
 use resume::markdown::parse_letter;
 use std::path::Path;
 
@@ -19,6 +21,17 @@ fn codes(input: &str) -> Vec<String> {
         .map(|d| d.code.to_string())
         .collect()
 }
+/// The `index`th body item, which these tests write as a plain paragraph.
+fn body_piece(model: &LetterSource, index: usize) -> &Piece {
+    assert_some!(model.body[index].paragraph())
+}
+/// Every piece an item holds: its paragraph, or each wording of its group.
+fn pieces(item: &SourceItem) -> Vec<&Piece> {
+    match item {
+        SourceItem::Paragraph(item) => vec![&item.piece],
+        SourceItem::Alternates(group) => group.variants().iter().map(|v| &v.piece).collect(),
+    }
+}
 fn contains(input: &str, code: &str) {
     assert!(codes(input).iter().any(|c| c == code), "{code}: {:?}", codes(input));
 }
@@ -31,7 +44,7 @@ fn minimal_letter_and_optional_contact() {
         let model = assert_some!(parsed.valid(), "{:?}", parsed.diagnostics());
         assert_eq!(model.body.len(), 1);
         let letter = assert_ok!(resolve(
-            model.clone().into(),
+            assert_ok!(SelectedLetter::try_from(model.clone())),
             &LetterFields::default(),
             Path::new("letter.md")
         ));
@@ -52,7 +65,7 @@ fn encoded_placeholders_have_exact_original_spans() {
             let input = source(&format!("é &amp; ‘quote’ {token} end.")).replace('\n', ending);
             let parsed = parse_letter("letter.md", &input);
             let model = assert_some!(parsed.valid(), "{:?}", parsed.diagnostics());
-            let uses: Vec<_> = model.body[0]
+            let uses: Vec<_> = body_piece(model, 0)
                 .content
                 .iter()
                 .filter_map(|n| match n {
@@ -112,16 +125,36 @@ fn placements_are_rejected_including_unused_references() {
 }
 
 #[test]
-fn real_annotations_fail_but_visible_code_examples_are_not_comments() {
-    for body in [
-        "Text. <!-- @draft -->",
-        "Text.\n\n<!--#ai-->",
-        "> <!-- =group.default -->",
-        "| x |\n|---|\n| <!-- @draft --> |",
-        "`<!-- ordinary` text <!-- @draft -->",
-        "<!--\n @draft\n-->",
+fn annotations_in_unreadable_places_fail_but_visible_code_examples_are_not_comments() {
+    // A comment in a supported place is read now (tests/letter_annotation_test.rs); these sit where it cannot be.
+    for (body, expected) in [
+        ("Text.\n\n<!--#ai-->", vec!["annotation-detached"]),
+        (
+            "> <!-- =group.default -->",
+            vec![
+                "letter-section-shape",
+                "letter-unsupported-block",
+                "annotation-misplaced",
+            ],
+        ),
+        (
+            "| x |\n|---|\n| <!-- @draft --> |",
+            vec![
+                "letter-section-shape",
+                "letter-unsupported-block",
+                "annotation-misplaced",
+            ],
+        ),
+        (
+            "<!--\n @draft\n-->",
+            vec!["letter-section-shape", "annotation-detached"],
+        ),
     ] {
-        contains(&source(body), "letter-annotation-unsupported");
+        assert_eq!(codes(&source(body)), expected, "{body:?}");
+    }
+    for body in ["`<!-- ordinary` text <!-- @draft -->", "Text. <!-- @draft -->"] {
+        let parsed = parse_letter("letter.md", &source(body));
+        assert_some!(parsed.valid(), "{body}: {:?}", parsed.diagnostics());
     }
     for body in [
         "`<!-- @draft -->`",
@@ -134,7 +167,7 @@ fn real_annotations_fail_but_visible_code_examples_are_not_comments() {
     }
     contains(
         &source("Fine.").replace("Alex Example", "Alex <!-- @draft -->"),
-        "letter-annotation-unsupported",
+        "annotation-misplaced",
     );
 }
 
@@ -174,7 +207,10 @@ fn structure_is_strict_and_unsupported_content_is_never_silently_lost() {
 fn breaks_fold_to_spaces_without_resume_fix_edits() {
     let parsed = parse_letter("letter.md", &source("One  \ntwo\nthree."));
     let model = assert_some!(parsed.valid());
-    assert_eq!(model.body[0].content, vec![LetterInline::Text("One two three.".into())]);
+    assert_eq!(
+        body_piece(model, 0).content,
+        vec![LetterInline::Text("One two three.".into())]
+    );
     assert!(parsed.diagnostics().iter().all(|d| d.fix.is_none()));
 }
 
@@ -200,10 +236,11 @@ fn comment_and_formatting_boundaries_cannot_create_hidden_fields() {
         "{{com<!-- ordinary -->pany}}",
         "{{com\npany}}",
         "{{company}} <!-- @draft",
-        "Text. <!--\n@draft\n-->",
     ] {
         assert!(parse_letter("letter.md", &source(body)).has_errors(), "{body}");
     }
+    // A complete multi-line annotation is an annotation now, not a hidden field boundary.
+    assert_some!(parse_letter("letter.md", &source("Text. <!--\n@draft\n-->")).valid());
 }
 
 #[test]
@@ -215,7 +252,7 @@ fn container_comment_spans_include_original_prefixes_and_unicode() {
             parsed
                 .diagnostics()
                 .iter()
-                .find(|d| d.code.to_string() == "letter-annotation-unsupported")
+                .find(|d| d.code.to_string() == "annotation-misplaced")
         );
         let span = assert_some!(annotation.span.as_ref());
         assert_eq!(&input[span.range.clone()], &body[assert_some!(body.find("<!--"))..]);
@@ -249,10 +286,7 @@ fn split_opening_braces_and_multiple_openers_cannot_bypass_checks() {
         &source("Fine.").replace("## Greeting", "{<!-- -->{title}}\n\n## Greeting"),
         "placeholder-position",
     );
-    assert_eq!(
-        codes(&source(r"\<!-- a <!-- @draft")),
-        vec!["letter-annotation-unsupported"]
-    );
+    assert_eq!(codes(&source(r"\<!-- a <!-- @draft")), vec!["annotation-malformed"]);
     assert_some!(parse_letter("letter.md", &source(r"\<!-- a \<!-- b")).valid());
 }
 
@@ -313,7 +347,7 @@ fn visually_empty_frames_and_extra_contact_are_invalid() {
     );
     let parsed = parse_letter("letter.md", &source("One\\\ntwo."));
     assert_eq!(
-        assert_some!(parsed.valid()).body[0].content,
+        body_piece(assert_some!(parsed.valid()), 0).content,
         vec![LetterInline::Text("One two.".into())]
     );
 }
@@ -326,7 +360,7 @@ proptest! {
         let input = source(&fragments.concat());
         let parsed = parse_letter("letter.md", &input);
         if let Some(model) = parsed.valid() {
-            for piece in &model.body { check_nodes(&piece.content, &input); }
+            for piece in model.body.iter().flat_map(pieces) { check_nodes(&piece.content, &input); }
         }
         let errors = parsed.has_errors();
         prop_assert_eq!(parsed.into_parts().0.is_none(), errors);

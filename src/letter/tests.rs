@@ -14,14 +14,13 @@ fn piece(content: Vec<LetterInline>) -> Piece {
 }
 
 fn selected(content: Vec<LetterInline>) -> SelectedLetter {
-    LetterSource {
+    SelectedLetter {
         name: assert_ok!(Name::try_new("Alex Example")),
         contact: vec![],
         greeting: piece(vec![LetterInline::Text("Dear Hiring Team,".into())]),
         body: vec![piece(content)],
         closing: piece(vec![LetterInline::Text("Sincerely,".into())]),
     }
-    .into()
 }
 
 fn placeholder(key: Placeholder, start: usize) -> LetterInline {
@@ -257,5 +256,91 @@ proptest! {
         let source = selected(vec![LetterInline::Text(prefix), placeholder(Placeholder::Company, 0), LetterInline::Text(suffix)]);
         let letter = assert_ok!(resolve(source, &fields, Path::new("letter.md")));
         prop_assert_eq!(letter.body, vec![vec![text(&expected)]]);
+    }
+}
+
+mod bridge {
+    use super::{
+        AlternateGroup, Item, LetterInline, LetterSource, Name, SelectedLetter, SourceItem, assert_err, assert_ok,
+        piece,
+    };
+    use crate::model::{Alternate, Annotations, GroupName, Status, VariantName};
+    use pretty_assertions::assert_eq;
+
+    fn annotated(annotations: Annotations, range: Option<std::ops::Range<usize>>) -> SourceItem {
+        SourceItem::Paragraph(Item {
+            piece: piece(vec![LetterInline::Text("Words.".into())]),
+            annotations,
+            annotation_range: range,
+        })
+    }
+
+    fn letter_with_body(item: SourceItem) -> LetterSource {
+        LetterSource {
+            name: assert_ok!(Name::try_new("Alex Example")),
+            contact: vec![],
+            greeting: piece(vec![LetterInline::Text("Hi,".into())]).into(),
+            body: vec![item],
+            closing: piece(vec![LetterInline::Text("Bye,".into())]).into(),
+        }
+    }
+
+    fn draft() -> Annotations {
+        Annotations {
+            status: Some(Status::Draft),
+            ..Annotations::default()
+        }
+    }
+
+    #[test]
+    fn a_plain_paragraph_crosses_with_its_piece_unchanged() {
+        let plain = piece(vec![LetterInline::Text("Words.".into())]);
+        let selected = assert_ok!(SelectedLetter::try_from(letter_with_body(plain.clone().into())));
+        assert_eq!(selected.body, vec![plain]);
+    }
+
+    #[test]
+    fn an_annotation_with_no_recorded_comment_is_still_refused_at_its_paragraph() {
+        // The parser records a range for every annotation, but a value built by hand might not.
+        let refused = assert_err!(SelectedLetter::try_from(letter_with_body(annotated(draft(), None))));
+        assert_eq!(refused.range, 0..100);
+    }
+
+    #[test]
+    fn a_recorded_comment_with_nothing_understood_is_still_refused_at_the_comment() {
+        let refused = assert_err!(SelectedLetter::try_from(letter_with_body(annotated(
+            Annotations::default(),
+            Some(7..20)
+        ))));
+        assert_eq!(refused.range, 7..20);
+    }
+
+    #[test]
+    fn a_lone_default_is_a_group_and_is_refused_like_any_other() {
+        let alternate = Alternate {
+            group: assert_ok!(GroupName::try_new("g")),
+            variant: assert_ok!(VariantName::try_new("default")),
+        };
+        let item = Item {
+            piece: piece(vec![LetterInline::Text("Words.".into())]),
+            annotations: Annotations {
+                alternate: Some(alternate),
+                ..Annotations::default()
+            },
+            annotation_range: Some(3..9),
+        };
+        let group = SourceItem::Alternates(AlternateGroup { variants: vec![item] });
+        assert_eq!(
+            assert_err!(SelectedLetter::try_from(letter_with_body(group))).range,
+            3..9
+        );
+    }
+
+    #[test]
+    fn the_greeting_is_checked_before_the_body_and_the_closing() {
+        let mut source = letter_with_body(annotated(draft(), Some(50..60)));
+        source.greeting = annotated(draft(), Some(10..20));
+        source.closing = annotated(draft(), Some(70..80));
+        assert_eq!(assert_err!(SelectedLetter::try_from(source)).range, 10..20);
     }
 }
