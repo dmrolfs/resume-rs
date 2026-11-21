@@ -1,0 +1,626 @@
+//! ABOUTME: Property tests of selection over generated annotated resumes: what survives, what renders once,
+//! ABOUTME: what keeps its order, that a second selection changes nothing, and that no draft leaks out.
+
+use std::collections::BTreeSet;
+
+use claims::{assert_ok, assert_some};
+use proptest::prelude::*;
+use resume::markdown::parse;
+use resume::model::{
+    Annotations, Block, Bullet, GroupName, Inline, Priority, Resume, RoleBlock, Status, Tag, VariantName,
+};
+use resume::select::rules::{self, Facts, Verdict};
+use resume::select::{Scope, SelectError, SelectedTags, Selection, SelectionReport, select};
+
+fn cases() -> u32 {
+    std::env::var("PROPTEST_CASES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(256)
+}
+
+// ---- generating annotated resumes -----------------------------------------------------------------------
+
+/// An annotation for one line: priority, status, and tags from small pools.
+#[derive(Debug, Clone)]
+struct Note {
+    priority: Option<&'static str>,
+    status: Option<&'static str>,
+    tags: Vec<&'static str>,
+}
+
+fn note() -> impl Strategy<Value = Note> {
+    (
+        prop::option::weighted(0.3, prop::sample::select(vec!["core", "extra"])),
+        prop::option::weighted(0.2, prop::sample::select(vec!["draft", "verify"])),
+        prop::sample::subsequence(vec!["a", "b", "c"], 0..=2),
+    )
+        .prop_map(|(priority, status, tags)| Note { priority, status, tags })
+}
+
+impl Note {
+    fn tokens(&self, alternate: Option<String>) -> String {
+        let mut words: Vec<String> = alternate.into_iter().collect();
+        words.extend(self.priority.map(|p| format!("@{p}")));
+        words.extend(self.status.map(|s| format!("@{s}")));
+        words.extend(self.tags.iter().map(|t| format!("#{t}")));
+        if words.is_empty() {
+            String::new()
+        } else {
+            format!(" <!-- {} -->", words.join(" "))
+        }
+    }
+}
+
+/// A run of leaves: a plain leaf, or a group of 2 to 3 wordings sharing one priority, one `default`.
+#[derive(Debug, Clone)]
+enum Run {
+    Plain(Note),
+    Group {
+        priority: Option<&'static str>,
+        variants: Vec<Note>,
+    },
+}
+
+fn run() -> impl Strategy<Value = Run> {
+    prop_oneof![
+        3 => note().prop_map(Run::Plain),
+        1 => (
+            prop::option::weighted(0.3, prop::sample::select(vec!["core", "extra"])),
+            prop::collection::vec(note(), 2..=3)
+        )
+            .prop_map(|(priority, variants)| Run::Group { priority, variants }),
+    ]
+}
+
+/// A container's body: bullets in one list.
+fn bullets() -> impl Strategy<Value = Vec<Run>> {
+    prop::collection::vec(run(), 0..4)
+}
+
+#[derive(Debug, Clone)]
+struct RoleSpec {
+    note: Note,
+    /// A plain blurb, or a group whose first wording is the blurb and whose others are the paragraphs after it.
+    blurb: Option<Run>,
+    bullets: Vec<Run>,
+    /// A paragraph after the bullets: body prose, never a blurb wording.
+    closing: Option<Note>,
+    eras: Vec<(Note, Vec<Run>)>,
+}
+
+fn role() -> impl Strategy<Value = RoleSpec> {
+    (
+        note(),
+        prop::option::of(run()),
+        bullets(),
+        prop::option::weighted(0.3, note()),
+        prop::collection::vec((note(), bullets()), 0..=2),
+    )
+        .prop_map(|(note, blurb, bullets, closing, eras)| RoleSpec {
+            note,
+            blurb,
+            bullets,
+            closing,
+            eras,
+        })
+}
+
+#[derive(Debug, Clone)]
+struct SectionSpec {
+    note: Note,
+    /// Paragraphs before the bullets: plain, or a group of paragraph wordings.
+    prose: Vec<Run>,
+    bullets: Vec<Run>,
+    roles: Vec<RoleSpec>,
+    /// A page break at the end of the section.
+    page_break: bool,
+}
+
+fn section() -> impl Strategy<Value = SectionSpec> {
+    (
+        note(),
+        prop::collection::vec(run(), 0..=2),
+        bullets(),
+        prop::collection::vec(role(), 0..=2),
+        prop::bool::weighted(0.2),
+    )
+        .prop_map(|(note, prose, bullets, roles, page_break)| SectionSpec {
+            note,
+            prose,
+            bullets,
+            roles,
+            page_break,
+        })
+}
+
+/// Writes the generated resume as Markdown; every leaf's text is a unique id (`n1`, `n2`, ...).
+struct Writer {
+    out: String,
+    next_leaf: usize,
+    next_group: usize,
+}
+
+const VARIANTS: [&str; 3] = ["default", "short", "long"];
+
+impl Writer {
+    fn leaf_id(&mut self) -> String {
+        self.next_leaf += 1;
+        format!("n{}", self.next_leaf)
+    }
+
+    /// Writes runs as bullets (one line each) or as paragraphs (a blank line after each).
+    fn runs(&mut self, runs: &[Run], bullets: bool) {
+        if runs.is_empty() {
+            return;
+        }
+        let (marker, end) = if bullets { ("- ", "\n") } else { ("", "\n\n") };
+        for run in runs {
+            match run {
+                Run::Plain(note) => {
+                    let id = self.leaf_id();
+                    self.out.push_str(&format!("{marker}{id}{}{end}", note.tokens(None)));
+                }
+                Run::Group { priority, variants } => {
+                    self.next_group += 1;
+                    let group = self.next_group;
+                    for (index, note) in variants.iter().enumerate() {
+                        let id = self.leaf_id();
+                        // The parser requires one priority per group, so the group's priority replaces each one's.
+                        let note = Note {
+                            priority: *priority,
+                            ..note.clone()
+                        };
+                        let alternate = format!("=g{group}.{}", VARIANTS[index]);
+                        self.out
+                            .push_str(&format!("{marker}{id}{}{end}", note.tokens(Some(alternate))));
+                    }
+                }
+            }
+        }
+        if bullets {
+            self.out.push('\n');
+        }
+    }
+
+    fn resume(sections: &[SectionSpec]) -> String {
+        let mut writer = Writer {
+            out: "# Ada\n\nLondon\n\n".into(),
+            next_leaf: 0,
+            next_group: 0,
+        };
+        for (index, section) in sections.iter().enumerate() {
+            writer
+                .out
+                .push_str(&format!("## S{index}{}\n\n", section.note.tokens(None)));
+            writer.runs(&section.prose, false);
+            writer.runs(&section.bullets, true);
+            for (r, role) in section.roles.iter().enumerate() {
+                let line = format!(
+                    "### Co{index}x{r} · Engineer · 2015 – 2017{}\n\n",
+                    role.note.tokens(None)
+                );
+                writer.out.push_str(&line);
+                writer.runs(role.blurb.as_slice(), false);
+                writer.runs(&role.bullets, true);
+                if let Some(note) = &role.closing {
+                    let id = writer.leaf_id();
+                    writer.out.push_str(&format!("{id}{}\n\n", note.tokens(None)));
+                }
+                for (e, (note, items)) in role.eras.iter().enumerate() {
+                    writer
+                        .out
+                        .push_str(&format!("**Era{e} · 2016 – 2017**{}\n\n", note.tokens(None)));
+                    writer.runs(items, true);
+                }
+            }
+            if section.page_break {
+                writer.out.push_str("<div class=\"page-break\"></div>\n\n");
+            }
+        }
+        writer.out
+    }
+}
+
+fn resume_strategy() -> impl Strategy<Value = Resume> {
+    prop::collection::vec(section(), 1..=3).prop_map(|sections| {
+        let markdown = Writer::resume(&sections);
+        let parsed = parse("r.md", &markdown);
+        assert_some!(
+            parsed.valid(),
+            "generated an invalid resume:\n{markdown}\n{:?}",
+            parsed.diagnostics()
+        )
+        .clone()
+    })
+}
+
+fn selection_strategy() -> impl Strategy<Value = Selection> {
+    let scope = prop_oneof![
+        Just(Scope::All),
+        Just(Scope::CoreOnly),
+        prop::sample::subsequence(vec!["a", "b", "c", "d"], 1..=2).prop_map(|names| {
+            let set: BTreeSet<Tag> = names.into_iter().map(|n| assert_ok!(Tag::try_new(n))).collect();
+            Scope::Tags(assert_some!(SelectedTags::new(set)))
+        }),
+    ];
+    let variant = prop::sample::select(vec!["default", "short", "long", "zzz"]);
+    (
+        scope,
+        any::<bool>(),
+        prop::sample::subsequence(vec!["short", "long", "business"], 0..=2),
+        prop::collection::btree_map(1..6usize, variant, 0..=2),
+    )
+        .prop_map(|(scope, drafts, prefer, picks)| Selection {
+            scope,
+            drafts,
+            prefer: prefer
+                .into_iter()
+                .map(|v| assert_ok!(VariantName::try_new(v)))
+                .collect(),
+            picks: picks
+                .into_iter()
+                .map(|(g, v)| {
+                    (
+                        assert_ok!(GroupName::try_new(format!("g{g}"))),
+                        assert_ok!(VariantName::try_new(v)),
+                    )
+                })
+                .collect(),
+        })
+}
+
+// ---- reading resumes ------------------------------------------------------------------------------------
+
+/// One leaf in document order: its id, its own annotations, and the annotations of its containers.
+#[derive(Debug, Clone)]
+struct Leaf {
+    id: String,
+    annotations: Annotations,
+    containers: Vec<Annotations>,
+    /// For a blurb: its role's priority, which it takes when it has none.
+    fallback: Option<Priority>,
+}
+
+fn id(content: &[Inline]) -> String {
+    content
+        .iter()
+        .map(|i| match i {
+            Inline::Text { text } => text.trim().to_string(),
+            other => format!("{other:?}"),
+        })
+        .collect()
+}
+
+fn leaves(resume: &Resume) -> Vec<Leaf> {
+    let mut out = Vec::new();
+    let push = |out: &mut Vec<Leaf>, content: &[Inline], a: &Annotations, containers: &[&Annotations], fallback| {
+        out.push(Leaf {
+            id: id(content),
+            annotations: a.clone(),
+            containers: containers.iter().map(|c| (*c).clone()).collect(),
+            fallback,
+        });
+    };
+    let bullets = |out: &mut Vec<Leaf>, items: &[Bullet], containers: &[&Annotations]| {
+        for b in items {
+            push(out, &b.content, &b.annotations, containers, None);
+        }
+    };
+    for section in &resume.sections {
+        let s = [&section.annotations];
+        for block in &section.blocks {
+            match block {
+                Block::Paragraph { content, annotations } => push(&mut out, content, annotations, &s, None),
+                Block::Bullets { items } => bullets(&mut out, items, &s),
+                Block::Role(role) => {
+                    let r = [&section.annotations, &role.annotations];
+                    if let Some(blurb) = &role.blurb {
+                        push(&mut out, blurb, &role.blurb_annotations, &r, role.annotations.priority);
+                    }
+                    for part in &role.body {
+                        match part {
+                            RoleBlock::Paragraph { content, annotations } => {
+                                push(&mut out, content, annotations, &r, None)
+                            }
+                            RoleBlock::Bullets { items } => bullets(&mut out, items, &r),
+                            RoleBlock::Era { items, annotations, .. } => {
+                                bullets(&mut out, items, &[&section.annotations, &role.annotations, annotations]);
+                            }
+                        }
+                    }
+                }
+                Block::PageBreak => {}
+            }
+        }
+    }
+    out
+}
+
+fn ids(resume: &Resume) -> Vec<String> {
+    leaves(resume).into_iter().map(|l| l.id).collect()
+}
+
+fn is_subsequence(small: &[String], big: &[String]) -> bool {
+    let mut big = big.iter();
+    small.iter().all(|x| big.any(|y| y == x))
+}
+
+fn draft(a: &Annotations) -> bool {
+    a.status == Some(Status::Draft)
+}
+
+/// A leaf that `select` must keep: `@core` (own, or a blurb's role's), not a draft, under no draft container,
+/// and, for a variant, in a group with a ready wording. The survivor of a group is checked by its group.
+fn eligible_core(leaf: &Leaf, all: &[Leaf], drafts: bool) -> Option<Option<GroupName>> {
+    let core = leaf.annotations.priority.or(leaf.fallback) == Some(Priority::Core);
+    let under_draft = leaf.containers.iter().any(draft);
+    if !core || (!drafts && under_draft) {
+        return None;
+    }
+    match &leaf.annotations.alternate {
+        None => (!draft(&leaf.annotations) || drafts).then_some(None),
+        Some(alternate) => {
+            let ready = all
+                .iter()
+                .filter(|l| {
+                    l.annotations
+                        .alternate
+                        .as_ref()
+                        .is_some_and(|a| a.group == alternate.group)
+                })
+                .any(|l| drafts || !draft(&l.annotations));
+            ready.then(|| Some(alternate.group.clone()))
+        }
+    }
+}
+
+/// The sections, roles, and eras of a resume that hold nothing, by name.
+fn empty_containers(resume: &Resume) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for section in &resume.sections {
+        if section.blocks.iter().all(|b| matches!(b, Block::PageBreak)) {
+            out.insert(format!("section {}", section.title));
+        }
+        for block in &section.blocks {
+            let Block::Role(role) = block else { continue };
+            if role.blurb.is_none() && role.body.is_empty() {
+                out.insert(format!("role {}", role.company));
+            }
+            for part in &role.body {
+                if let RoleBlock::Era { name, items, .. } = part
+                    && items.is_empty()
+                {
+                    out.insert(format!("era {} {name}", role.company));
+                }
+            }
+        }
+    }
+    out
+}
+
+fn no_empty_lists(resume: &Resume) -> bool {
+    resume.sections.iter().all(|section| {
+        section.blocks.iter().all(|block| match block {
+            Block::Bullets { items } => !items.is_empty(),
+            Block::Role(role) => role
+                .body
+                .iter()
+                .all(|part| !matches!(part, RoleBlock::Bullets { items } if items.is_empty())),
+            _ => true,
+        })
+    })
+}
+
+// ---- properties -----------------------------------------------------------------------------------------
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(cases()))]
+
+    #[test]
+    fn selection_keeps_eligible_core_renders_one_wording_keeps_order_and_is_idempotent(
+        resume in resume_strategy(),
+        selection in selection_strategy(),
+    ) {
+        let Ok((tailored, report)) = select(&resume, &selection) else { return Ok(()) };
+        let input = leaves(&resume);
+        let output = leaves(&tailored);
+        let output_ids = ids(&tailored);
+
+        // Output leaves are input leaves, in the same order, with the same text.
+        prop_assert!(is_subsequence(&output_ids, &ids(&resume)), "{output_ids:?}");
+
+        // Every eligible @core leaf survives; for a group, exactly one of its wordings does.
+        for leaf in &input {
+            match eligible_core(leaf, &input, selection.drafts) {
+                None => {}
+                Some(None) => prop_assert!(output_ids.contains(&leaf.id), "core leaf {} lost", leaf.id),
+                Some(Some(group)) => {
+                    let kept = output.iter().filter(|l| l.annotations.alternate.as_ref().is_some_and(|a| a.group == group)).count();
+                    prop_assert_eq!(kept, 1, "core group {} renders {} wordings", group, kept);
+                }
+            }
+        }
+
+        // Every surviving group renders exactly one wording.
+        let mut groups: Vec<&GroupName> = output.iter().filter_map(|l| l.annotations.alternate.as_ref().map(|a| &a.group)).collect();
+        let total = groups.len();
+        groups.dedup();
+        prop_assert_eq!(total, groups.len(), "a group renders twice");
+        prop_assert_eq!(report.chosen.len(), groups.len());
+
+        // No bullet list is empty, and the only empty sections, roles, and eras are the ones the author wrote empty.
+        prop_assert!(no_empty_lists(&tailored));
+        prop_assert!(empty_containers(&tailored).is_subset(&empty_containers(&resume)), "selection left a heading alone");
+
+        // Without drafts, no draft and nothing under a draft reaches the output.
+        if !selection.drafts {
+            for leaf in &output {
+                prop_assert!(!draft(&leaf.annotations) && !leaf.containers.iter().any(draft), "draft {} leaked", leaf.id);
+            }
+        }
+
+        // Selecting the tailored resume again changes nothing.
+        let (again, second) = prop_assert_ok(select(&tailored, &selection))?;
+        prop_assert_eq!(&again, &tailored);
+        prop_assert!(second.dropped.is_empty(), "{:?}", second.dropped);
+    }
+
+    #[test]
+    fn a_draft_pick_is_an_error_exactly_when_it_names_a_draft_wording_and_drafts_are_off(
+        resume in resume_strategy(),
+        selection in selection_strategy(),
+    ) {
+        let input = leaves(&resume);
+        let picks_a_draft = !selection.drafts && selection.picks.iter().any(|(group, variant)| {
+            input.iter().any(|l| {
+                draft(&l.annotations) && l.annotations.alternate.as_ref().is_some_and(|a| &a.group == group && &a.variant == variant)
+            })
+        });
+        match select(&resume, &selection) {
+            Err(SelectError::PickedDraft { picks }) => {
+                prop_assert!(picks_a_draft);
+                prop_assert!(!picks.is_empty());
+            }
+            Ok(_) => prop_assert!(!picks_a_draft),
+        }
+    }
+
+    #[test]
+    fn an_empty_selection_of_an_unannotated_resume_is_the_identity(sections in prop::collection::vec(section(), 1..=3)) {
+        let plain: Vec<SectionSpec> = sections.into_iter().map(strip).collect();
+        let markdown = Writer::resume(&plain);
+        let resume = assert_some!(parse("r.md", &markdown).valid()).clone();
+        let (tailored, report) = prop_assert_ok(select(&resume, &Selection::default()))?;
+        prop_assert_eq!(&tailored, &resume);
+        prop_assert_eq!(report, SelectionReport::default());
+    }
+}
+
+fn prop_assert_ok<T, E: std::fmt::Debug>(result: Result<T, E>) -> Result<T, TestCaseError> {
+    result.map_err(|e| TestCaseError::fail(format!("{e:?}")))
+}
+
+/// The section with every annotation removed (groups become plain bullets).
+fn strip(section: SectionSpec) -> SectionSpec {
+    let none = || Note {
+        priority: None,
+        status: None,
+        tags: Vec::new(),
+    };
+    let runs = |runs: Vec<Run>| -> Vec<Run> {
+        runs.into_iter()
+            .flat_map(|run| match run {
+                Run::Plain(_) => vec![Run::Plain(none())],
+                Run::Group { variants, .. } => variants.into_iter().map(|_| Run::Plain(none())).collect(),
+            })
+            .collect()
+    };
+    SectionSpec {
+        note: none(),
+        prose: runs(section.prose),
+        bullets: runs(section.bullets),
+        roles: section
+            .roles
+            .into_iter()
+            .map(|role| RoleSpec {
+                note: none(),
+                blurb: role.blurb.map(|_| Run::Plain(none())),
+                bullets: runs(role.bullets),
+                closing: role.closing.map(|_| none()),
+                eras: role.eras.into_iter().map(|(_, items)| (none(), runs(items))).collect(),
+            })
+            .collect(),
+        page_break: section.page_break,
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(cases()))]
+
+    /// The upper bound: every kept leaf that is not a group wording is one the keep rule keeps, with the tags it
+    /// inherits; under core only, every kept leaf is core.
+    #[test]
+    fn selection_keeps_only_what_the_keep_rule_keeps(resume in resume_strategy(), selection in selection_strategy()) {
+        let Ok((tailored, _)) = select(&resume, &selection) else { return Ok(()) };
+        for leaf in leaves(&tailored) {
+            let priority = leaf.annotations.priority.or(leaf.fallback);
+            if selection.scope == Scope::CoreOnly {
+                prop_assert_eq!(priority, Some(Priority::Core), "{} is not core", leaf.id);
+            }
+            if leaf.annotations.alternate.is_some() {
+                continue;
+            }
+            let inherited: BTreeSet<Tag> = leaf.containers.iter().flat_map(|c| c.tags.iter().cloned()).collect();
+            let facts = Facts { priority, status: leaf.annotations.status, own_tags: &leaf.annotations.tags, inherited: &inherited };
+            prop_assert_eq!(rules::judge(&facts, &selection), Verdict::Keep, "{} was kept", leaf.id);
+        }
+    }
+
+    /// The report accounts for every leaf left out: each is listed once, or is a wording of a group that rendered
+    /// or was listed once; nothing listed is in the output; and the draft counters add up.
+    #[test]
+    fn the_report_accounts_for_every_leaf_left_out(resume in resume_strategy(), selection in selection_strategy()) {
+        let Ok((tailored, report)) = select(&resume, &selection) else { return Ok(()) };
+        let input = leaves(&resume);
+        let kept: BTreeSet<String> = ids(&tailored).into_iter().collect();
+        let listed: Vec<&str> = report.dropped.iter().map(|d| d.node.label.as_str()).collect();
+        for label in &listed {
+            prop_assert!(!kept.contains(*label), "{} is listed as dropped but kept", label);
+        }
+        for leaf in input.iter().filter(|l| !kept.contains(&l.id)) {
+            let times = listed.iter().filter(|l| **l == leaf.id).count();
+            match &leaf.annotations.alternate {
+                None => prop_assert_eq!(times, 1, "{} left out and listed {} times", leaf.id, times),
+                Some(alternate) => {
+                    let wordings: Vec<&Leaf> = input
+                        .iter()
+                        .filter(|l| l.annotations.alternate.as_ref().is_some_and(|a| a.group == alternate.group))
+                        .collect();
+                    let rendered = wordings.iter().any(|w| kept.contains(&w.id));
+                    let listed_times: usize = wordings.iter().map(|w| listed.iter().filter(|l| **l == w.id).count()).sum();
+                    prop_assert!(rendered != (listed_times == 1), "group {} rendered={} listed {} times", alternate.group, rendered, listed_times);
+                }
+            }
+        }
+        // Every leaf and container marked @draft is counted once; with drafts off, not what a draft container
+        // holds (it is dropped with the container, which is counted).
+        let shut = |l: &Leaf| !selection.drafts && l.containers.iter().any(draft);
+        let drafts = input.iter().filter(|l| draft(&l.annotations) && !shut(l)).count()
+            + containers_marked_draft(&resume, selection.drafts);
+        prop_assert_eq!(report.drafts_left_out + report.drafts_included, drafts);
+        if selection.drafts {
+            prop_assert_eq!(report.drafts_left_out, 0);
+        } else {
+            prop_assert_eq!(report.drafts_included, 0);
+        }
+    }
+}
+
+/// Sections, roles, and eras marked `@draft`; with drafts off, not those under another draft container.
+fn containers_marked_draft(resume: &Resume, drafts: bool) -> usize {
+    let mut count = 0;
+    for section in &resume.sections {
+        if draft(&section.annotations) {
+            count += 1;
+            if !drafts {
+                continue;
+            }
+        }
+        for block in &section.blocks {
+            let Block::Role(role) = block else { continue };
+            if draft(&role.annotations) {
+                count += 1;
+                if !drafts {
+                    continue;
+                }
+            }
+            count += role
+                .body
+                .iter()
+                .filter(|p| matches!(p, RoleBlock::Era { annotations, .. } if draft(annotations)))
+                .count();
+        }
+    }
+    count
+}

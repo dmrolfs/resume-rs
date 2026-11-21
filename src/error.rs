@@ -128,6 +128,10 @@ pub enum Error {
     #[snafu(display("{} is not a file that can be watched: it has no directory or no name", path.display()))]
     WatchInput { path: PathBuf },
 
+    /// The selection asked for something the resume cannot give, such as a wording that is still a draft.
+    #[snafu(display("{source}"))]
+    Select { source: crate::select::SelectError },
+
     #[snafu(display("the style failed to compile ({} errors)", errors_in(diagnostics)))]
     Compile {
         diagnostics: Vec<Diagnostic>,
@@ -151,6 +155,7 @@ impl Error {
             Self::OutputIsDirectory { .. } => Some("remove it or use -o <DIR> to write elsewhere"),
             Self::OutputExists { .. } => Some("use --force to replace it"),
             Self::InputChanged { .. } => Some("the file was edited meanwhile; nothing was changed, run doctor again"),
+            Self::Select { .. } => Some("pick a ready wording, finish the draft, or build with --drafts to preview it"),
             _ => None,
         }
     }

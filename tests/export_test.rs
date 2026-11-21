@@ -402,3 +402,20 @@ fn lib_is_not_a_style() {
     assert!(run.stderr.contains("unknown style `lib`"), "{}", run.stderr);
     assert!(!dir.exists());
 }
+
+#[test]
+fn export_writes_the_resume_a_build_would_compile_without_its_drafts() {
+    let work = Workspace::new();
+    let text = "# Ada Lovelace\n\nLondon · ada@example.com\n\n## Experience\n\n### Acme · Engineer · 2015 – 2017\n\n\
+        - Shipped the ready result.\n- Wrote the unfinished claim. <!-- @draft -->\n";
+    let file = work.file("Resume.md", text);
+    let dir = work.path().join("preview");
+    let run = work.export(&file, &dir, &[]);
+    assert_eq!(run.outcome, Outcome::Success, "{}", run.stderr);
+    let json = String::from_utf8(read(&dir.join("resume.json"))).expect("UTF-8");
+    assert!(json.contains("Shipped the ready result."), "{json}");
+    assert!(
+        !json.contains("unfinished claim"),
+        "a draft reached the preview: {json}"
+    );
+}

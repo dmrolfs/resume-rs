@@ -8,6 +8,8 @@ use crate::cli::RenderArgs;
 use crate::error::Error;
 use crate::layout::LayoutReport;
 use crate::markdown::{Parsed, parse};
+use crate::model::Resume;
+use crate::select::{self, Selection, SelectionReport};
 use crate::style::{self, StyleSource};
 use crate::typeset::fonts::{FontSet, FontSetBuilder};
 use crate::typeset::{Compiled, RenderOptions, Typesetter};
@@ -99,42 +101,69 @@ impl Session {
         })
     }
 
-    /// Parses `text` and, when it has no errors, compiles it and measures the layout. Writes nothing.
+    /// Parses `text` and, when it has no errors, selects from it and compiles what is selected, then measures the
+    /// layout. Writes nothing.
+    ///
+    /// The selection tailors what is compiled; `parsed` stays the whole baseline, so doctor's content lints and
+    /// `--fix` read every item whatever the selection leaves out.
     #[must_use]
-    pub fn assess(&self, file: &Path, text: &str, render: &RenderArgs) -> Assessment {
+    pub fn assess(&self, file: &Path, text: &str, render: &RenderArgs, selection: &Selection) -> Assessment {
         let parsed = parse(file, text);
-        let rendered = match (parsed.valid(), self.ready()) {
-            (None, _) => Rendered::Skipped(Skip::FormatErrors),
-            (Some(_), Err(_)) => Rendered::Skipped(Skip::Setup),
-            (Some(resume), Ok((style, fonts))) => {
-                let typesetter = self
-                    .typesetter
-                    .as_ref()
-                    .expect("fonts are ready, so there is a typesetter");
-                match typesetter.compile(resume, style, RenderOptions::new(render.paper)) {
-                    Err(error) => Rendered::Failed(error),
-                    Ok(compiled) => match LayoutReport::of(&compiled, fonts, render.max_pages) {
-                        Ok(layout) => Rendered::Laid {
-                            compiled: Box::new(compiled),
-                            layout,
-                        },
-                        // The document compiled, so its warnings and style sources are still worth showing.
-                        Err(error) => Rendered::LayoutFailed {
-                            compiled: Box::new(compiled),
-                            error,
-                        },
-                    },
-                }
+        // Selection needs no fonts or style, so its result and its errors are known even when setup failed.
+        let tailored = parsed.valid().map(|resume| select::select(resume, selection));
+        let (rendered, selected) = match (tailored, self.ready()) {
+            (None, _) => (Rendered::Skipped(Skip::FormatErrors), None),
+            (Some(Err(source)), _) => (Rendered::Failed(Error::Select { source }), None),
+            (Some(Ok((resume, report))), Err(_)) => (Rendered::Skipped(Skip::Setup), Some(Selected { resume, report })),
+            (Some(Ok((resume, report))), Ok((style, fonts))) => {
+                let rendered = self.render(&resume, style, fonts, render);
+                (rendered, Some(Selected { resume, report }))
             }
         };
-        Assessment { parsed, rendered }
+        Assessment {
+            parsed,
+            selected,
+            rendered,
+        }
+    }
+
+    fn render(&self, resume: &Resume, style: &StyleSource, fonts: &Arc<FontSet>, render: &RenderArgs) -> Rendered {
+        let typesetter = self
+            .typesetter
+            .as_ref()
+            .expect("fonts are ready, so there is a typesetter");
+        match typesetter.compile(resume, style, RenderOptions::new(render.paper)) {
+            Err(error) => Rendered::Failed(error),
+            Ok(compiled) => match LayoutReport::of(&compiled, fonts, render.max_pages) {
+                Ok(layout) => Rendered::Laid {
+                    compiled: Box::new(compiled),
+                    layout,
+                },
+                // The document compiled, so its warnings and style sources are still worth showing.
+                Err(error) => Rendered::LayoutFailed {
+                    compiled: Box::new(compiled),
+                    error,
+                },
+            },
+        }
     }
 }
 
-/// What assessing one file found: the parse, and what came of rendering it.
+/// What assessing one file found: the parse, the selection from it, and what came of rendering it.
 pub struct Assessment {
+    /// The whole baseline as parsed, whatever the selection.
     pub parsed: Parsed,
+    /// The tailored resume and what the selection did; `None` when there was nothing to select from, or the
+    /// selection failed (then `rendered` is `Failed`).
+    pub selected: Option<Selected>,
     pub rendered: Rendered,
+}
+
+/// The resume that was compiled, and the report of how it was selected from the baseline.
+#[derive(Debug)]
+pub struct Selected {
+    pub resume: Resume,
+    pub report: SelectionReport,
 }
 
 /// What rendering a file came to.
@@ -160,4 +189,96 @@ pub enum Skip {
     FormatErrors,
     /// The style or the fonts could not be set up.
     Setup,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::{Cli, Command};
+    use crate::model::{GroupName, VariantName};
+    use claims::{assert_none, assert_ok, assert_some};
+
+    fn render_args() -> RenderArgs {
+        let cli = assert_ok!(Cli::try_parse_validated([
+            "resume", "build", "r.md", "--fonts", "bundled"
+        ]));
+        match cli.command {
+            Command::Build(build) => build.render,
+            _ => unreachable!("parsed a build"),
+        }
+    }
+
+    const TEXT: &str = "# Ada Lovelace\n\nLondon · a@b.co\n\n## S\n\n- Ready. <!-- =g.default -->\n- Later. <!-- =g.short @draft -->\n- Draft. <!-- @draft -->\n";
+
+    #[test]
+    fn assess_compiles_the_tailored_resume_and_keeps_the_baseline_in_parsed() {
+        let render = render_args();
+        let session = Session::open(&render, None);
+        let assessment = session.assess(Path::new("r.md"), TEXT, &render, &Selection::default());
+        let selected = assert_some!(assessment.selected);
+        let crate::model::Block::Bullets { items } = &selected.resume.sections[0].blocks[0] else {
+            panic!()
+        };
+        assert_eq!(items.len(), 1, "only the ready wording");
+        assert_eq!(
+            selected.report.drafts_left_out, 2,
+            "the draft bullet and the draft wording"
+        );
+        let baseline = assert_some!(assessment.parsed.valid());
+        let crate::model::Block::Bullets { items } = &baseline.sections[0].blocks[0] else {
+            panic!()
+        };
+        assert_eq!(items.len(), 3, "parsed is the whole baseline");
+        assert!(matches!(assessment.rendered, Rendered::Laid { .. }));
+    }
+
+    #[test]
+    fn assess_selects_and_reports_a_draft_pick_even_when_the_style_cannot_be_set_up() {
+        let render = render_args();
+        let missing = assert_ok!(Cli::try_parse_validated([
+            "resume", "build", "r.md", "--style", "nope", "--fonts", "bundled"
+        ]));
+        let Command::Build(build) = missing.command else {
+            unreachable!("parsed a build")
+        };
+        let session = Session::open(&build.render, None);
+        let plain = session.assess(Path::new("r.md"), TEXT, &render, &Selection::default());
+        assert!(matches!(plain.rendered, Rendered::Skipped(Skip::Setup)));
+        assert_some!(plain.selected, "the selection is known without a style");
+        let pick = Selection {
+            picks: [(
+                assert_ok!(GroupName::try_new("g")),
+                assert_ok!(VariantName::try_new("short")),
+            )]
+            .into(),
+            ..Selection::default()
+        };
+        let failed = session.assess(Path::new("r.md"), TEXT, &render, &pick);
+        assert!(
+            matches!(failed.rendered, Rendered::Failed(Error::Select { .. })),
+            "the draft pick is not hidden"
+        );
+    }
+
+    #[test]
+    fn assess_turns_a_draft_pick_into_a_failed_rendering_and_no_selected_resume() {
+        let render = render_args();
+        let session = Session::open(&render, None);
+        let pick = Selection {
+            picks: [(
+                assert_ok!(GroupName::try_new("g")),
+                assert_ok!(VariantName::try_new("short")),
+            )]
+            .into(),
+            ..Selection::default()
+        };
+        let assessment = session.assess(Path::new("r.md"), TEXT, &render, &pick);
+        assert_none!(assessment.selected);
+        let Rendered::Failed(error) = &assessment.rendered else {
+            panic!("expected a failure")
+        };
+        assert!(matches!(error, Error::Select { .. }));
+        assert!(error.to_string().contains("`g.short`"), "{error}");
+        assert!(assert_some!(error.hint()).contains("--drafts"));
+    }
 }

@@ -17,6 +17,7 @@ use crate::error::{Error, ReadInputSnafu};
 use crate::model::options::OutputFormat;
 use crate::output::{Overwrite, Planned, WriteMode, Writer};
 use crate::pipeline::{Assessment, Rendered, Session, Skip};
+use crate::select::Selection;
 use crate::typeset::fonts::FontResolution;
 
 use super::report::FontsLine;
@@ -157,7 +158,9 @@ impl<'a> Run<'a> {
         if self.format == OutputFormat::Human {
             out.report_line(&self.shown(file));
         }
-        let assessment = self.session.assess(file, &text, &self.args.render);
+        let assessment = self
+            .session
+            .assess(file, &text, &self.args.render, &Selection::default());
         let Some(fixer) = &self.fixer else {
             return self.report(file, &text, &assessment, Fixing::Off, out);
         };
@@ -169,7 +172,9 @@ impl<'a> Run<'a> {
                 Outcome::Failure
             }
             Fix::Done(fixed) => {
-                let after = self.session.assess(file, &fixed.text, &self.args.render);
+                let after = self
+                    .session
+                    .assess(file, &fixed.text, &self.args.render, &Selection::default());
                 self.report(file, &fixed.text, &after, Fixing::Applied, out)
             }
         }
@@ -249,7 +254,10 @@ impl<'a> Run<'a> {
             }
             Rendered::Failed(error) => {
                 add_failure(error, &mut sources, &mut findings, &mut operational);
-                setup_facts.push("fonts: not resolved (the style failed)".into());
+                setup_facts.push(match error {
+                    Error::Select { .. } => "fonts: not resolved (the selection failed)".into(),
+                    _ => "fonts: not resolved (the style failed)".into(),
+                });
             }
             Rendered::LayoutFailed { compiled, error } => {
                 for style_file in compiled.sources() {

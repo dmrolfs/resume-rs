@@ -17,6 +17,7 @@ use crate::markdown::Parsed;
 use crate::model::options::OutputFormat;
 use crate::output::{Overwrite, Planned, WriteMode, Writer, Written};
 use crate::pipeline::{Rendered, Session, Skip};
+use crate::select::Selection;
 
 /// The result being presented, including an operational failure after findings were computed.
 struct BuildResult<'a> {
@@ -134,7 +135,7 @@ impl<'a> Job<'a> {
 
     fn attempt(&self, file: &Path, started: Instant, out: &mut Reporter<'_, '_>) -> Result<BuiltFile, Error> {
         let text = fs::read_to_string(file).context(ReadInputSnafu { path: file })?;
-        let assessment = self.session.assess(file, &text, self.render);
+        let assessment = self.session.assess(file, &text, self.render, &Selection::default());
         let mut sources = out.sources();
         sources.insert(file, &text);
         let parsed = &assessment.parsed;

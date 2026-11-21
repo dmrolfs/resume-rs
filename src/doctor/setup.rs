@@ -40,7 +40,8 @@ pub fn finding_of(error: &Error) -> Option<Diagnostic> {
         | Error::SpawnTypesetThread { .. }
         | Error::TypesetPanicked { .. }
         | Error::Compile { .. }
-        | Error::ExportPdf { .. } => return None,
+        | Error::ExportPdf { .. }
+        | Error::Select { .. } => return None,
     };
     Some(Diagnostic {
         severity: code.default_severity(),
