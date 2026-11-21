@@ -1,0 +1,7 @@
+# ABOUTME: A spec that extends `principal`, which exists, and `ai-platfrom`, a misspelling of a profile that does not.
+# ABOUTME: Expected: MissingProfile naming `ai-platfrom`, the directory searched, and the available names.
+
+extends = ["principal", "ai-platfrom"]
+
+[build]
+content = "../../baseline.md"

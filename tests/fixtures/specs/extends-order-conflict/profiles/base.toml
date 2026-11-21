@@ -1,0 +1,5 @@
+# ABOUTME: A profile that b extends; the spec lists it after b, which contradicts b's own extends.
+# ABOUTME: See extends-order-conflict/positions/acme.toml.
+
+[select]
+tags = ["leadership"]

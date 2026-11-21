@@ -1,0 +1,23 @@
+# ABOUTME: A position spec that extends two profiles and adds its own choices, the merge worked example.
+# ABOUTME: Expected result: tags {ai, iceberg, leadership, platform}; prefer [short, business, technical]; see ../../README.md.
+
+extends = ["principal", "ai-platform"]
+
+[position]
+company = "Acme"
+title = "Principal Architect, AI Platform"
+level = "principal"
+domain = "AI platform"
+audience = "technical"
+emphasis = { business = "low", org = "medium", technical = "high" }
+date = 2026-11-19
+posting = "https://example.com/jobs/123"
+
+[build]
+content = "../../baseline.md"
+style = "mono"
+
+[select]
+tags = ["iceberg"]
+prefer = ["short"]
+pick = { summary = "acme" }

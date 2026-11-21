@@ -1,0 +1,10 @@
+# ABOUTME: A profile for principal-level positions: leadership tags, technical wording, the long gateway wording.
+# ABOUTME: One of two profiles that two-profiles/positions/acme.toml extends.
+
+[build]
+style = "pragmatic"
+
+[select]
+tags = ["leadership"]
+prefer = ["technical", "short"]
+pick = { gateway = "long" }

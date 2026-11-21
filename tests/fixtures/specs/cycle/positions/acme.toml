@@ -1,0 +1,7 @@
+# ABOUTME: A spec whose profile chain contains a cycle; resolving it must fail with the cycle path.
+# ABOUTME: The spec itself is valid.
+
+extends = ["a"]
+
+[build]
+content = "../../baseline.md"

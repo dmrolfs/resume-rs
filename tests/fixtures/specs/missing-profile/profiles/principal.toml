@@ -1,0 +1,5 @@
+# ABOUTME: The only profile that exists beside missing-profile/positions/acme.toml; the spec names another one too.
+# ABOUTME: The error lists this one under the available profiles.
+
+[select]
+tags = ["leadership"]

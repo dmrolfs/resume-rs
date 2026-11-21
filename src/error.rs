@@ -120,6 +120,10 @@ pub enum Error {
     #[snafu(display("{} changed while it was being fixed", path.display()))]
     InputChanged { path: PathBuf },
 
+    /// A position spec or a profile could not be loaded or resolved.
+    #[snafu(display("{source}"))]
+    Spec { source: Box<crate::spec::SpecError> },
+
     /// The operating system would not report changes to a path, so `watch` cannot see edits there.
     #[snafu(display("cannot watch {} for changes: {source}", path.display()))]
     Watch { path: PathBuf, source: notify::Error },
@@ -156,6 +160,7 @@ impl Error {
             Self::OutputExists { .. } => Some("use --force to replace it"),
             Self::InputChanged { .. } => Some("the file was edited meanwhile; nothing was changed, run doctor again"),
             Self::Select { .. } => Some("pick a ready wording, finish the draft, or build with --drafts to preview it"),
+            Self::Spec { source } => source.hint(),
             _ => None,
         }
     }
@@ -185,6 +190,26 @@ mod tests {
 
     fn io() -> std::io::Error {
         std::io::Error::other("the disk said no")
+    }
+
+    #[test]
+    fn a_spec_error_prints_as_itself_and_lends_its_hint() {
+        let inner = crate::spec::SpecError::MissingProfile {
+            at: crate::spec::Located {
+                path: PathBuf::from("positions/acme.toml").into(),
+                line: 4,
+                column: 1,
+            },
+            name: "nope".into(),
+            searched: PathBuf::from("profiles"),
+            available: vec!["principal".into()],
+        };
+        let text = inner.to_string();
+        let error = Error::Spec {
+            source: Box::new(inner),
+        };
+        assert_eq!(error.to_string(), text);
+        assert_some!(error.hint());
     }
 
     #[test]

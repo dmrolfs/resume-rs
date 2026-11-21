@@ -30,6 +30,7 @@ pub fn finding_of(error: &Error) -> Option<Diagnostic> {
         Error::ReadInput { .. }
         | Error::InputUtf8 { .. }
         | Error::InputChanged { .. }
+        | Error::Spec { .. }
         | Error::Watch { .. }
         | Error::WatchInput { .. }
         | Error::SerializeResume { .. }

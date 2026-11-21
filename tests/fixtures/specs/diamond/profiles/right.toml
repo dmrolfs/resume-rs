@@ -1,0 +1,8 @@
+# ABOUTME: The other arm of the diamond: extends base and overrides the gateway pick differently from left.
+# ABOUTME: Expected winner of pick.gateway: long, declared here.
+
+extends = ["base"]
+
+[select]
+prefer = ["business"]
+pick = { gateway = "long" }

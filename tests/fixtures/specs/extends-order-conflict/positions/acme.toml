@@ -1,0 +1,7 @@
+# ABOUTME: A spec that lists `b` before `base` although b extends base: the two orders contradict each other.
+# ABOUTME: Expected: ExtendsOrderConflict naming b and base; `extends = ["base", "b"]` would be accepted.
+
+extends = ["b", "base"]
+
+[build]
+content = "../../baseline.md"

@@ -19,6 +19,7 @@ pub mod model;
 pub mod output;
 pub mod pipeline;
 pub mod select;
+pub mod spec;
 pub mod style;
 pub mod typeset;
 pub mod watch;

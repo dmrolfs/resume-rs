@@ -1,0 +1,7 @@
+# ABOUTME: A profile that extends base, so b is more specific than base.
+# ABOUTME: The spec lists `b, base`, which says the opposite.
+
+extends = ["base"]
+
+[select]
+tags = ["ai"]

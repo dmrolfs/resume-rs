@@ -14,8 +14,8 @@ use strum::{AsRefStr, Display, EnumString};
 
 pub use self::code::{Advice, Category, DiagnosticCode};
 pub use self::render::{
-    ColorEnv, RenderError, Sources, Summary, display_text, emit_human, emit_human_with_notes, emit_json, resolve_color,
-    termcolor,
+    ColorEnv, RenderError, Sources, Summary, display_text, emit_human, emit_human_with_notes, emit_json,
+    has_unsafe_characters, resolve_color, termcolor,
 };
 
 /// How serious a finding is; ordered so `Error` is the greatest.

@@ -1,0 +1,4 @@
+# ABOUTME: Profile c extends a, which closes the cycle a -> b -> c -> a.
+# ABOUTME: See cycle/profiles/a.toml.
+
+extends = ["a"]

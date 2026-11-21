@@ -1,0 +1,7 @@
+# ABOUTME: A spec that extends left and right, which both extend base: a diamond, not a cycle.
+# ABOUTME: Expected: no error; base appears once; prefer is [business, short, technical].
+
+extends = ["left", "right"]
+
+[build]
+content = "../../baseline.md"

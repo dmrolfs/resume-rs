@@ -1,0 +1,4 @@
+# ABOUTME: Profile a extends b, which extends c, which extends a: a cycle.
+# ABOUTME: Expected: Cycle printed as `a -> b -> c -> a`.
+
+extends = ["b"]
