@@ -6,7 +6,7 @@ use crate::{
     cli::{Cli, LetterArgs},
     diagnostics::{Diagnostic, DiagnosticCode, Severity, SourceKind, Span},
     error::{Error, ReadInputSnafu},
-    letter::{resolve, to_plain},
+    letter::{SelectedLetter, resolve, to_plain},
     markdown::{MAX_INPUT_BYTES, parse_letter},
 };
 use snafu::ResultExt;
@@ -118,7 +118,13 @@ fn prepare(
         return Err(CommandFailure::Findings);
     };
     let settings = args.effective();
-    let letter = resolve(source.into(), &settings.fields, &args.file).map_err(|findings| {
+    // Until letter selection exists (rsm-vqr.2) an annotated letter cannot be built; the located error is rsm-5q1's.
+    let selected = SelectedLetter::try_from(source).map_err(|refused| {
+        out.line(&format!("error: {refused}"));
+        out.line("error: no letter printed");
+        CommandFailure::Findings
+    })?;
+    let letter = resolve(selected, &settings.fields, &args.file).map_err(|findings| {
         out.diagnostics(&sources, &findings.iter().collect::<Vec<_>>());
         out.line("error: no letter printed");
         CommandFailure::Findings
