@@ -64,6 +64,12 @@ pub enum Error {
         source: typst::diag::FileError,
     },
 
+    #[snafu(display("style has no letter entry {}; use a style with letter.typ (such as pragmatic)", path.display()))]
+    StyleMissingLetter { path: PathBuf },
+
+    #[snafu(display("cannot serialize the letter for the style"))]
+    SerializeLetter { source: serde_json::Error },
+
     #[snafu(display("cannot serialize the resume for the style: {source}"))]
     SerializeResume { source: serde_json::Error },
 

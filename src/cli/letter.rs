@@ -13,9 +13,12 @@ pub struct LetterArgs {
     /// The Markdown letter to print.
     #[arg(value_name = "FILE")]
     pub file: PathBuf,
-    /// Product format; only text is available until letter PDF support lands.
+    /// Product format; resolves to text when omitted.
     #[arg(long, value_enum)]
     pub output_format: Option<LetterOutput>,
+    /// PDF directory; resolves to out when omitted, ignored for text.
+    #[arg(short, long, value_name = "DIR")]
+    pub out: Option<PathBuf>,
     /// Company field, inserted literally into selected text.
     #[arg(long,value_parser=parse_field)]
     pub company: Option<FieldValue>,
@@ -70,14 +73,11 @@ pub struct LetterTextSettings {
 }
 impl LetterArgs {
     /// Checks value contradictions without filesystem or renderer access, including direct library callers.
-    pub(crate) fn validate_text(&self, format: OutputFormat) -> Result<(), &'static str> {
+    pub(crate) fn validate(&self, format: OutputFormat) -> Result<(), &'static str> {
         if self.render.fonts == Some(FontsMode::Bundled) && !self.render.font_path.is_empty() {
             return Err("--font-path cannot be used with --fonts bundled");
         }
-        if self.output_format.unwrap_or_default() != LetterOutput::Text {
-            return Err("letter PDF output is not available yet; use --output-format text");
-        }
-        if format == OutputFormat::Json {
+        if format == OutputFormat::Json && self.output_format.unwrap_or_default() != LetterOutput::Pdf {
             return Err("--format json cannot share stdout with letter text");
         }
         if self.length_unit.is_some() && self.max_length.is_none() {
@@ -85,6 +85,27 @@ impl LetterArgs {
         }
         Ok(())
     }
+    /// Resolves render values only when PDF is requested; original options remain untouched.
+    #[must_use]
+    pub fn effective_render(&self) -> super::RenderArgs {
+        super::RenderArgs {
+            style: self
+                .render
+                .style
+                .clone()
+                .unwrap_or_else(|| StyleName::try_new("pragmatic").expect("valid built-in name")),
+            styles_dir: self.render.styles_dir.clone(),
+            paper: self.render.paper.unwrap_or_default(),
+            max_pages: Some(
+                self.render
+                    .max_pages
+                    .unwrap_or_else(|| PageLimit::try_new(1).expect("one page is valid")),
+            ),
+            fonts: self.render.fonts.unwrap_or_default(),
+            font_path: self.render.font_path.clone(),
+        }
+    }
+
     /// Resolves defaults without changing the original explicit options.
     #[must_use]
     pub fn effective(&self) -> LetterTextSettings {

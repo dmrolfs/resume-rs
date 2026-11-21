@@ -1,5 +1,5 @@
 //! ABOUTME: Text-first letter command, with validation and length gates before stdout delivery.
-//! ABOUTME: No style/font/Typst setup is reached; every product write and flush failure fails the command.
+//! ABOUTME: PDF modes commit only after all checks, before text; text mode never prepares a renderer.
 
 use super::{Env, Io, Outcome, emit::Reporter};
 use crate::{
@@ -13,13 +13,35 @@ use snafu::ResultExt;
 use std::io::Read;
 
 pub(super) fn run(cli: &Cli, args: &LetterArgs, env: &Env, io: &mut Io<'_>) -> Outcome {
-    if let Err(message) = args.validate_text(cli.format) {
+    if let Err(message) = args.validate(cli.format) {
         Reporter::new(cli.format, &env.cwd, io).line(&format!("error: {message}"));
         return Outcome::Failure;
     }
     let mut reporter = Reporter::new(cli.format, &env.cwd, io);
-    match prepare(cli, args, &mut reporter) {
-        Ok(Some(text)) => {
+    match prepare(args, &mut reporter) {
+        Ok((letter, text)) => {
+            let mode = args.output_format.unwrap_or_default();
+            let pdf = if mode != crate::letter::LetterOutput::Text {
+                match super::letter_pdf::render(cli, args, env, &letter, &mut reporter) {
+                    Ok(path) => Some(path),
+                    Err(()) => return Outcome::Failure,
+                }
+            } else {
+                None
+            };
+            if cli.dry_run {
+                if mode != crate::letter::LetterOutput::Pdf {
+                    reporter.line(&format!(
+                        "ok would print letter: {} utf16, {} words; no output written",
+                        text.counts().utf16,
+                        text.counts().words
+                    ));
+                }
+                return Outcome::Success;
+            }
+            if mode == crate::letter::LetterOutput::Pdf {
+                return Outcome::Success;
+            }
             let counts = text.counts();
             // Observe flush failure here, before the shared dispatcher can treat a closed pipe as success.
             if let Err(error) = io
@@ -28,6 +50,9 @@ pub(super) fn run(cli: &Cli, args: &LetterArgs, env: &Env, io: &mut Io<'_>) -> O
                 .and_then(|()| io.stdout.flush())
             {
                 let _ = writeln!(io.stderr, "error: letter not fully written to stdout: {error}");
+                if let Some(path) = pdf {
+                    let _ = writeln!(io.stderr, "PDF remains at {}", path.display());
+                }
                 return Outcome::Failure;
             }
             Reporter::new(cli.format, &env.cwd, io).line(&format!(
@@ -36,7 +61,6 @@ pub(super) fn run(cli: &Cli, args: &LetterArgs, env: &Env, io: &mut Io<'_>) -> O
             ));
             Outcome::Success
         }
-        Ok(None) => Outcome::Success,
         Err(CommandFailure::Findings) => Outcome::Failure,
         Err(CommandFailure::Read(error)) => {
             reporter.error(&error);
@@ -51,10 +75,9 @@ enum CommandFailure {
 }
 
 fn prepare(
-    cli: &Cli,
     args: &LetterArgs,
     out: &mut Reporter<'_, '_>,
-) -> Result<Option<crate::letter::PlainLetter>, CommandFailure> {
+) -> Result<(crate::letter::Letter, crate::letter::PlainLetter), CommandFailure> {
     // Judge the byte limit before decoding: a bounded prefix can end inside a UTF-8 character.
     let file = std::fs::File::open(&args.file)
         .context(ReadInputSnafu { path: &args.file })
@@ -120,14 +143,5 @@ fn prepare(
         out.line("error: no letter printed");
         return Err(CommandFailure::Findings);
     }
-    if cli.dry_run {
-        let count = plain.counts();
-        out.line(&format!(
-            "ok would print letter: {} utf16, {} words; no output written",
-            count.utf16, count.words
-        ));
-        Ok(None)
-    } else {
-        Ok(Some(plain))
-    }
+    Ok((letter, plain))
 }

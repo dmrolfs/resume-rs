@@ -84,6 +84,29 @@ impl LayoutReport {
         }
     }
 
+    /// Measures letter pages and fonts without resume heading or sparse-page checks.
+    ///
+    /// # Errors
+    /// Malformed font-role metadata in a custom style.
+    pub fn letter(compiled: &Compiled, fonts: &FontSet, max_pages: PageLimit) -> Result<Self, Error> {
+        let pages = compiled.geometry();
+        let resolutions = fonts.resolve(&compiled.font_roles()?);
+        let mut diagnostics = Vec::new();
+        diagnostics.extend(page_limit(pages.len(), Some(max_pages)));
+        diagnostics.extend(overflows(&pages, &[]).into_iter().map(|mut finding| {
+            finding.hints =
+                vec!["shorten or split the letter paragraph; an unbreakable block must fit on one page".to_owned()];
+            finding
+        }));
+        diagnostics.extend(resolutions.iter().filter_map(|font| font.diagnostic(fonts.mode())));
+        Ok(Self {
+            pages: pages.len(),
+            roles: Vec::new(),
+            fonts: resolutions,
+            diagnostics,
+        })
+    }
+
     /// Measures `compiled` and runs the checks.
     ///
     /// # Errors

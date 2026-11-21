@@ -405,6 +405,7 @@ Every style is built from the same components, in `styles/lib/components.typ`. T
 | `render-block` | One block of a section. |
 | `render-sections` | Every section of the resume, with its blocks. Most styles end with this. |
 | `footer` | The footer: the name on the left, `Page N of M` on the right. |
+| `letter-document` | Letter schema/kind checks, metadata, page and text settings, and font-role reporting. |
 | `resume-document` | The page setup, text settings, and rules every style shares. |
 
 ### Writing a style
@@ -463,7 +464,8 @@ resume letter Cover.md --company Acme --title Architect --max-length 2000 --leng
 | Option | Values and default | What it does |
 |---|---|---|
 | `<FILE>` | one Markdown letter | The letter to validate and print. |
-| `--output-format <OUTPUT_FORMAT>` | `text`; none at argument parsing | Product format; `pdf` and `both` are reserved and currently fail with a usage error. |
+| `--output-format <OUTPUT_FORMAT>` | `text`, `pdf` or `both`; none at argument parsing | Product format; text goes to stdout, PDF to a file. |
+| `-o, --out <DIR>` | none at argument parsing | PDF directory, ignored for text; resolves to `out`. |
 | `--company <COMPANY>` | none | Literal company field. |
 | `--title <TITLE>` | none | Literal position title field. |
 | `--recipient <RECIPIENT>` | none | Literal recipient field. |
@@ -487,6 +489,25 @@ A failed stdout write or flush, including a closed pipe, returns exit 1 for this
 Partial delivery is possible on an output failure, so check the exit status before sending a letter.
 No `.txt` file is created automatically; shell redirection can create or truncate a destination before the command starts.
 Website counters may differ from these exact byte, Unicode scalar, UTF-16 and whitespace-word counts.
+
+PDF modes use the `pragmatic` style, `letter` paper, `auto` fonts, and a one-page limit unless explicitly overridden.
+The file is `<stem>-letter.pdf` under `--out`, avoiding the usual resume filename.
+A configured text limit also checks PDF-only builds.
+All content and page checks finish before replacing a PDF; unlike `build`, a letter that exceeds its page limit is not saved.
+In `both` mode the PDF is committed first, then text is printed; a later stdout failure leaves that PDF in place and reports it.
+JSON diagnostics are allowed with PDF-only output.
+
+The pragmatic PDF includes the name/contact header, optional date (for example `February 29, 2028`), recipient/company, and authored letter text.
+No date appears when omitted; the clock is never consulted.
+Metadata uses title `<Name> - Cover letter` and author `<Name>`, not company or position fields.
+Only pragmatic supplies a letter entry initially; `resume styles` marks letter capability, and `export-style` includes `letter.typ`.
+Custom styles keep required `style.typ` for resumes and optionally add `letter.typ`, reading schema 1 with kind `letter` from `/letter.json`.
+Each compile reserves both payload paths and refuses the other document kind's payload, even if a file exists on disk.
+`resume export` still previews resumes only.
+
+```sh
+resume letter Cover.md --company Acme --title Architect --recipient Team --output-format both --fonts bundled
+```
 
 ### resume build
 

@@ -85,6 +85,32 @@ impl Typesetter {
     pub fn compile(&self, resume: &Resume, style: &StyleSource, options: RenderOptions) -> Result<Compiled, Error> {
         let json = resume_json(resume, false)?;
         let world = ResumeWorld::new(style.clone(), Arc::clone(&self.fonts), json, options.paper);
+        Self::compile_world(world)
+    }
+
+    /// Compiles a letter using the style's optional `letter.typ` entry.
+    ///
+    /// # Errors
+    /// Missing letter capability, serialization, thread or Typst compile errors.
+    pub fn compile_letter(
+        &self,
+        letter: &crate::letter::Letter,
+        style: &StyleSource,
+        options: RenderOptions,
+    ) -> Result<Compiled, Error> {
+        style.require_letter()?;
+        let json = serde_json::to_vec(letter).context(crate::error::SerializeLetterSnafu)?;
+        let world = ResumeWorld::for_kind(
+            world::DocumentKind::Letter,
+            style.clone(),
+            Arc::clone(&self.fonts),
+            json,
+            options.paper,
+        );
+        Self::compile_world(world)
+    }
+
+    fn compile_world(world: ResumeWorld) -> Result<Compiled, Error> {
         let Warned { output, warnings } = isolated(Stage::Compile, || typst::compile::<PagedDocument>(&world))?;
         let sources = world.served_sources();
         match output {

@@ -325,6 +325,24 @@
   for blk in section.blocks { render-block(theme, blk, headings: headings) }
 }
 
+// Letters share the visual theme but not resume probes, footer or schema.
+#let letter-document(theme, letter, body) = {
+  assert(letter.schema == 1, message: "this style reads letter schema 1")
+  assert(letter.kind == "letter", message: "this style requires kind letter")
+  set document(title: letter.name + " - Cover letter", author: letter.name)
+  set page(paper: sys.inputs.at("paper", default: "us-letter"), margin: theme.margin)
+  set text(
+    font: font-stack(theme.fonts.body), size: theme.size.body, fill: theme.color.text,
+    lang: "en", region: "US", hyphenate: false, ligatures: false,
+    top-edge: theme.line.top, bottom-edge: theme.line.bottom,
+  )
+  set par(leading: theme.line.leading, spacing: theme.spacing.paragraph, justify: false)
+  show link: it => text(fill: theme.color.link, underline(it))
+  show raw: set text(font: font-stack(theme.fonts.mono), size: 0.92em)
+  [#metadata(theme.fonts) <resume-fonts>]
+  body
+}
+
 // ---- page furniture -------------------------------------------------------------------------------
 
 // The footer: the name on the left, "Page N of M" on the right.

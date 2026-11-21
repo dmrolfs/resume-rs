@@ -281,7 +281,7 @@ impl Cli {
 
     fn validate(&self) -> Result<(), clap::Error> {
         match &self.command {
-            Command::Letter(args) => args.validate_text(self.format).map_err(usage_error),
+            Command::Letter(args) => args.validate(self.format).map_err(usage_error),
             Command::Build(build) => {
                 build.render.validate()?;
                 build.validate_outputs()

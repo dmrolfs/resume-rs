@@ -403,6 +403,21 @@ The owner may change heading names, supported placeholder keys, utf16 default, a
 No unresolved question blocks writing the plan; implementation should confirm those author-facing choices at claim time.
 One real owner-authored cover letter and two target forms will validate ergonomics; this is explicit release evidence, not a claimed result.
 
+## Approved PDF defaults and implementation, rsm-5q1.5
+
+The owner approved these choices after the D5 design review:
+- `--out DIR` resolves to `out`, with `<input-stem>-letter.pdf` to avoid the usual resume filename.
+- Explicit ISO dates display in US long form; absent dates produce no date line.
+- PDF metadata title is `<Name> - Cover letter`, author is `<Name>`; position fields never supply metadata.
+- Configured canonical text limits apply to every output mode, including PDF-only.
+
+Letter rendering uses a closed document-kind identity in the existing world.
+Both `/resume.json` and `/letter.json` are reserved: the active payload is in memory, the other is unavailable even if present on disk.
+The letter command resolves its optional values into existing shared render settings, reusing `Session::open` without a new setup abstraction.
+Letter page reporting uses the existing geometry and font checks without resume role or sparse-page heuristics.
+Geometry retains the existing measurement limits; it is not a guarantee about every transformed glyph in an arbitrary custom style.
+`resume export` remains resume-only; `export-style` includes the optional letter entry.
+
 ## Final review disposition
 
 Oracle's final review (`history/cover-letter-oracle-final-review.md`, COMPLETE) found seven actionable filing corrections.

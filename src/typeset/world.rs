@@ -20,6 +20,35 @@ use crate::typeset::fonts::FontSet;
 /// The virtual path every style reads the resume from.
 pub(crate) const RESUME_JSON: &str = "/resume.json";
 
+pub(crate) const LETTER_JSON: &str = "/letter.json";
+
+/// Entry and payload identity travel together; no caller can mix their document kinds.
+#[derive(Debug, Clone, Copy, strum::Display)]
+#[strum(serialize_all = "kebab-case")]
+pub(crate) enum DocumentKind {
+    Resume,
+    Letter,
+}
+
+impl DocumentKind {
+    pub(crate) fn entry(self, style: &StyleSource) -> VirtualPath {
+        match self {
+            Self::Resume => style.main_path(),
+            Self::Letter => style.letter_path(),
+        }
+    }
+    fn payload(self) -> &'static str {
+        match self {
+            Self::Resume => RESUME_JSON,
+            Self::Letter => LETTER_JSON,
+        }
+    }
+}
+
+fn reserved(id: FileId) -> bool {
+    matches!(id.vpath().get_with_slash(), RESUME_JSON | LETTER_JSON)
+}
+
 const PACKAGES_UNSUPPORTED: &str = "packages are not supported; copy the file into the style directory";
 
 /// The UTF-8 byte order mark that Windows editors prepend; Typst's own CLI strips it.
@@ -44,6 +73,16 @@ pub(crate) struct ResumeWorld {
 
 impl ResumeWorld {
     pub(crate) fn new(style: StyleSource, fonts: Arc<FontSet>, resume_json: Vec<u8>, paper: Paper) -> Self {
+        Self::for_kind(DocumentKind::Resume, style, fonts, resume_json, paper)
+    }
+
+    pub(crate) fn for_kind(
+        kind: DocumentKind,
+        style: StyleSource,
+        fonts: Arc<FontSet>,
+        resume_json: Vec<u8>,
+        paper: Paper,
+    ) -> Self {
         let inputs = Dict::from_iter([
             (Str::from("paper"), Value::Str(Str::from(paper.as_ref()))),
             (Str::from("fonts"), Value::Array(installed_families(&fonts))),
@@ -51,8 +90,8 @@ impl ResumeWorld {
         Self {
             library: LazyHash::new(Library::builder().with_inputs(inputs).build()),
             fonts,
-            main: project_file(style.main_path()),
-            resume_id: project_file(VirtualPath::new(RESUME_JSON).expect("the resume path is a valid virtual path")),
+            main: project_file(kind.entry(&style)),
+            resume_id: project_file(VirtualPath::new(kind.payload()).expect("document payload paths are valid")),
             resume_json: Bytes::new(resume_json),
             style,
             files: Mutex::new(HashMap::new()),
@@ -62,7 +101,7 @@ impl ResumeWorld {
 
     /// The path to show users for a file, or `None` for the in-memory resume and package files.
     pub(crate) fn display_path(&self, id: FileId) -> Option<PathBuf> {
-        (id != self.resume_id && matches!(id.root(), VirtualRoot::Project)).then(|| self.style.display_path(id.vpath()))
+        (!reserved(id) && matches!(id.root(), VirtualRoot::Project)).then(|| self.style.display_path(id.vpath()))
     }
 
     /// The text of every style source file served so far, in display-path order.
@@ -85,6 +124,9 @@ impl ResumeWorld {
         require_project_file(id)?;
         if id == self.resume_id {
             return Ok(self.resume_json.clone());
+        }
+        if reserved(id) {
+            return Err(FileError::NotFound(PathBuf::from(id.vpath().get_with_slash())));
         }
         if let Some(known) = lock(&self.files).get(&id) {
             return known.clone();
@@ -152,7 +194,7 @@ impl World for ResumeWorld {
 
     fn source(&self, id: FileId) -> FileResult<Source> {
         require_project_file(id)?;
-        if id == self.resume_id {
+        if reserved(id) {
             return Err(FileError::NotSource);
         }
         if let Some(cached) = lock(&self.sources).get(&id) {
@@ -248,6 +290,34 @@ mod tests {
                 "tex gyre pagella"
             ]
         );
+    }
+
+    #[test]
+    fn both_payload_paths_are_reserved_across_document_kinds() {
+        let tmp = assert_ok!(tempfile::tempdir());
+        assert_ok!(std::fs::create_dir(tmp.path().join("s")));
+        for file in ["s/style.typ", "s/letter.typ", "resume.json", "letter.json"] {
+            assert_ok!(std::fs::write(tmp.path().join(file), "stale private content"));
+        }
+        for (kind, own, other, entry) in [
+            (DocumentKind::Resume, RESUME_JSON, LETTER_JSON, "/s/style.typ"),
+            (DocumentKind::Letter, LETTER_JSON, RESUME_JSON, "/s/letter.typ"),
+        ] {
+            let world = ResumeWorld::for_kind(
+                kind,
+                style(tmp.path(), "s"),
+                Arc::new(FontSet::bundled()),
+                b"current".to_vec(),
+                Paper::Letter,
+            );
+            assert_eq!(world.main().vpath().get_with_slash(), entry);
+            assert_eq!(assert_ok!(world.file(id(own))).as_slice(), b"current");
+            assert!(matches!(assert_err!(world.file(id(other))), FileError::NotFound(_)));
+            for payload in [own, other] {
+                assert_none!(world.display_path(id(payload)));
+                assert!(matches!(assert_err!(world.source(id(payload))), FileError::NotSource));
+            }
+        }
     }
 
     #[test]

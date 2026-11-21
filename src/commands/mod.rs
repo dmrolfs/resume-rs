@@ -7,6 +7,7 @@ mod emit;
 mod export;
 mod export_style;
 mod letter;
+mod letter_pdf;
 mod licenses;
 pub mod report;
 mod styles;

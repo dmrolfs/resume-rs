@@ -33,6 +33,8 @@ pub fn finding_of(error: &Error) -> Option<Diagnostic> {
         | Error::Watch { .. }
         | Error::WatchInput { .. }
         | Error::SerializeResume { .. }
+        | Error::SerializeLetter { .. }
+        | Error::StyleMissingLetter { .. }
         | Error::FontScanPanicked { .. }
         | Error::Probe { .. }
         | Error::SpawnTypesetThread { .. }

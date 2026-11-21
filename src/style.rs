@@ -81,7 +81,11 @@ pub fn catalog(styles_dir: Option<&Path>) -> Result<Vec<StyleEntry>, Error> {
         .map(|name| StyleEntry {
             name: name.clone(),
             location: StyleLocation::BuiltIn,
-            note: None,
+            note: StyleName::try_new(name.as_str())
+                .ok()
+                .and_then(|name| StyleSource::embedded(&BUILT_IN_STYLES, name).ok())
+                .filter(|style| style.require_letter().is_ok())
+                .map(|_| "letter PDF".to_owned()),
         })
         .collect();
     if let Some(root) = styles_dir {
@@ -154,7 +158,18 @@ fn directory_entries(root: &Path, built_in: &[String]) -> Result<Vec<StyleEntry>
         };
         if path.is_dir() && is_style_dir(&name) {
             found.push(StyleEntry {
-                note: directory_note(&path, &name, built_in),
+                note: {
+                    let note = directory_note(&path, &name, built_in);
+                    let letter = StyleName::try_new(name.as_str())
+                        .ok()
+                        .and_then(|name| StyleSource::directory(root, name).ok())
+                        .is_some_and(|style| style.require_letter().is_ok());
+                    match (note, letter) {
+                        (Some(note), true) => Some(format!("{note}; letter PDF")),
+                        (None, true) => Some("letter PDF".to_owned()),
+                        (note, false) => note,
+                    }
+                },
                 name,
                 location: StyleLocation::Directory(path),
             });
@@ -325,6 +340,31 @@ impl StyleSource {
     pub fn main_path(&self) -> VirtualPath {
         VirtualPath::new(format!("/{}/{MAIN_FILE}", self.name.as_ref() as &str))
             .expect("a validated style name makes a valid virtual path")
+    }
+
+    /// The optional letter entry, distinct from the required resume entry.
+    #[must_use]
+    pub fn letter_path(&self) -> VirtualPath {
+        VirtualPath::new(format!("/{}/letter.typ", self.name.as_ref() as &str))
+            .expect("a validated style name makes a valid virtual path")
+    }
+
+    /// Requires a readable letter entry without weakening sandbox checks.
+    ///
+    /// # Errors
+    /// Missing capability, or a sandbox/file read failure.
+    pub fn require_letter(&self) -> Result<(), Error> {
+        let path = self.letter_path();
+        match self.read(&path) {
+            Ok(_) => Ok(()),
+            Err(FileError::NotFound(_)) => crate::error::StyleMissingLetterSnafu {
+                path: self.display_path(&path),
+            }
+            .fail(),
+            Err(source) => Err(source).context(StyleFileSnafu {
+                path: self.display_path(&path),
+            }),
+        }
     }
 
     /// Reads one file by virtual path.
@@ -840,11 +880,8 @@ mod tests {
         let entries = assert_ok!(catalog(None));
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, built_in_names());
-        assert!(
-            entries
-                .iter()
-                .all(|e| e.location == StyleLocation::BuiltIn && e.note.is_none())
-        );
+        assert!(entries.iter().all(|e| e.location == StyleLocation::BuiltIn
+            && e.note.as_deref() == (e.name == "pragmatic").then_some("letter PDF")));
     }
 
     #[test]
@@ -854,7 +891,10 @@ mod tests {
         let summary: Vec<(&str, Option<&str>)> = entries.iter().map(|e| (e.name.as_str(), e.note.as_deref())).collect();
         // The built-in styles come first; the directory's entries follow, with its `pragmatic` overriding.
         let built_in = built_in_names();
-        let mut expected: Vec<(&str, Option<&str>)> = built_in.iter().map(|name| (name.as_str(), None)).collect();
+        let mut expected: Vec<(&str, Option<&str>)> = built_in
+            .iter()
+            .map(|name| (name.as_str(), (name == "pragmatic").then_some("letter PDF")))
+            .collect();
         expected.extend([
             ("Bad Name", Some("invalid: not a valid style name")),
             ("half", Some("invalid: no style.typ")),

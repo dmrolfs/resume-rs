@@ -139,8 +139,7 @@ fn length_gate_accepts_exact_limit_and_rejects_zero_for_every_unit() {
 fn usage_errors_precede_file_reads_in_binary_and_library() {
     for extra in [
         vec!["--format", "json"],
-        vec!["--output-format", "pdf"],
-        vec!["--output-format", "both"],
+        vec!["--output-format", "both", "--format", "json"],
         vec!["--length-unit", "words"],
         vec!["--fonts", "bundled", "--font-path", "x"],
     ] {
@@ -380,7 +379,7 @@ fn existing_resume_only_style_and_zero_write_are_handled() {
     assert_cmd::Command::new(env!("CARGO_BIN_EXE_resume"))
         .args(["letter", "missing.md", "--output-format", "pdf"])
         .assert()
-        .code(2)
+        .code(1)
         .stdout("")
-        .stderr(predicates::str::contains("not available yet"));
+        .stderr(predicates::str::contains("cannot read"));
 }
