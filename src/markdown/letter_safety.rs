@@ -22,15 +22,11 @@ pub(super) fn inspect(text: &str, base: usize, owned: &HashSet<usize>, sink: &mu
     for (event, range) in parser.into_offset_iter() {
         match event {
             Event::Start(Tag::HtmlBlock) => html = tree::TextNode::default(),
-            Event::Html(part) => {
-                let verbatim = text.get(range.clone()) == Some(part.as_ref());
-                html.push(&part, range.start + base..range.end + base, verbatim);
-            }
+            Event::Html(part) => push_html(&mut html, &part, text, range, base),
             Event::End(TagEnd::HtmlBlock) => comments(&html, owned, sink),
             Event::InlineHtml(part) => {
                 let mut node = tree::TextNode::default();
-                let verbatim = text.get(range.clone()) == Some(part.as_ref());
-                node.push(&part, range.start + base..range.end + base, verbatim);
+                push_html(&mut node, &part, text, range, base);
                 comments(&node, owned, sink);
             }
             Event::Start(Tag::Link { dest_url, title, .. }) if (dest_url.contains("{{") || title.contains("{{")) => {
@@ -52,27 +48,31 @@ pub(super) fn report_position(range: Range<usize>, sink: &mut Sink<'_>) {
     );
 }
 
+/// Adds one HTML event to `node`, mapped to its source range; exact only when the event is a verbatim slice.
+fn push_html(node: &mut tree::TextNode, part: &str, text: &str, range: Range<usize>, base: usize) {
+    let verbatim = text.get(range.clone()) == Some(part);
+    node.push(part, range.start + base..range.end + base, verbatim);
+}
+
+/// Reports each annotation-shaped comment in `node` that no helper looked at, using the shared comment splitter.
 fn comments(node: &tree::TextNode, owned: &HashSet<usize>, sink: &mut Sink<'_>) {
     let html = &node.text;
     let mut offset = 0;
     while let Some(open) = html[offset..].find("<!--") {
         let start = offset + open;
-        let body_start = start + 4;
-        let rest = &html[body_start..];
-        let (body, end, closed) = if rest.starts_with('>') {
-            ("", body_start + 1, true)
-        } else if rest.starts_with("->") {
-            ("", body_start + 2, true)
-        } else if let Some(close) = rest.find("-->") {
-            (&rest[..close], body_start + close + 3, true)
+        let rest = &html[start..];
+        // A comment that never closes owns the rest of the text; close it only to classify its first word.
+        let (len, closed) = annotation::comment_len(rest).map_or((rest.len(), false), |len| (len, true));
+        let range = node.source_range(start..start + len);
+        let looks_like_one = if closed {
+            annotation::is_annotation(&rest[..len])
         } else {
-            (rest, html.len(), false)
+            annotation::is_annotation(&format!("{rest}-->"))
         };
-        let range = node.source_range(start..end);
-        if annotation::is_annotation(&format!("<!--{body}-->")) && !owned.contains(&range.start) {
+        if looks_like_one && !owned.contains(&range.start) {
             sink.report(unseen(range, closed));
         }
-        offset = end;
+        offset = start + len;
     }
 }
 
