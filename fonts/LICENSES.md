@@ -22,8 +22,8 @@ requires a redistribution to carry a readable copy of its `NOTICE`, so the file 
 when it differs from the copy in the locked crate, which is how a Typst upgrade shows up). The NOTICE also covers
 the other data the crate ships (Foxit fonts, ICC profiles, and W3C data). A search of the built binary finds no
 Foxit font (none of `FoxitSans`, `FoxitFixed`, or `FoxitSerif`; rsm-141.10), only the fonts listed here; the notice
-is printed whole anyway, so a later change that links them does not leave a license out. Whether the two GPL exceptions cover
-shipping `NewCM10-Regular` inside a program is for the owner to confirm (rsm-141.13).
+is printed whole anyway, so a later change that links them does not leave a license out. The owner confirmed (rsm-141.13) that the two GPL exceptions cover
+shipping `NewCM10-Regular` inside a program.
 
 This is a summary of the obligations of each license, not legal advice.
 

@@ -919,7 +919,7 @@ fn oversized_input_is_one_error_and_no_model() {
 // Real baselines (ignored: they live outside the repository)
 // ---------------------------------------------------------------------------------------------
 
-/// Parses the two real baselines and expects only the contact-count warning the book calls for.
+/// Parses the two real baselines: no error finding, a model, and the contact-count warning the book calls for.
 ///
 /// Run with `RESUME_BASELINES=~/Documents/vrm/my/job/drafts cargo test --test parse_test -- --ignored`.
 #[test]
@@ -940,11 +940,14 @@ fn baselines_parse_without_errors() {
             "{name}: {:#?}",
             views(&text, parsed.diagnostics())
         );
+        // The baselines are edited by their owner, so only what the book says about the contact line is pinned; any
+        // other warning is advice about the writing and is not for a test to forbid.
         let codes: Vec<_> = parsed.diagnostics().iter().map(|d| d.code).collect();
-        assert_eq!(
-            codes,
-            vec![DiagnosticCode::TooManyContactItems],
-            "{name}: the only expected finding is the contact count"
+        // Shown with `--nocapture`, so a warning a parser change adds to a real resume is seen by whoever runs this.
+        eprintln!("{name}: {codes:?}");
+        assert!(
+            codes.contains(&DiagnosticCode::TooManyContactItems),
+            "{name}: five contact items are expected to be flagged, got {codes:?}"
         );
         assert_some!(parsed.valid(), "{name}");
     }

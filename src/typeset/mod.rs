@@ -69,7 +69,8 @@ impl Typesetter {
     /// Evicts memoized results not used in the last `max_age` compiles.
     ///
     /// Typst memoizes layout work in a process-wide cache that never shrinks on its own, so a
-    /// long-running caller such as `watch` should call this after each build.
+    /// long-running caller such as `watch` should call this after each build. The cache is shared by every
+    /// `Typesetter` in the process, so this trims all of them; that only costs speed, never results.
     pub fn evict_cache(max_age: usize) {
         typst::comemo::evict(max_age);
     }
@@ -82,7 +83,7 @@ impl Typesetter {
     /// - `Error::TypesetPanicked` - Typst panicked
     /// - `Error::Compile` - the style has errors; carries every diagnostic and the style text
     pub fn compile(&self, resume: &Resume, style: &StyleSource, options: RenderOptions) -> Result<Compiled, Error> {
-        let json = serde_json::to_vec(resume).context(SerializeResumeSnafu)?;
+        let json = resume_json(resume, false)?;
         let world = ResumeWorld::new(style.clone(), Arc::clone(&self.fonts), json, options.paper);
         let Warned { output, warnings } = isolated(Stage::Compile, || typst::compile::<PagedDocument>(&world))?;
         let sources = world.served_sources();
@@ -100,6 +101,25 @@ impl Typesetter {
             .fail(),
         }
     }
+}
+
+/// The resume as the style reads it, as `json("/resume.json")`: the one serialization, so what `export` writes
+/// for a preview cannot differ from what the compiler is given. `pretty` indents it and ends it with a newline,
+/// for a file a person may open; a style reads both the same.
+///
+/// # Errors
+/// `Error::SerializeResume` - the resume cannot be written as JSON.
+pub fn resume_json(resume: &Resume, pretty: bool) -> Result<Vec<u8>, Error> {
+    let mut json = if pretty {
+        serde_json::to_vec_pretty(resume)
+    } else {
+        serde_json::to_vec(resume)
+    }
+    .context(SerializeResumeSnafu)?;
+    if pretty {
+        json.push(b'\n');
+    }
+    Ok(json)
 }
 
 /// A compiled, laid-out document.
