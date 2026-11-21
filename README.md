@@ -242,7 +242,6 @@ families below (the GUST Font License is an instance of LPPL 1.3c); the `typst-a
 - `resume licenses` prints every license notice the binary has to carry: the font texts and the `typst-assets`
   `NOTICE` (Apache-2.0, section 4(d)). Run it, and keep its output with any copy of the program you give someone.
 - The Rust crates linked into the program (about 400, nearly all MIT or Apache-2.0) are not printed by `resume licenses`.
-  `cargo tree` lists them and their licenses are in their own packages; an attribution list for them is not
-  generated yet.
+  `cargo tree` lists them, and their licenses are in their own packages.
 
 This is a summary of the obligations of each license, not legal advice.

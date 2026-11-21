@@ -275,8 +275,8 @@ fn explain_prints_the_advice_for_a_code_on_stdout_and_exits_0() {
         "Why: ",
         "Fix: ",
         "Example:",
-        "  - 2015 - 2017",
-        "  + 2015 \u{2013} 2017",
+        "  - ### Acme \u{b7} Engineer \u{b7} 2015 - 2017",
+        "  + ### Acme \u{b7} Engineer \u{b7} 2015 \u{2013} 2017",
     ] {
         assert!(run.stdout.contains(part), "{part}: {}", run.stdout);
     }

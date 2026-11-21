@@ -197,7 +197,7 @@ pub enum Next {
 /// the editor has finished writing the file. A change that keeps arriving cannot hold a build off for longer
 /// than `ceiling`. A signal that arrived during the previous build is answered at once, then debounced.
 ///
-/// `stop` is asked about every [`STOP_POLL`] while nothing has happened.
+/// `stop` is asked about every `STOP_POLL` while nothing has happened.
 pub fn next_change(
     signals: &Receiver<Signal>,
     debounce: Duration,

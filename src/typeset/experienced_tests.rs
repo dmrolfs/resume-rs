@@ -303,7 +303,7 @@ fn the_experienced_style_sets_each_kind_of_text_in_its_own_font_weight_and_color
     check("Programming languages", "Carlito", false, "#000000", BODY); // an era name is italic, not bold
     check("Notes", "Carlito", false, "#cc0000", BODY); // a link is red
     check("Page 1 of", "Carlito", false, "#595959", FOOTER); // the footer is muted
-    // The accent is only on links: no label, role line or value is red.
+    // Red is only on links: no label, role line or value is red.
     let red: Vec<_> = runs.iter().filter(|r| r.fill.as_deref() == Some("#cc0000")).collect();
     assert!(
         red.iter()
