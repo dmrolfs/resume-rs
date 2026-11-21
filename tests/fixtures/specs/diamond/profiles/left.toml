@@ -1,0 +1,8 @@
+# ABOUTME: One arm of the diamond: extends base and overrides the gateway pick.
+# ABOUTME: right is listed after left in the spec, so right wins the gateway pick.
+
+extends = ["base"]
+
+[select]
+prefer = ["short"]
+pick = { gateway = "short" }

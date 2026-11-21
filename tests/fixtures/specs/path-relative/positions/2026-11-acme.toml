@@ -1,0 +1,5 @@
+# ABOUTME: A spec whose content path is relative to this file, not to the working directory: ../baselines/baseline.md.
+# ABOUTME: Expected: the same resolved path whatever the cwd; its components are the spec's directory, .., baselines, baseline.md.
+
+[build]
+content = "../baselines/baseline.md"

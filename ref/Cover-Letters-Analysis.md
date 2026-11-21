@@ -70,7 +70,7 @@ Planned only (beads docs under `history/beads/`, all OPEN):
 - `epic-tailoring.md` (rsm-141.22): trailing-comment annotations `@core|@extra`, `@draft|@verify`, `#tag`, `=group.variant`; selection `select(&Resume, &Selection) -> (Resume, SelectionReport)`; tags inherit downward, priority and status do not; untagged means general; alternates need a `default`, are adjacent in one container, and exactly one renders (pick, then preference list, then default); selection never adds, reorders or rewrites; annotations are `#[serde(skip)]` and schema 1 is unchanged.
 - `task-tailoring-1-annotations.md`: `Annotations { priority, status, tags: BTreeSet<Tag>, alternate }` with `Tag`, `GroupName`, `VariantName` newtypes.
 - `task-tailoring-2-selection.md`: `Selection { tags, core_only, drafts, prefer, pick }`; unknown picks reported.
-- `epic-position-specs.md` (rsm-141.23): TOML `[position]`, `[build] {content, style, paper, extends}`, `[select] {tags, prefer, pick}`; profiles hold `[select]` and `[build]` defaults, never `[position]`; merge: tags union, prefer specific-first, pick specific wins, scalars specific wins; `deny_unknown_fields`; spec metadata never enters the PDF; reordering is an open question.
+- `epic-position-specs.md` (rsm-141.23): TOML `[position]`, `extends`, `[build] {content, style, paper}`, `[select] {tags, prefer, pick, promote, core-only}`; profiles hold `[select]` and `[build]` defaults, never `[position]`; merge: tags union, prefer specific-first, pick specific wins, scalars specific wins; `deny_unknown_fields`; spec metadata never enters the PDF; reordering is an open question.
 - `task-specs-1-format.md`: `ResolvedSpec { position, content, style, paper, selection, chain }`.
 - `epic-advisor.md` and `task-advisor-spike.md` (rsm-eam): separate binary, probably a separate repo; the spec format is the contract; local model by default; outputs a spec, an optional summary variant and a gap report; never edits content; generating content beyond a summary wording is out of scope.
 
@@ -468,6 +468,8 @@ END OF PART 5
 
 ```toml
 # positions/2026-11-acme-principal-ai.toml
+extends = ["principal", "ai-platform"]
+
 [position]                       # planned, unchanged; the letter reads company and title from here
 company = "Acme"
 title = "Principal Architect, AI Platform"
@@ -478,8 +480,7 @@ posting = "https://example.com/jobs/123"
 [build]                          # planned, unchanged: the resume
 content = "../baselines/baseline.md"
 style = "pragmatic"
-paper = "us-letter"
-extends = ["principal", "ai-platform"]
+paper = "letter"
 
 [select]                         # planned, unchanged: shared by resume and letter
 tags = ["iceberg"]
@@ -943,7 +944,7 @@ END OF PART 3
 ### The decision: two independent scopes, no sharing
 
 - `[select]` stays exactly as rsm-141.23 plans it: resume only. Its picks are checked against the resume by rsm-141.22.2's report, as today. Nothing in it is read by `resume letter`.
-- `[letter.select]` has the same keys and types (`tags`, `prefer`, `pick`, `core-only`, `drafts`) and the same merge rules along the same `extends` chain. It is read only by `resume letter`, and its picks are checked only against the letter, with the same "unknown pick is reported" rule.
+- `[letter.select]` has the same keys and types (`tags`, `prefer`, `pick`, `core-only`; not `drafts`, which is never a file key, and not `promote`, because a letter's order stays as written) and the same merge rules along the same `extends` chain. It is read only by `resume letter`, and its picks are checked only against the letter, with the same "unknown pick is reported" rule.
 - There is no merge of one scope into the other.
 
 Why, against the earlier "letter over shared" proposal:
@@ -971,6 +972,8 @@ If writing tags twice proves annoying in practice, a later change can add a name
 
 ```toml
 # positions/2026-11-acme.toml
+extends = ["principal", "ai-platform"]
+
 [position]
 company = "Acme"                       # fills {{company}}
 title = "Principal Architect"          # fills {{title}}
@@ -978,7 +981,6 @@ title = "Principal Architect"          # fills {{title}}
 [build]
 content = "../baselines/baseline.md"   # resume only; resume letter never reads it
 style = "pragmatic"
-extends = ["principal", "ai-platform"]
 
 [select]
 pick = { gateway = "long" }            # checked against the resume only
@@ -988,7 +990,7 @@ content = "../letters/base.md"         # required in [letter]; relative to this 
 recipient = "Dr. Jane Smith"           # optional
 date = 2026-11-21                      # optional TOML local date
 style = "pragmatic"                    # optional; else [build].style
-paper = "us-letter"                    # optional; else [build].paper
+paper = "letter"                       # optional; else [build].paper
 output-format = "text"                 # optional; default text
 max-length = 2000                      # optional
 length-unit = "utf16"                  # optional; default utf16

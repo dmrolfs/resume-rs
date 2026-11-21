@@ -49,6 +49,12 @@ fn escapes(c: char, multiline: bool) -> bool {
     (c.is_control() && !kept) || is_bidi_control(c)
 }
 
+/// True when `text` holds a control or a bidi character, which no field of a spec or profile may contain: later
+/// output would have to escape it, and a file that is read by people and by tools should not carry it at all.
+pub fn has_unsafe_characters(text: &str) -> bool {
+    text.chars().any(|c| c.is_control() || is_bidi_control(c))
+}
+
 /// The bidirectional formatting characters, which can make source read differently from how it is stored.
 fn is_bidi_control(c: char) -> bool {
     matches!(c, '\u{61c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')

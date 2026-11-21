@@ -210,6 +210,8 @@ Recognition belongs to the parser, filling belongs to the resolver, and rendered
 ## Application spec proposal
 
 ```toml
+extends = ["principal", "ai-platform"]
+
 [position]
 company = "Example Company"
 title = "Principal Architect"
@@ -217,7 +219,6 @@ title = "Principal Architect"
 [build]
 content = "../baselines/resume.md"
 style = "pragmatic"
-extends = ["principal", "ai-platform"]
 
 [select]
 pick = { gateway = "technical" } # Resume only.

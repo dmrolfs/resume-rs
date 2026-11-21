@@ -20,7 +20,7 @@ use crate::diagnostics::Diagnostic;
 pub use codespan_reporting::term::termcolor;
 
 pub use self::color::{ColorEnv, resolve_color};
-pub use self::sanitize::display_text;
+pub use self::sanitize::{display_text, has_unsafe_characters};
 pub use self::sources::Sources;
 pub use self::summary::Summary;
 

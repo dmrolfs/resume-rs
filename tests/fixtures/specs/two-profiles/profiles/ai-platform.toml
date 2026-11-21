@@ -1,0 +1,10 @@
+# ABOUTME: A profile for AI platform positions: topic tags, business wording, a short gateway and an AI summary.
+# ABOUTME: Listed after principal, so it is more specific and wins the contested gateway pick.
+
+[build]
+paper = "a4"
+
+[select]
+tags = ["ai", "platform"]
+prefer = ["business"]
+pick = { gateway = "short", summary = "ai" }

@@ -1,0 +1,7 @@
+# ABOUTME: The shared base of a diamond: both left and right extend it, so it is applied once, first.
+# ABOUTME: Expected order: base, left, right, then the spec.
+
+[select]
+tags = ["leadership"]
+prefer = ["technical"]
+pick = { gateway = "default" }

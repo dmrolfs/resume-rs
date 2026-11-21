@@ -1,0 +1,8 @@
+# ABOUTME: A profile that holds a [position] table, which describes one application and so is an error in a profile.
+# ABOUTME: Expected: ForbiddenInProfile naming this file, the key `position` and its line.
+
+[position]
+company = "Acme"
+
+[select]
+tags = ["leadership"]

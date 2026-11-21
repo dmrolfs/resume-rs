@@ -1,0 +1,8 @@
+# ABOUTME: A spec with a misspelled key, `tag` for `tags`; loading must fail naming the file, line and key.
+# ABOUTME: Expected: UnknownKey at the `tag` line, for the key `tag` in `select`, allowed keys listed, `did you mean tags`.
+
+[build]
+content = "../../baseline.md"
+
+[select]
+tag = ["ai"]

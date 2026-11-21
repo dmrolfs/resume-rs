@@ -1,0 +1,7 @@
+# ABOUTME: A spec that extends the bad profile `principal`; loading the chain must stop at the profile.
+# ABOUTME: The error names the profile file, not this spec.
+
+extends = ["principal"]
+
+[build]
+content = "../../baseline.md"
