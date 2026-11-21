@@ -20,6 +20,22 @@ pub use self::rules::{ChosenBy, DropReason};
 pub use self::summary::{CorePages, CoreSkip, KindCount, SelectionRecord, SelectionSummary};
 pub use crate::model::NodeKind;
 
+/// Shared unknown-pick policy; each document supplies its own group inventory.
+pub(crate) fn unknown_picks(groups: &BTreeMap<GroupName, Vec<VariantName>>, selection: &Selection) -> Vec<UnknownPick> {
+    selection
+        .picks
+        .iter()
+        .filter_map(|(group, variant)| match groups.get(group) {
+            None => Some(UnknownPick::Group(group.clone())),
+            Some(found) if !found.contains(variant) => Some(UnknownPick::Variant(Alternate {
+                group: group.clone(),
+                variant: variant.clone(),
+            })),
+            Some(_) => None,
+        })
+        .collect()
+}
+
 /// What to keep and which wordings to use. The default keeps everything except drafts and renders each
 /// group's `default`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -126,7 +142,7 @@ pub enum SelectError {
     PickedDraft { picks: Vec<Alternate> },
 }
 
-fn listed(picks: &[Alternate]) -> String {
+pub(crate) fn listed(picks: &[Alternate]) -> String {
     picks
         .iter()
         .map(|a| format!("`{}.{}`", a.group, a.variant))

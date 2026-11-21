@@ -169,7 +169,18 @@ impl<'s> Walker<'s> {
             return Err(SelectError::PickedDraft { picks: picked_drafts });
         }
         let report = SelectionReport {
-            unknown_picks: unknown_picks(&groups, selection),
+            unknown_picks: super::unknown_picks(
+                &groups
+                    .iter()
+                    .map(|(name, group)| {
+                        (
+                            name.clone(),
+                            group.variants.iter().map(|(name, _)| name.clone()).collect(),
+                        )
+                    })
+                    .collect(),
+                selection,
+            ),
             ..SelectionReport::default()
         };
         Ok(Self {
@@ -555,23 +566,6 @@ fn resolve(name: &GroupName, group: &Group, selection: &Selection) -> Result<Gro
         },
         Resolution::NoReady => GroupResolution::NoReady,
     })
-}
-
-fn unknown_picks(groups: &BTreeMap<GroupName, Group>, selection: &Selection) -> Vec<UnknownPick> {
-    selection
-        .picks
-        .iter()
-        .filter_map(|(group, variant)| match groups.get(group) {
-            None => Some(UnknownPick::Group(group.clone())),
-            Some(found) if !found.variants.iter().any(|(name, _)| name == variant) => {
-                Some(UnknownPick::Variant(Alternate {
-                    group: group.clone(),
-                    variant: variant.clone(),
-                }))
-            }
-            Some(_) => None,
-        })
-        .collect()
 }
 
 /// The tags a container passes down: its parent's and its own.

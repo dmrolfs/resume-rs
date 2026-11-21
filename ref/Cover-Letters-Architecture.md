@@ -261,6 +261,25 @@ Explicit backslash escapes and placeholders split across comment/formatting boun
 Only actual Markdown comments are annotations; visible escaped/code lookalikes are not instructions.
 This update supersedes any conflicting verbatim-only or broad lexical-ban proposal in the raw reports.
 
+## Letter selection library, rsm-vqr.2
+
+`letter::select(&LetterSource, &Selection)` returns a `SelectedLetter` and range-located `LetterReport`.
+It calls the resume's `judge`, `judge_group`, `GroupFacts::of` and alternate `resolve` rules unchanged.
+The shared unknown-pick inventory reports unknown groups and variants, including groups excluded by scope.
+All picked drafts are collected in authored order before any paragraph is selected.
+Greeting and closing choose one wording but remain outside tag/core scope filtering; the body is an authored subsequence.
+An unavailable frame is an error, and an empty selected body carries its report in `LetterSelectError::EmptyBody`.
+Reports reuse shared `Chosen`, `UnknownPick` and `DropReason` values but use original paragraph ranges instead of resume node indexes.
+Draft counts follow upstream semantics: they count authored draft wordings, including unchosen or scope-filtered ones.
+Selection expects valid parsed groups; malformed Markdown must fail before this library entry point.
+Only the resulting selected pieces reach field resolution, preserving original placeholder spans.
+
+The six stable tests documented in `src/select/rules.rs` pin selected-draft behavior.
+`tests/letter_select_property_test.rs` compares letter and resume body outcomes and reports across generated scopes, annotations, picks and preferences.
+Repeating selection from the same source is deterministic.
+Resume-style reselecting of the result is not applicable: `SelectedLetter` intentionally drops selection annotations.
+CLI wiring and unknown tag/preference validation remain `rsm-vqr.3`; this library addition does not remove the command's temporary selection-required guard.
+
 ## Annotation integration update, rsm-vqr.1
 
 This update supersedes the earlier parser-reservation baseline below.

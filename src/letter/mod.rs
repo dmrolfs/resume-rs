@@ -9,7 +9,9 @@ pub use plain::{LengthUnit, LinkStyle, PlainLetter, TextCounts, TextLimit, TextL
 #[cfg(test)]
 mod plain_tests;
 mod resolve;
+mod select;
 mod source;
+pub use select::{LetterDrop, LetterPart, LetterRef, LetterReport, LetterSelectError, select};
 
 pub use model::{
     FieldValue, FieldValueError, LETTER_SCHEMA_VERSION, Letter, LetterDate, LetterDateError, LetterFields, LetterKind,
