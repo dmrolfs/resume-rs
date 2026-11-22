@@ -9,7 +9,8 @@ use serde::Serialize;
 
 use super::error::Located;
 use super::layer::{Kind, Layer, Position};
-use super::merge::{ChoiceKey, Choices, merge};
+use super::letter::ResolvedLetter;
+use super::merge::{ChoiceKey, Choices, merge, merge_select};
 use super::names::{DeclaredPath, ProfileName};
 
 /// One file of the chain, in the order it was applied.
@@ -42,6 +43,8 @@ pub struct ResolvedSpec {
     pub choices: Choices,
     /// Every file that contributed, least specific first, the spec last.
     pub chain: Vec<ChainLink>,
+    /// The letter the spec builds, resolved apart from the resume; `None` for a spec with no `[letter]`.
+    pub letter: Option<ResolvedLetter>,
     origins: BTreeMap<ChoiceKey, Located>,
 }
 
@@ -52,6 +55,8 @@ impl ResolvedSpec {
     /// [`super::layer::SpecLayer`], so this is private to the module family: nothing outside can hand it a profile.
     pub(super) fn from_chain(layers: Vec<Layer>) -> Self {
         let merged = merge(&layers);
+        let spec_has_letter = layers.last().is_some_and(|layer| layer.letter.is_some());
+        let letter_merged = spec_has_letter.then(|| merge_select(layers.iter().map(|layer| &layer.letter_select)));
         let chain = layers
             .iter()
             .map(|layer| ChainLink {
@@ -69,6 +74,10 @@ impl ResolvedSpec {
         };
         let (declared, at) = (content.value, content.at);
         let dir = spec.path.parent().map(std::path::Path::to_path_buf).unwrap_or_default();
+        let letter = spec
+            .letter
+            .zip(letter_merged)
+            .map(|(table, merged)| ResolvedLetter::new(table, &dir, spec.position.as_ref(), merged));
         Self {
             position: spec.position,
             content: ContentRef {
@@ -78,6 +87,7 @@ impl ResolvedSpec {
             },
             choices: merged.choices,
             chain,
+            letter,
             origins: merged.origins,
         }
     }
@@ -128,6 +138,31 @@ struct Printed<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     position: Option<PrintedPosition<'a>>,
     build: PrintedBuild<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    select: Option<PrintedSelect<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    letter: Option<PrintedLetter<'a>>,
+}
+
+#[derive(Serialize)]
+struct PrintedLetter<'a> {
+    content: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recipient: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    date: Option<toml::value::Datetime>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    style: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    paper: Option<String>,
+    #[serde(rename = "output-format", skip_serializing_if = "Option::is_none")]
+    output_format: Option<String>,
+    #[serde(rename = "max-length", skip_serializing_if = "Option::is_none")]
+    max_length: Option<usize>,
+    #[serde(rename = "length-unit", skip_serializing_if = "Option::is_none")]
+    length_unit: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    links: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     select: Option<PrintedSelect<'a>>,
 }
@@ -185,22 +220,58 @@ struct PrintedSelect<'a> {
     core_only: Option<bool>,
 }
 
-impl<'a> From<&'a ResolvedSpec> for Printed<'a> {
-    fn from(spec: &'a ResolvedSpec) -> Self {
-        let choices = &spec.choices;
-        let select = &choices.select;
-        let printed_select = PrintedSelect {
+impl<'a> PrintedSelect<'a> {
+    /// The table, or `None` when the choices say nothing, so an empty table is never printed.
+    fn of(select: &'a super::merge::SelectChoices) -> Option<Self> {
+        let printed = Self {
             tags: select.tags.iter().map(AsRef::as_ref).collect(),
             prefer: select.prefer.iter().map(AsRef::as_ref).collect(),
             promote: select.promote.iter().map(AsRef::as_ref).collect(),
             pick: select.pick.iter().map(|(g, v)| (g.as_ref(), v.as_ref())).collect(),
             core_only: select.core_only,
         };
-        let has_select = !printed_select.tags.is_empty()
-            || !printed_select.prefer.is_empty()
-            || !printed_select.promote.is_empty()
-            || !printed_select.pick.is_empty()
-            || printed_select.core_only.is_some();
+        let says_something = !printed.tags.is_empty()
+            || !printed.prefer.is_empty()
+            || !printed.promote.is_empty()
+            || !printed.pick.is_empty()
+            || printed.core_only.is_some();
+        says_something.then_some(printed)
+    }
+}
+
+impl<'a> From<&'a ResolvedLetter> for PrintedLetter<'a> {
+    fn from(letter: &'a ResolvedLetter) -> Self {
+        let s = &letter.settings;
+        let name = |value: &dyn ValueEnumName| value.name().unwrap_or_default();
+        Self {
+            content: letter.content.declared.as_str(),
+            recipient: s.recipient.as_ref().map(|r| r.value.as_str()),
+            date: s.date.as_ref().and_then(|d| d.value.to_string().parse().ok()),
+            style: s.style.as_ref().map(|v| v.value.as_ref()),
+            paper: s.paper.as_ref().map(|v| name(&v.value)),
+            output_format: s.output_format.as_ref().map(|v| name(&v.value)),
+            max_length: s.max_length.as_ref().map(|v| v.value),
+            length_unit: s.length_unit.as_ref().map(|v| name(&v.value)),
+            links: s.links.as_ref().map(|v| name(&v.value)),
+            select: PrintedSelect::of(&letter.choices),
+        }
+    }
+}
+
+/// The spelling a file and a flag use for a value.
+trait ValueEnumName {
+    fn name(&self) -> Option<String>;
+}
+
+impl<T: ValueEnum> ValueEnumName for T {
+    fn name(&self) -> Option<String> {
+        self.to_possible_value().map(|v| v.get_name().to_string())
+    }
+}
+
+impl<'a> From<&'a ResolvedSpec> for Printed<'a> {
+    fn from(spec: &'a ResolvedSpec) -> Self {
+        let choices = &spec.choices;
         Self {
             position: spec.position.as_ref().map(PrintedPosition::from),
             build: PrintedBuild {
@@ -211,7 +282,8 @@ impl<'a> From<&'a ResolvedSpec> for Printed<'a> {
                     .and_then(|p| p.to_possible_value())
                     .map(|v| v.get_name().to_string()),
             },
-            select: has_select.then_some(printed_select),
+            select: PrintedSelect::of(&choices.select),
+            letter: spec.letter.as_ref().map(PrintedLetter::from),
         }
     }
 }

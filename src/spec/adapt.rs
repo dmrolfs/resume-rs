@@ -2,7 +2,7 @@
 //! ABOUTME: The one place that knows both the spec's choices and `select`; everything else here stands alone.
 
 use super::error::{Located, PickProblem, PickProblemKind, ScopeConflictSnafu, SpecError, UnknownPicksSnafu};
-use super::merge::ChoiceKey;
+use super::merge::{ChoiceKey, SelectChoices};
 use super::resolved::ResolvedSpec;
 use crate::select::{Scope, SelectedTags, Selection, UnknownPick};
 
@@ -34,19 +34,26 @@ impl ResolvedSpec {
     /// The conflict between `core-only` and the tags, located at the most specific file that chose tags: the one
     /// the user must change, since a less specific file's tags are only overridden by it.
     fn scope_conflict(&self) -> Result<Selection, SpecError> {
+        self.scope_conflict_of(&self.choices.select, |key| self.origin_of(key))
+    }
+
+    /// [`Self::scope_conflict`] for any scope's choices, looked up in that scope's own origins.
+    pub(super) fn scope_conflict_of<'a>(
+        &self,
+        select: &SelectChoices,
+        origin_of: impl Fn(&ChoiceKey) -> Option<&'a Located>,
+    ) -> Result<Selection, SpecError> {
         let position = |at: &Located| self.chain.iter().position(|link| *link.path == *at.path);
-        let tags_at = self
-            .choices
-            .select
+        let tags_at = select
             .tags
             .iter()
-            .filter_map(|tag| self.origin_of(&ChoiceKey::Tag(tag.clone())))
+            .filter_map(|tag| origin_of(&ChoiceKey::Tag(tag.clone())))
             .max_by(|a, b| {
                 position(a)
                     .cmp(&position(b))
                     .then_with(|| (b.line, b.column).cmp(&(a.line, a.column)))
             });
-        match (tags_at, self.origin_of(&ChoiceKey::CoreOnly)) {
+        match (tags_at, origin_of(&ChoiceKey::CoreOnly)) {
             (Some(tags_at), Some(core_only_at)) => ScopeConflictSnafu {
                 tags_at: tags_at.clone(),
                 core_only_at: core_only_at.clone(),
@@ -64,6 +71,15 @@ impl ResolvedSpec {
     /// # Errors
     /// [`SpecError::UnknownPicks`], listing every such pick.
     pub fn check_picks(&self, unknown: &[UnknownPick]) -> Result<(), SpecError> {
+        self.check_picks_with(unknown, |key| self.origin_of(key))
+    }
+
+    /// [`Self::check_picks`] for any scope's picks, with the lines that scope's file wrote.
+    pub(super) fn check_picks_with<'a>(
+        &self,
+        unknown: &[UnknownPick],
+        origin_of: impl Fn(&ChoiceKey) -> Option<&'a Located>,
+    ) -> Result<(), SpecError> {
         let problems: Vec<PickProblem> = unknown
             .iter()
             .filter_map(|pick| {
@@ -82,7 +98,7 @@ impl ResolvedSpec {
                         },
                     ),
                 };
-                let at = self.origin_of(&ChoiceKey::Pick(group.clone()))?;
+                let at = origin_of(&ChoiceKey::Pick(group.clone()))?;
                 Some(PickProblem { at: at.clone(), kind })
             })
             .collect();

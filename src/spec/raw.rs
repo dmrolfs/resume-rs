@@ -17,6 +17,7 @@ pub(super) struct RawFile {
     pub position: Option<RawPosition>,
     pub build: Option<RawBuild>,
     pub select: Option<RawSelect>,
+    pub letter: Option<RawLetter>,
 }
 
 /// The `[position]` table. It is not wrapped in `Spanned`: a table written as `[position.emphasis]` or as
@@ -84,4 +85,42 @@ pub(super) struct RawSelect {
     /// The group is a plain `String`: a map key wrapped in `Spanned` has no readable path when its value is wrong.
     pub pick: Option<BTreeMap<String, Text>>,
     pub core_only: Option<Spanned<bool>>,
+}
+
+/// The `[letter]` table. Every key is optional here; which are allowed depends on the kind of file.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub(super) struct RawLetter {
+    pub content: Option<Text>,
+    pub recipient: Option<Text>,
+    pub date: Option<Spanned<Datetime>>,
+    pub style: Option<Text>,
+    pub paper: Option<Text>,
+    pub output_format: Option<Text>,
+    pub max_length: Option<Spanned<usize>>,
+    pub length_unit: Option<Text>,
+    pub links: Option<Text>,
+    pub select: Option<RawLetterSelect>,
+}
+
+/// `[letter.select]`: the resume's `[select]` without `promote`, because a letter keeps its written order.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub(super) struct RawLetterSelect {
+    pub tags: Option<Vec<Text>>,
+    pub prefer: Option<Vec<Text>>,
+    pub pick: Option<BTreeMap<String, Text>>,
+    pub core_only: Option<Spanned<bool>>,
+}
+
+impl From<RawLetterSelect> for RawSelect {
+    fn from(raw: RawLetterSelect) -> Self {
+        Self {
+            tags: raw.tags,
+            prefer: raw.prefer,
+            promote: None,
+            pick: raw.pick,
+            core_only: raw.core_only,
+        }
+    }
 }

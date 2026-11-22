@@ -18,6 +18,7 @@ It builds with no findings (`resume check tests/fixtures/specs/baseline.md`), so
 | `cycle` | `positions/acme.toml` | Error `Cycle`: `a -> b -> c -> a`, located at the entry in `profiles/c.toml` that closes the circle. |
 | `missing-profile` | `positions/acme.toml` | Error `MissingProfile`: `ai-platfrom`, the directory searched, and the available profile `principal`. |
 | `extends-order-conflict` | `positions/acme.toml` | Error `ExtendsOrderConflict`: the spec lists `b` before `base`, but `b` extends `base`. `extends = ["base", "b"]` would load. The error also names the chain of reasons: `base` then `b`. |
+| `letter-scopes` | `positions/acme.toml` | Loads. The resume picks are `gateway = long` (`principal`) and `summary = acme` (the spec); the letter picks are `summary = brief` (`principal`), `evidence = short` (`ai-platform`, listed after `principal`) and `opening = warm` (the spec). Letter tags `{ai, platform}`; letter prefer `[formal, short, warm]`. `letters/base.md` is the letter. |
 
 The error names are the variants of `resume::spec::SpecError`. `tests/spec_test.rs` resolves every case here and asserts the outcome in this table.
 

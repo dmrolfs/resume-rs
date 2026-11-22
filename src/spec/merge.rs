@@ -170,6 +170,8 @@ mod tests {
             content: None,
             style: style.map(|s| sourced(file, 0, assert_ok!(StyleName::try_new(s)))),
             paper: paper.map(|p| sourced(file, 0, p)),
+            letter: None,
+            letter_select: SelectLayer::default(),
             select: SelectLayer {
                 tags: tags.iter().enumerate().map(|(i, t)| sourced(file, i, tag(t))).collect(),
                 prefer: prefer

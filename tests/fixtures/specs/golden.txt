@@ -1,0 +1,75 @@
+=== <fixtures>/cycle/positions/acme.toml
+error: <fixtures>/cycle/profiles/c.toml:4:12: profiles extend each other in a circle: a -> b -> c -> a
+=== <fixtures>/diamond/positions/acme.toml
+# Resolved from: base, left, right, the spec
+
+[build]
+content = "../../baseline.md"
+
+[select]
+tags = ["leadership"]
+prefer = ["business", "short", "technical"]
+
+[select.pick]
+gateway = "long"
+content: <fixtures>/diamond/positions/../../baseline.md
+origin Tag(Tag("leadership")) base.toml:5:9
+origin Prefer(VariantName("business")) right.toml:7:11
+origin Prefer(VariantName("short")) left.toml:7:11
+origin Prefer(VariantName("technical")) base.toml:6:11
+origin Pick(GroupName("gateway")) right.toml:8:20
+=== <fixtures>/extends-order-conflict/positions/acme.toml
+error: <fixtures>/extends-order-conflict/positions/acme.toml:4:17: `b` is listed before `base` in `extends`, but `base` has to be applied first (base then b); later entries are more specific, so list `base` first
+=== <fixtures>/missing-profile/positions/acme.toml
+error: <fixtures>/missing-profile/positions/acme.toml:4:25: no profile `ai-platfrom` in <fixtures>/missing-profile/profiles; available profiles: principal
+=== <fixtures>/path-relative/positions/2026-11-acme.toml
+# Resolved from: the spec
+
+[build]
+content = "../baselines/baseline.md"
+content: <fixtures>/path-relative/positions/../baselines/baseline.md
+=== <fixtures>/position-in-profile/positions/acme.toml
+error: <fixtures>/position-in-profile/profiles/principal.toml:4:1: a profile cannot have `position`: it describes one application, so it belongs in a position spec
+=== <fixtures>/two-profiles/positions/acme.toml
+# Resolved from: principal, ai-platform, the spec
+
+[position]
+company = "Acme"
+title = "Principal Architect, AI Platform"
+level = "principal"
+domain = "AI platform"
+audience = "technical"
+date = 2026-11-19
+posting = "https://example.com/jobs/123"
+
+[position.emphasis]
+business = "low"
+org = "medium"
+technical = "high"
+
+[build]
+content = "../../baseline.md"
+style = "mono"
+paper = "a4"
+
+[select]
+tags = ["ai", "iceberg", "leadership", "platform"]
+prefer = ["short", "business", "technical"]
+
+[select.pick]
+gateway = "short"
+summary = "acme"
+content: <fixtures>/two-profiles/positions/../../baseline.md
+origin Tag(Tag("ai")) ai-platform.toml:8:9
+origin Tag(Tag("iceberg")) acme.toml:21:9
+origin Tag(Tag("leadership")) principal.toml:8:9
+origin Tag(Tag("platform")) ai-platform.toml:8:15
+origin Prefer(VariantName("business")) ai-platform.toml:9:11
+origin Prefer(VariantName("short")) acme.toml:22:11
+origin Prefer(VariantName("technical")) principal.toml:9:11
+origin Pick(GroupName("gateway")) ai-platform.toml:10:20
+origin Pick(GroupName("summary")) acme.toml:23:20
+origin Style acme.toml:18:9
+origin Paper ai-platform.toml:5:9
+=== <fixtures>/unknown-key/positions/acme.toml
+error: <fixtures>/unknown-key/positions/acme.toml:8:1: unknown key `select.tag`; allowed here: tags, prefer, promote, pick, core-only; did you mean `select.tags`?

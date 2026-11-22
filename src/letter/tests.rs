@@ -60,6 +60,16 @@ fn field_values_trim_edges_but_preserve_internal_text() {
 }
 
 #[test]
+fn a_calendar_date_converts_when_its_year_has_four_digits() {
+    let four = time::Date::from_calendar_date(2026, time::Month::November, 19).unwrap();
+    assert_eq!(assert_ok!(LetterDate::try_from(four)).to_string(), "2026-11-19");
+    let low = time::Date::from_calendar_date(7, time::Month::January, 2).unwrap();
+    assert_eq!(assert_ok!(LetterDate::try_from(low)).to_string(), "0007-01-02");
+    let before_year_zero = time::Date::from_calendar_date(-1, time::Month::January, 1).unwrap();
+    assert_err!(LetterDate::try_from(before_year_zero));
+}
+
+#[test]
 fn dates_have_an_exact_iso_wire_format_and_typed_errors() {
     for input in ["0000-01-01", "0001-01-01", "0999-12-31", "2028-02-29", "9999-12-31"] {
         let date = assert_ok!(input.parse::<LetterDate>());

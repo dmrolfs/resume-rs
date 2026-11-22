@@ -1,0 +1,10 @@
+# ABOUTME: A profile that chooses for both documents: a resume pick and a letter pick on the same group name.
+# ABOUTME: The resume's `summary` pick and the letter's `summary` pick never meet; see ../../README.md.
+
+[select]
+pick = { gateway = "long", summary = "ai" }
+
+[letter.select]
+tags = ["platform"]
+prefer = ["warm"]
+pick = { summary = "brief", evidence = "technical" }

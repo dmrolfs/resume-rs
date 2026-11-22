@@ -1,0 +1,7 @@
+# ABOUTME: A profile that holds only `letter.select`, which is all a profile may say about a letter.
+# ABOUTME: Listed after principal, so its letter pick of `evidence` wins.
+
+[letter.select]
+tags = ["ai"]
+prefer = ["short"]
+pick = { evidence = "short" }

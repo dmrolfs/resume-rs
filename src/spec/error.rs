@@ -98,6 +98,8 @@ pub enum DateProblem {
     Month,
     /// The day is not in the month.
     Day,
+    /// The year does not have four digits, which a letter date needs.
+    Year,
 }
 
 impl DateProblem {
@@ -106,6 +108,7 @@ impl DateProblem {
             Self::NotJustADate => "must be a date such as 2026-11-19, with no time of day",
             Self::Month => "the month is not 1 to 12",
             Self::Day => "that day does not exist in that month",
+            Self::Year => "the year must have four digits",
         }
     }
 }
@@ -237,8 +240,12 @@ pub enum SpecError {
     #[snafu(display("{at}: `{value}` is not a level in `{key}`; use low, medium, or high"))]
     InvalidLevel { at: Located, key: String, value: String },
 
-    #[snafu(display("{at}: `position.date` {}", problem.explain()))]
-    InvalidDate { at: Located, problem: DateProblem },
+    #[snafu(display("{at}: `{key}` {}", problem.explain()))]
+    InvalidDate {
+        at: Located,
+        key: &'static str,
+        problem: DateProblem,
+    },
 
     #[snafu(display("{at}: `position.posting` is not a web address: {source}"))]
     InvalidUrl { at: Located, source: url::ParseError },
@@ -271,6 +278,24 @@ pub enum SpecError {
         key: &'static str,
         reason: &'static str,
     },
+
+    #[snafu(display("{at}: `{value}` is not allowed in `{key}`; use one of: {}", allowed.join(", ")))]
+    InvalidKeyword {
+        at: Located,
+        key: &'static str,
+        value: String,
+        allowed: Vec<String>,
+    },
+
+    #[snafu(display("{at}: `{key}` needs `{needs}` in the same table"))]
+    RequiresKey {
+        at: Located,
+        key: &'static str,
+        needs: &'static str,
+    },
+
+    #[snafu(display("the spec has no `[letter]` table, so it does not say which letter to build"))]
+    NoLetterTable,
 
     #[snafu(display("{at}: `{value}` appears more than once in `{key}`"))]
     DuplicateEntry { at: Located, key: String, value: String },

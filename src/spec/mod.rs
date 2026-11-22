@@ -10,6 +10,7 @@ mod adapt;
 pub mod chain;
 pub mod error;
 pub mod layer;
+pub mod letter;
 pub mod merge;
 pub mod names;
 pub mod overrides;
@@ -22,6 +23,7 @@ use std::path::Path;
 pub use self::chain::{DirSource, ProfileSource};
 pub use self::error::{Located, PickProblem, PickProblemKind, SpecError};
 pub use self::layer::{Kind, Layer, Position, SpecLayer};
+pub use self::letter::{LetterSettings, ResolvedLetter};
 pub use self::merge::{ChoiceKey, Choices, SelectChoices};
 pub use self::overrides::{
     Admitted, Applied, Explicit, Override, OverrideFlag, OverridePolicy, Refused, Replaced, ScopeFlag, apply,

@@ -72,6 +72,17 @@ impl FromStr for LetterDate {
     }
 }
 
+impl TryFrom<time::Date> for LetterDate {
+    type Error = LetterDateError;
+
+    /// A date from a place that already holds a calendar date, such as a spec file; the year must have four digits.
+    fn try_from(date: time::Date) -> Result<Self, Self::Error> {
+        let text = date.to_string();
+        // `time` prints a year outside 0..=9999 with a sign or extra digits, which the letter never accepts.
+        text.parse()
+    }
+}
+
 impl fmt::Display for LetterDate {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(formatter)

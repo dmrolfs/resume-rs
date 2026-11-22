@@ -1,0 +1,29 @@
+# ABOUTME: A spec for a resume and a letter that extends two profiles; each document merges its own picks.
+# ABOUTME: Expected: see ../../README.md, case `letter-scopes`.
+
+extends = ["principal", "ai-platform"]
+
+[position]
+company = "Acme"
+title = "Principal Architect"
+
+[build]
+content = "../../baseline.md"
+
+[select]
+pick = { summary = "acme" }
+
+[letter]
+content = "../letters/base.md"
+recipient = "Hiring Team"
+date = 2026-11-19
+style = "pragmatic"
+paper = "a4"
+output-format = "both"
+max-length = 2000
+length-unit = "scalars"
+links = "text-only"
+
+[letter.select]
+prefer = ["formal"]
+pick = { opening = "warm" }

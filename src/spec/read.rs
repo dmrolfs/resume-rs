@@ -364,7 +364,9 @@ mod tests {
         for (text, key) in [
             ("typo = 1", "typo"),
             ("drafts = true", "drafts"),
-            ("[letter]\nx = 1", "letter"),
+            ("[letter]\nx = 1", "letter.x"),
+            ("[letter.select]\ndrafts = true", "letter.select.drafts"),
+            ("[letter.select]\npromote = [\"a\"]", "letter.select.promote"),
             ("[position]\ncompny = \"x\"", "position.compny"),
             (
                 "[position]\nemphasis = { busines = \"low\" }",

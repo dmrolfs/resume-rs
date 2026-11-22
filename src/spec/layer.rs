@@ -12,6 +12,7 @@ use super::error::{
     InvalidPaperSnafu, InvalidPathSnafu, InvalidStyleSnafu, InvalidUrlSnafu, Located, MissingKeySnafu, NameKind,
     NotASpecSnafu, RefusedUrlSnafu, SpecError, TextLengthSnafu, UnsafeTextSnafu, UrlProblem, shown,
 };
+use super::letter::{self, LetterSettings};
 use super::names::{DeclaredPath, Level, PositionLabel, ProfileName};
 use super::raw::{RawBuild, RawEmphasis, RawFile, RawPosition, RawSelect, Text};
 use super::read::{Source, parse, read_source, read_source_shown};
@@ -80,6 +81,17 @@ pub struct Layer {
     pub style: Option<Sourced<StyleName>>,
     pub paper: Option<Sourced<Paper>>,
     pub select: SelectLayer,
+    /// The `[letter]` settings of a spec that has the table. A profile never has them.
+    pub letter: Option<LetterTable>,
+    /// The `[letter.select]` table of any file; it merges apart from `select`.
+    pub letter_select: SelectLayer,
+}
+
+/// The `[letter]` table of a spec: the letter content it builds from, and the letter's own settings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LetterTable {
+    pub content: Sourced<DeclaredPath>,
+    pub settings: LetterSettings,
 }
 
 /// A position spec: a [`Layer`] that is known to be one, so a chain can end in it without a check.
@@ -147,7 +159,7 @@ impl Layer {
             (Kind::Profile, Some(table)) => {
                 // The header is the natural place; a table written as `position.company = ..` has none, so its
                 // first value is used, and an empty `[position]` always has a header.
-                let offset = position_header(&source.text)
+                let offset = table_header(&source.text, "[position")
                     .or_else(|| table.first_offset())
                     .unwrap_or(0);
                 return ForbiddenInProfileSnafu {
@@ -168,7 +180,8 @@ impl Layer {
         let content = content(kind, source, build.content.as_ref())?;
         let style = build.style.as_ref().map(|t| style(source, t)).transpose()?;
         let paper = build.paper.as_ref().map(|t| paper(source, t)).transpose()?;
-        let select = select(source, raw.select)?;
+        let select = select(source, "select", raw.select)?;
+        let (letter, letter_select) = letter::from_raw(kind, source, raw.letter)?;
         Ok(Self {
             kind,
             name: None,
@@ -179,6 +192,8 @@ impl Layer {
             style,
             paper,
             select,
+            letter,
+            letter_select,
         })
     }
 
@@ -201,12 +216,12 @@ impl Layer {
     }
 }
 
-/// Where a line that opens the `[position]` table (or a sub-table of it) starts, if the file has one.
-fn position_header(text: &str) -> Option<usize> {
+/// Where a line that opens the table `[name` (or a sub-table of it) starts, if the file has one.
+pub(super) fn table_header(text: &str, name: &str) -> Option<usize> {
     let mut at = 0;
     for line in text.split_inclusive('\n') {
         let trimmed = line.trim_start();
-        if trimmed.starts_with("[position") {
+        if trimmed.starts_with(name) {
             return Some(at + (line.len() - trimmed.len()));
         }
         at += line.len();
@@ -244,7 +259,7 @@ fn content(kind: Kind, source: &Source, text: Option<&Text>) -> Result<Option<So
 }
 
 /// Turns `text` into a value with `make`, which is told where the text is, and remembers the place.
-fn sourced<T>(
+pub(super) fn sourced<T>(
     source: &Source,
     text: &Text,
     make: impl FnOnce(Located, &str) -> Result<T, SpecError>,
@@ -254,13 +269,13 @@ fn sourced<T>(
     Ok(Sourced { value, at })
 }
 
-fn style(source: &Source, text: &Text) -> Result<Sourced<StyleName>, SpecError> {
+pub(super) fn style(source: &Source, text: &Text) -> Result<Sourced<StyleName>, SpecError> {
     sourced(source, text, |at, raw| {
         StyleName::try_new(raw).map_err(|_| InvalidStyleSnafu { at, value: shown(raw) }.build())
     })
 }
 
-fn paper(source: &Source, text: &Text) -> Result<Sourced<Paper>, SpecError> {
+pub(super) fn paper(source: &Source, text: &Text) -> Result<Sourced<Paper>, SpecError> {
     sourced(source, text, |at, raw| {
         Paper::from_str(raw, false).map_err(|_| {
             let allowed: Vec<String> = Paper::value_variants()
@@ -313,19 +328,31 @@ fn list<T>(
     Ok(out)
 }
 
-fn select(source: &Source, raw: Option<RawSelect>) -> Result<SelectLayer, SpecError> {
+pub(super) fn select(source: &Source, table: &str, raw: Option<RawSelect>) -> Result<SelectLayer, SpecError> {
     let Some(raw) = raw else {
         return Ok(SelectLayer::default());
     };
-    let tags = list(source, "select.tags", NameKind::Tag, raw.tags.as_deref(), |s| {
-        Tag::try_new(s).ok()
-    })?;
-    let prefer = list(source, "select.prefer", NameKind::Variant, raw.prefer.as_deref(), |s| {
-        VariantName::try_new(s).ok()
-    })?;
-    let promote = list(source, "select.promote", NameKind::Tag, raw.promote.as_deref(), |s| {
-        Tag::try_new(s).ok()
-    })?;
+    let tags = list(
+        source,
+        &format!("{table}.tags"),
+        NameKind::Tag,
+        raw.tags.as_deref(),
+        |s| Tag::try_new(s).ok(),
+    )?;
+    let prefer = list(
+        source,
+        &format!("{table}.prefer"),
+        NameKind::Variant,
+        raw.prefer.as_deref(),
+        |s| VariantName::try_new(s).ok(),
+    )?;
+    let promote = list(
+        source,
+        &format!("{table}.promote"),
+        NameKind::Tag,
+        raw.promote.as_deref(),
+        |s| Tag::try_new(s).ok(),
+    )?;
     let mut pick = BTreeMap::new();
     for (group, variant) in raw.pick.iter().flatten() {
         // The group is a plain map key with no position of its own, so both names are located at the wording.
@@ -333,7 +360,7 @@ fn select(source: &Source, raw: Option<RawSelect>) -> Result<SelectLayer, SpecEr
         let Ok(group_name) = GroupName::try_new(group.clone()) else {
             return InvalidNameSnafu {
                 at,
-                key: "select.pick",
+                key: format!("{table}.pick"),
                 kind: NameKind::Group,
                 value: shown(group),
             }
@@ -342,7 +369,7 @@ fn select(source: &Source, raw: Option<RawSelect>) -> Result<SelectLayer, SpecEr
         let Ok(variant_name) = VariantName::try_new(variant.get_ref().clone()) else {
             return InvalidNameSnafu {
                 at,
-                key: "select.pick",
+                key: format!("{table}.pick"),
                 kind: NameKind::Variant,
                 value: shown(variant.get_ref()),
             }
@@ -404,7 +431,7 @@ fn position(source: &Source, raw: &RawPosition) -> Result<Position, SpecError> {
         domain: label("position.domain", &raw.domain)?,
         audience: label("position.audience", &raw.audience)?,
         emphasis: emphasis(source, raw.emphasis.as_ref())?,
-        date: date(source, raw)?,
+        date: date(source, raw.date.as_ref(), "position.date")?.map(|d| d.value),
         posting: posting(source, raw.posting.as_ref())?,
     })
 }
@@ -437,8 +464,12 @@ fn emphasis(source: &Source, raw: Option<&RawEmphasis>) -> Result<Emphasis, Spec
     })
 }
 
-fn date(source: &Source, raw: &RawPosition) -> Result<Option<time::Date>, SpecError> {
-    let Some(spanned) = raw.date.as_ref() else {
+pub(super) fn date(
+    source: &Source,
+    raw: Option<&toml::Spanned<toml::value::Datetime>>,
+    key: &'static str,
+) -> Result<Option<Sourced<time::Date>>, SpecError> {
+    let Some(spanned) = raw else {
         return Ok(None);
     };
     let at = source.at(spanned.span().start);
@@ -446,6 +477,7 @@ fn date(source: &Source, raw: &RawPosition) -> Result<Option<time::Date>, SpecEr
     let (Some(day), None, None) = (&datetime.date, &datetime.time, &datetime.offset) else {
         return InvalidDateSnafu {
             at,
+            key,
             problem: DateProblem::NotJustADate,
         }
         .fail();
@@ -455,14 +487,16 @@ fn date(source: &Source, raw: &RawPosition) -> Result<Option<time::Date>, SpecEr
     let Ok(month) = time::Month::try_from(day.month) else {
         return InvalidDateSnafu {
             at,
+            key,
             problem: DateProblem::Month,
         }
         .fail();
     };
     match time::Date::from_calendar_date(i32::from(day.year), month, day.day) {
-        Ok(date) => Ok(Some(date)),
+        Ok(value) => Ok(Some(Sourced { value, at })),
         Err(_) => InvalidDateSnafu {
             at,
+            key,
             problem: DateProblem::Day,
         }
         .fail(),
