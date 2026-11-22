@@ -296,8 +296,14 @@ pub(crate) fn unknown_names_from(file: &Path, unknown: &UnknownNames, origins: &
     )
 }
 
-pub(crate) fn unknown_letter_names(file: &Path, unknown: &UnknownNames) -> Vec<Diagnostic> {
-    unknown_name_findings(file, unknown, &NameOrigins::default(), "letter", None)
+/// One warning per unknown kind of name in a letter, with where each was written when a spec wrote it.
+pub(crate) fn unknown_letter_names_from(
+    file: &Path,
+    unknown: &UnknownNames,
+    origins: Option<&NameOrigins>,
+) -> Vec<Diagnostic> {
+    let default = NameOrigins::default();
+    unknown_name_findings(file, unknown, origins.unwrap_or(&default), "letter", None)
 }
 
 fn unknown_name_findings(

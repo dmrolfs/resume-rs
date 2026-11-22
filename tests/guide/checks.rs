@@ -1252,6 +1252,7 @@ pub fn spec_examples(guide: &Guide) -> Vec<String> {
             }
             if problems.is_empty() {
                 problems.extend(spec_build_sample(guide, &range, dir.path(), spec_name));
+                problems.extend(spec_letter_sample(guide, &range, dir.path(), spec_name));
             }
         }
     }
@@ -1310,5 +1311,58 @@ fn spec_build_sample(guide: &Guide, range: &std::ops::Range<usize>, dir: &std::p
         "the sample of what a spec build prints differs from the program (the first line is compared without its time):\n--- the guide\n{}\n--- the program\n{}",
         shown.join("\n"),
         real.join("\n")
+    )]
+}
+
+/// The sample of what `letter --spec` prints must be what the program prints for the example's own files.
+///
+/// The letter is the synthetic one the spec tests use. Standard output is the letter, standard error the sample.
+fn spec_letter_sample(guide: &Guide, range: &std::ops::Range<usize>, dir: &std::path::Path, spec: &str) -> Vec<String> {
+    use std::fs;
+    use std::process::Command;
+
+    let Some(sample) = guide
+        .fences
+        .iter()
+        .find(|f| range.contains(&f.start) && f.language() == "text" && f.body.starts_with("selection: tags platform"))
+    else {
+        return vec!["the worked example has no `text` sample of what a spec letter prints".to_string()];
+    };
+    let fixture =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/specs/letter-scopes/letters/base.md");
+    let letter = dir.join("letters/cover.md");
+    let copied = letter
+        .parent()
+        .map_or(Ok(()), fs::create_dir_all)
+        .and_then(|()| fs::copy(&fixture, &letter).map(|_| ()));
+    if let Err(e) = copied {
+        return vec![format!("cannot stage the letter: {e}")];
+    }
+    let output = match Command::new(env!("CARGO_BIN_EXE_resume"))
+        .current_dir(dir)
+        .args(["--color", "never", "letter", "--spec", spec])
+        .output()
+    {
+        Ok(output) => output,
+        Err(e) => return vec![format!("cannot run resume: {e}")],
+    };
+    if !output.status.success() {
+        return vec![format!(
+            "`resume letter --spec {spec}` failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )];
+    }
+    // Paths print with the platform's separator; the guide shows `/`.
+    let actual = String::from_utf8_lossy(&output.stderr)
+        .replace("\r\n", "\n")
+        .replace('\\', "/");
+    let (shown, real) = (sample.body.replace("\r\n", "\n"), actual);
+    if shown.trim_end() == real.trim_end() {
+        return Vec::new();
+    }
+    vec![format!(
+        "the sample of what a spec letter prints differs from the program:\n--- the guide\n{}\n--- the program\n{}",
+        shown.trim_end(),
+        real.trim_end()
     )]
 }

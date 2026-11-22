@@ -7,9 +7,10 @@ fn documented_letter_commands_produce_the_same_checked_letter() {
     let guide = guide_text();
     let commands: Vec<_> = guide
         .lines()
-        .filter(|line| line.starts_with("resume letter "))
+        .filter(|line| line.starts_with("resume letter ") && !line.contains(" --spec "))
         .collect();
     assert!(commands.len() >= 3, "text, limit and PDF examples must be exercised");
+    // The spec examples need a whole tree of files; `checks::spec_examples` stages it and runs them.
     for command in commands {
         assert!(
             !command.contains(['\"', '\'']),

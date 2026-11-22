@@ -186,6 +186,20 @@ jobs:
           if [ "$(grep -c $'\r' "$dir/in-crlf/Cover.md")" -ne "$(wc -l < "$dir/in-lf/Cover.md")" ]; then
             echo "::error::letter CRLF input premise failed"; exit 1
           fi
+          # A letter built from a spec: the spec, its profile and its letter, copied whole and once more with CRLF on
+          # every line. The spec's `build.content` names a file that does not exist, because `letter --spec` must
+          # never open the resume. It is named Application, in both trees, because the PDF's identity comes from it.
+          for kind in lf crlf; do
+            mkdir -p "$dir/spec-$kind"
+            cp -R tests/fixtures/letters/application/. "$dir/spec-$kind/"
+          done
+          for file in positions/Application.toml profiles/shared.toml Letter.md; do
+            perl -pi -e 's/\r?\n/\r\n/' "$dir/spec-crlf/$file"
+            if grep -q $'\r' "$dir/spec-lf/$file"; then echo "::error::LF spec file $file has a carriage return"; exit 1; fi
+            if [ "$(grep -c $'\r' "$dir/spec-crlf/$file")" -ne "$(wc -l < "$dir/spec-lf/$file")" ]; then
+              echo "::error::CRLF spec file $file does not have a carriage return on every line"; exit 1
+            fi
+          done
           for kind in lf crlf; do
             target/release/${{ matrix.binary }} build "$dir/in-$kind/Resume.md" --fonts bundled --out "$dir/out-$kind"
             # Redirection opens the text file before resume starts, so create its directory first.
@@ -193,6 +207,8 @@ jobs:
             target/release/${{ matrix.binary }} letter "$dir/in-$kind/Cover.md" \
               --company Acme --title Architect --recipient Team --date 2028-02-29 \
               --output-format both --fonts bundled --out "$dir/out-$kind" > "$dir/out-$kind/Cover.txt"
+            target/release/${{ matrix.binary }} letter --spec "$dir/spec-$kind/positions/Application.toml" \
+              --fonts bundled --out "$dir/out-$kind" > "$dir/out-$kind/Application.txt"
           done
 
       - name: Upload the PDFs built by the release binary
@@ -206,6 +222,10 @@ jobs:
             target/determinism/cli/out-crlf/Cover-letter.pdf
             target/determinism/cli/out-lf/Cover.txt
             target/determinism/cli/out-crlf/Cover.txt
+            target/determinism/cli/out-lf/Application-letter.pdf
+            target/determinism/cli/out-crlf/Application-letter.pdf
+            target/determinism/cli/out-lf/Application.txt
+            target/determinism/cli/out-crlf/Application.txt
           if-no-files-found: error
           retention-days: 7
 
@@ -285,6 +305,23 @@ jobs:
           bash scripts/compare-pdfs.sh \
             macOS-LF=pdf-cli/macos/out-lf/Cover.txt macOS-CRLF=pdf-cli/macos/out-crlf/Cover.txt \
             Windows-LF=pdf-cli/windows/out-lf/Cover.txt Windows-CRLF=pdf-cli/windows/out-crlf/Cover.txt
+
+      # A letter built from a spec adds three things that can differ by system: how a path in the spec is joined
+      # onto its directory, CRLF in the spec and its profile, and the name the PDF takes from the spec.
+      - name: Compare the four spec-built letter PDFs byte for byte
+        shell: bash
+        run: |
+          bash scripts/compare-pdfs.sh \
+            macOS-LF=pdf-cli/macos/out-lf/Application-letter.pdf macOS-CRLF=pdf-cli/macos/out-crlf/Application-letter.pdf \
+            Windows-LF=pdf-cli/windows/out-lf/Application-letter.pdf Windows-CRLF=pdf-cli/windows/out-crlf/Application-letter.pdf \
+            --forbid Calibri
+
+      - name: Compare the four spec-built letter text products byte for byte
+        shell: bash
+        run: |
+          bash scripts/compare-pdfs.sh \
+            macOS-LF=pdf-cli/macos/out-lf/Application.txt macOS-CRLF=pdf-cli/macos/out-crlf/Application.txt \
+            Windows-LF=pdf-cli/windows/out-lf/Application.txt Windows-CRLF=pdf-cli/windows/out-crlf/Application.txt
 
   # The macOS universal2 build runs on main and release tags only, so the `just build-macos` recipe
   # cannot rot unnoticed without spending minutes on every branch push.

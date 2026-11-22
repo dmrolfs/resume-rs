@@ -26,8 +26,8 @@ pub use self::layer::{Kind, Layer, Position, SpecLayer};
 pub use self::letter::{LetterSettings, ResolvedLetter};
 pub use self::merge::{ChoiceKey, Choices, SelectChoices};
 pub use self::overrides::{
-    Admitted, Applied, Explicit, Override, OverrideFlag, OverridePolicy, Refused, Replaced, ScopeFlag, apply,
-    paper_name,
+    Admitted, Applied, AppliedLetter, Chosen, Explicit, LetterChoices, LetterExplicit, Origin, Override, OverrideFlag,
+    OverridePolicy, Refused, Replaced, ScopeFlag, Setting, apply, apply_letter, paper_name,
 };
 pub use self::resolved::{ChainLink, ContentRef, ResolvedSpec};
 

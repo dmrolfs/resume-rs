@@ -1,7 +1,7 @@
 //! PDF preparation, checks and atomic commit for letters; never writes letter text.
-use super::{Env, emit::Reporter};
+use super::{Env, emit::Reporter, letter_plan::LetterPlan};
 use crate::{
-    cli::{BuildArgs, Cli, LetterArgs},
+    cli::Cli,
     error::Error,
     layout::LayoutReport,
     letter::Letter,
@@ -13,12 +13,12 @@ use std::path::PathBuf;
 
 pub(super) fn render(
     cli: &Cli,
-    args: &LetterArgs,
+    plan: &LetterPlan,
     env: &Env,
     letter: &Letter,
     out: &mut Reporter<'_, '_>,
 ) -> Result<PathBuf, ()> {
-    attempt(cli, args, env, letter, out).map_err(|error| {
+    attempt(cli, plan, env, letter, out).map_err(|error| {
         if let Some(error) = error {
             out.error(&error);
         }
@@ -27,16 +27,16 @@ pub(super) fn render(
 
 fn attempt(
     cli: &Cli,
-    args: &LetterArgs,
+    plan: &LetterPlan,
     env: &Env,
     letter: &Letter,
     out: &mut Reporter<'_, '_>,
 ) -> Result<PathBuf, Option<Error>> {
-    let render = args.effective_render();
-    // RenderArgs here contains resolved values, not clap defaults; the explicit LetterArgs stays intact.
-    let session = Session::open(&render, env.resume_font_path.as_deref())
+    // The plan's render settings are resolved values, not clap defaults: what a spec chose came before them.
+    let render = &plan.render;
+    let session = Session::open(render, env.resume_font_path.as_deref())
         .require_ready()
-        .map_err(Some)?;
+        .map_err(|error| Some(plan.style_error(error)))?;
     let (style, fonts) = session.ready().expect("session was checked ready");
     let compiled = Typesetter::new(std::sync::Arc::clone(fonts))
         .compile_letter(letter, style, RenderOptions::new(render.paper))
@@ -57,13 +57,8 @@ fn attempt(
     {
         return Err(None);
     }
-    let stem = BuildArgs::pdf_stem(&args.file);
-    let target = args
-        .out
-        .clone()
-        .unwrap_or_else(|| PathBuf::from("out"))
-        .join(format!("{stem}-letter.pdf"));
-    let pdf = compiled.export_pdf(&stem).map_err(Some)?;
+    let target = plan.out_dir.join(plan.pdf.file_name());
+    let pdf = compiled.export_pdf(plan.pdf.ident()).map_err(Some)?;
     Writer::new(if cli.dry_run {
         WriteMode::DryRun
     } else {

@@ -1,0 +1,23 @@
+# ABOUTME: A letter-only application spec for CI: every `[letter]` setting is written, so the build reads nothing from the machine.
+# ABOUTME: Its `build.content` is missing on purpose; `letter --spec` must never open the resume.
+
+extends = ["shared"]
+
+[position]
+company = "Acme"
+title = "Architect"
+
+[build]
+content = "../no-such-resume.md"
+
+[letter]
+content = "../Letter.md"
+recipient = "Team"
+date = 2028-02-29
+output-format = "both"
+links = "text-only"
+max-length = 4000
+length-unit = "utf16"
+
+[letter.select]
+prefer = ["technical"]

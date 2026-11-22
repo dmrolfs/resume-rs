@@ -23,6 +23,9 @@ pub(super) struct PdfStem(String);
 /// The suffix a preview of a spec's drafts adds, so a preview never replaces the PDF built to be sent.
 const DRAFTS_SUFFIX: &str = ".drafts";
 
+/// The suffix the letter of a spec adds to the spec's name, so a letter never replaces the resume built from a spec.
+pub(super) const LETTER_SUFFIX: &str = "-letter";
+
 impl PdfStem {
     /// The stem of an input file.
     pub(super) fn of_input(input: &Path) -> Self {
@@ -33,7 +36,8 @@ impl PdfStem {
     ///
     /// # Errors
     /// The spec's file name has no stem, is not UTF-8, starts with a dot (the PDF would be hidden), or ends in
-    /// the preview suffix (it would collide with the preview of another spec).
+    /// the preview suffix (it would collide with the preview of another spec) or in `-letter` (it would collide
+    /// with the letter of another spec, which `letter --spec` names `<stem>-letter.pdf`).
     pub(super) fn of_spec(spec: &Path, drafts: bool) -> Result<Self, Error> {
         let fail = |problem| SpecNameSnafu { path: spec, problem }.build();
         let stem = spec.file_stem().ok_or_else(|| fail(StemProblem::NoName))?;
@@ -42,8 +46,12 @@ impl PdfStem {
             return Err(fail(StemProblem::Hidden));
         }
         // Case is ignored: on macOS and Windows `acme.Drafts.pdf` and `acme.drafts.pdf` are one file.
-        if stem.to_ascii_lowercase().ends_with(DRAFTS_SUFFIX) {
+        let lower = stem.to_ascii_lowercase();
+        if lower.ends_with(DRAFTS_SUFFIX) {
             return Err(fail(StemProblem::DraftsSuffix));
+        }
+        if lower.ends_with(LETTER_SUFFIX) {
+            return Err(fail(StemProblem::LetterSuffix));
         }
         Ok(Self(if drafts {
             format!("{stem}{DRAFTS_SUFFIX}")
@@ -54,6 +62,19 @@ impl PdfStem {
 
     pub(super) fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// The stem of the letter of this spec: `acme` is `acme-letter`, and its preview `acme-letter.drafts`.
+    ///
+    /// The preview suffix stays last, so every preview of either document ends in `.drafts.pdf`. The stem is also
+    /// the identity written into the PDF, so a spec's resume and its letter are not one document to a viewer.
+    pub(super) fn letter_of_spec(spec: &Path, drafts: bool) -> Result<Self, Error> {
+        let base = Self::of_spec(spec, false)?;
+        Ok(Self(if drafts {
+            format!("{}{LETTER_SUFFIX}{DRAFTS_SUFFIX}", base.0)
+        } else {
+            format!("{}{LETTER_SUFFIX}", base.0)
+        }))
     }
 
     /// The PDF's file name.
@@ -231,6 +252,59 @@ mod tests {
                 "{name}: {error}"
             );
         }
+    }
+
+    #[test]
+    fn the_letter_of_a_spec_is_named_after_it_and_a_preview_ends_in_drafts() {
+        let spec = Path::new("positions/acme.toml");
+        let plain = assert_ok!(PdfStem::letter_of_spec(spec, false));
+        assert_eq!(
+            (plain.as_str(), plain.file_name().as_str()),
+            ("acme-letter", "acme-letter.pdf")
+        );
+        let preview = assert_ok!(PdfStem::letter_of_spec(spec, true));
+        assert_eq!(preview.file_name(), "acme-letter.drafts.pdf");
+        // The resume of the spec is a different file in one `-o` directory.
+        assert_ne!(
+            plain.file_name(),
+            assert_ok!(stem("positions/acme.toml", false)).file_name()
+        );
+    }
+
+    #[test]
+    fn a_spec_named_like_the_letter_of_another_is_refused_by_both_commands() {
+        for name in [
+            "acme-letter.toml",
+            "acme-LETTER.toml",
+            "ACME-Letter.toml",
+            "-letter.toml",
+        ] {
+            let path = format!("positions/{name}");
+            for drafts in [false, true] {
+                let error = assert_err!(stem(&path, drafts));
+                assert!(
+                    matches!(
+                        error,
+                        Error::SpecName {
+                            problem: StemProblem::LetterSuffix,
+                            ..
+                        }
+                    ),
+                    "{name}: {error}"
+                );
+            }
+            assert!(matches!(
+                assert_err!(PdfStem::letter_of_spec(Path::new(&path), false)),
+                Error::SpecName {
+                    problem: StemProblem::LetterSuffix,
+                    ..
+                }
+            ));
+        }
+        // Only a stem that ENDS in the suffix collides.
+        assert_ok!(stem("positions/letter.toml", false));
+        assert_ok!(stem("positions/my-letters.toml", false));
+        assert_ok!(stem("positions/acme-letter-2.toml", false));
     }
 
     #[test]

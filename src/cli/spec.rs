@@ -28,13 +28,24 @@ impl Given {
     }
 
     /// The clap argument id of `flag`: its field name in `SelectArgs` or `RenderArgs`.
-    fn id(flag: OverrideFlag) -> &'static str {
+    ///
+    /// A flag only a letter has (`--links`, `--recipient`, and the like) has none here: `build` has no such
+    /// argument, and the letter command needs no probe because none of its flags has a default.
+    fn id(flag: OverrideFlag) -> Option<&'static str> {
         match flag {
-            OverrideFlag::Tags => "tags",
-            OverrideFlag::CoreOnly => "core_only",
-            OverrideFlag::Prefer => "prefer",
-            OverrideFlag::Style => "style",
-            OverrideFlag::Paper => "paper",
+            OverrideFlag::Tags => Some("tags"),
+            OverrideFlag::CoreOnly => Some("core_only"),
+            OverrideFlag::Prefer => Some("prefer"),
+            OverrideFlag::Style => Some("style"),
+            OverrideFlag::Paper => Some("paper"),
+            OverrideFlag::OutputFormat
+            | OverrideFlag::MaxLength
+            | OverrideFlag::LengthUnit
+            | OverrideFlag::Links
+            | OverrideFlag::Company
+            | OverrideFlag::Title
+            | OverrideFlag::Recipient
+            | OverrideFlag::Date => None,
         }
     }
 
@@ -52,7 +63,7 @@ impl Given {
             Self::ALL
                 .into_iter()
                 .filter(|flag| {
-                    let id = Self::id(*flag);
+                    let Some(id) = Self::id(*flag) else { return false };
                     // `value_source` panics for an id the command does not have (`watch` has no `paper`).
                     matches.try_contains_id(id).unwrap_or(false)
                         && matches
@@ -66,7 +77,7 @@ impl Given {
     /// The ids the probe asks about, so a test can check that every one exists on `build`.
     #[cfg(test)]
     pub(crate) fn ids() -> Vec<&'static str> {
-        Self::ALL.into_iter().map(Self::id).collect()
+        Self::ALL.into_iter().filter_map(Self::id).collect()
     }
 }
 
@@ -92,15 +103,15 @@ impl FromArgMatches for Given {
     }
 }
 
-/// The options that make `build` build from a position spec.
+/// The options that make `build` and `letter` build from a position spec.
 #[derive(Debug, Args)]
 pub struct SpecArgs {
     /// Which tailoring flags were typed. Must stay first: see [`Given`].
     #[command(flatten)]
     pub given: Given,
 
-    /// Build from this position spec, which names the resume, the style, the paper, and what to keep; the PDF is
-    /// named after the spec. Do not also give a FILE.
+    /// Build from this position spec, which names the content, the style, the paper, and what to keep; `build`
+    /// names the PDF after the spec, and `letter` names its letter PDF after it too. Do not also give a FILE.
     #[arg(long, value_name = "FILE")]
     pub spec: Option<PathBuf>,
 
@@ -108,8 +119,8 @@ pub struct SpecArgs {
     #[arg(long, value_name = "DIR", requires = "spec")]
     pub profiles: Option<PathBuf>,
 
-    /// Let `--tags`, `--core-only`, `--prefer`, `--style`, and `--paper` replace the spec's choices; the summary
-    /// lists each. Without it they are refused, so a build is always what the spec says.
+    /// Let the flags that choose what the spec chooses replace its choices; the summary lists each. Without it
+    /// they are refused, so a build is always what the spec says.
     #[arg(long, requires = "spec")]
     pub allow_overrides: bool,
 

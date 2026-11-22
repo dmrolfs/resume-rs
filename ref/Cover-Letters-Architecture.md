@@ -474,6 +474,50 @@ This follows the block-format structure described by [Purdue OWL](https://owl.pu
 The Tech Resume Inside Out public contents mention cover letters, but no letter layout recommendation was verified from the book; Standard Resume's public pages did not establish a cover-letter template.
 The revised synthetic PDF requires renewed owner review and new determinism evidence; earlier hashes apply to the old layout.
 
+## Letter from a spec, rsm-vqr.5
+
+`resume letter --spec FILE [--profiles DIR] [--allow-overrides] [--print-spec]` builds the letter of a position spec under the policy `build --spec` follows.
+It flattens the same `SpecArgs`, with FILE optional, and adds no second loader, merge, policy or error type.
+
+Policy:
+- Every flag a spec can also say is an override, refused beside `--spec` unless `--allow-overrides` is given.
+  They are `--tags`, `--core-only`, `--prefer`, `--style`, `--paper`, `--output-format`, `--max-length`, `--length-unit`, `--links`, `--company`, `--title`, `--recipient` and `--date`, as `OverrideFlag` variants in declaration order.
+- The machine flags (`--fonts`, `--font-path`, `--styles-dir`, `--max-pages`, `-o`), `--drafts` and `--dry-run` are allowed.
+  `--max-pages` stays a machine flag because no spec key holds it.
+- No letter flag has a clap default, so a typed flag is a present one and the `Given` probe is not extended.
+  A test pins that no override id has a default, because one would make an absent flag look typed.
+- `--print-spec` refuses every override flag and prints the same resolved TOML as `build --spec --print-spec`.
+
+Resolution, in `spec::overrides` and shared with the resume:
+- `LetterExplicit` holds what was typed, `Admitted<T>` is generic over it and over `Explicit`, and `apply_letter` returns `AppliedLetter` with `LetterChoices`.
+- Each effective setting is a `Chosen<T>` with an `Origin`: flag, spec line, build line, the spec file for company and title, or default.
+  Defaults apply once, after every layer, in `LetterChoices::from_flags` and `apply_letter`.
+- Precedence is flag, then `[letter]` (or `[position]` for company and title), then the default.
+  Style and paper fall back to `build.style` and `build.paper` between `[letter]` and the default, which is decision 11.
+  They matter only when a PDF is made, so a text letter never opens a style.
+- The scope flags replace the letter's own scope and name `letter.select` lines, never the resume's: `ScopeView` reads the origins of one document.
+- The spec is checked alone first, so a flag cannot make a spec build that would not build without it.
+- Company and title record no line in `[position]`, so a report names the spec file for them.
+
+Planning, in `commands/letter_plan.rs`:
+- One `LetterPlan` serves a letter given as a file and one given as a spec, so `commands/letter.rs` has one run path and the stdout-last and dry-run rules are not split.
+- `plan_spec` refuses the flags, applies the letter, names the PDF, and judges what only the effective settings show: a length unit with no limit, and `--format json` with a letter that prints text.
+  Clap exits 2 for what it can see; these two are `error:` lines with exit 1, because the spec's own output format is not known until it is read.
+- Neither command reads the other's content: `letter --spec` never opens `build.content` and `build --spec` never opens `letter.content`.
+  The schema of both tables is still checked by both, so a typo is never hidden.
+- Letter picks are checked after selection against `letter.select` lines alone, before field resolution, text or PDF, on a successful selection and on an empty body.
+  A draft wording a spec picks names the lines that picked it.
+
+Output:
+- The PDF is `<spec-stem>-letter.pdf`, with `<spec-stem>-letter.drafts.pdf` for a preview, and its identity is the same stem.
+  A file's letter keeps `<file-stem>-letter.pdf` and the file's stem as identity, so no existing byte changes.
+- A spec stem ending `-letter` is refused by `PdfStem::of_spec` for both commands, because the resume of that spec would be written over the letter of another.
+- `LetterFacts` is separate from `SpecFacts`, so the resume's JSON record is unchanged.
+  Human lines go to stderr under the run line; JSON writes one `letter-spec` object to stdout and is allowed only when the effective output is `pdf`.
+  Standard output holds the letter text and nothing else.
+
+Verification: `tests/letter_spec_test.rs`, the letter twins in `spec::overrides`, `cli.rs` and `build_plan.rs`, the guide checker (the worked example's `toml resolved` and a `text` sample), and a spec-built letter in the CI determinism job as LF and CRLF on macOS and Windows.
+
 ## Final review disposition
 
 Oracle's final review (`history/cover-letter-oracle-final-review.md`, COMPLETE) found seven actionable filing corrections.

@@ -391,6 +391,38 @@ fn a_worked_example_that_does_not_resolve_or_misprints_or_shows_an_unused_profil
 }
 
 #[test]
+fn a_letter_sample_that_drifts_or_goes_missing_is_caught() {
+    let text = guide_text();
+    let with = |from: &str, to: &str| Guide::parse(&replaced(&text, from, to));
+    assert_problem(
+        &checks::spec_examples(&with(
+            "  settings: output text (default); links text-and-url (default); max-length 2000",
+            "  settings: output both (default); links text-and-url (default); max-length 2000",
+        )),
+        "sample of what a spec letter prints differs",
+    );
+    assert_problem(
+        &checks::spec_examples(&with("wording opening.warm: pick", "wording opening.formal: pick")),
+        "sample of what a spec letter prints differs",
+    );
+    assert_problem(
+        &checks::spec_examples(&with(
+            "```text\nselection: tags platform",
+            "```text\nnot a sample: tags platform",
+        )),
+        "no `text` sample of what a spec letter prints",
+    );
+    // The letter tables are part of what the guide's `toml resolved` pins.
+    assert_problem(
+        &checks::spec_examples(&with(
+            "max-length = 2000\n\n[letter.select]\ntags",
+            "max-length = 3000\n\n[letter.select]\ntags",
+        )),
+        "differs from what --print-spec prints",
+    );
+}
+
+#[test]
 fn a_worked_example_without_its_printed_resolution_is_caught() {
     let text = guide_text();
     let without = Guide::parse(&replaced(&text, "```toml resolved", "```text"));

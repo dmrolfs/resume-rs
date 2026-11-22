@@ -47,6 +47,7 @@ Do not use invented coverage percentages or a count of tests as the acceptance c
 | T4 | Strict but compatible loading | Unknown keys rejected; profile letter table may hold select only; application letter requires content; valid missing other-document path ignored by opposite command; letter-specific field validation not imposed on resumes |
 | T4/T5 | Defaults and paths | Spec and declaring-profile relative paths on macOS/Windows; CLI override/refusal matches actual upstream policy; no default accidentally overrides explicit spec values |
 | T5 | End-to-end application | letter --spec matches equivalent flags; repeat text/PDF equality; build --spec unchanged with well-formed letter tables; letter --spec works with nonexistent resume content and vice versa |
+| T5 | Shipped evidence (rsm-vqr.5) | `tests/letter_spec_test.rs` (33 tests), letter twins in `src/spec/overrides.rs`, `src/cli.rs` and `src/commands/build_plan.rs`, guide checker `spec_letter_sample`, and the spec-built letter in the CI determinism job (LF and CRLF, macOS and Windows) |
 | A1 | Advisor usefulness and privacy | Two real postings in private storage; exact rendered-text provenance, edits/timings and evidence links, local-only default, remote opt-in, invalid model output rejected, no baseline modifications |
 
 ## Mutation and property work

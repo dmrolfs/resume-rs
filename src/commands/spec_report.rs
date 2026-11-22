@@ -5,10 +5,12 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::cli::{BuildArgs, RenderArgs};
+use crate::cli::{BuildArgs, LetterArgs, RenderArgs};
 use crate::model::options::FontsMode;
 use crate::spec::error::{shown, tidy_path};
-use crate::spec::{Applied, Located, Override, Position, Replaced, ResolvedSpec, paper_name};
+use crate::spec::{
+    Applied, AppliedLetter, Located, Origin, Override, Position, Replaced, ResolvedLetter, ResolvedSpec, paper_name,
+};
 
 /// The position a spec says it applies for, as text safe to print.
 #[derive(Debug, Clone, Default, Serialize)]
@@ -174,13 +176,7 @@ impl SpecFacts {
             paper: paper_name(render.paper),
             drafts: args.select.drafts,
             overrides: applied.overrides.iter().map(|o| OverrideFact::of(cwd, o)).collect(),
-            environment: EnvironmentFact {
-                fonts: args.render.fonts.to_string(),
-                font_path: args.render.font_path.iter().map(|p| p.display().to_string()).collect(),
-                styles_dir: args.render.styles_dir.as_ref().map(|p| p.display().to_string()),
-                max_pages: args.render.max_pages.map(|p| p.into_inner()),
-                out: args.out.display().to_string(),
-            },
+            environment: EnvironmentFact::of(&args.render, &args.out),
             version: env!("CARGO_PKG_VERSION"),
             content_at: resolved.content.at.clone(),
             fonts_changed: args.render.fonts != FontsMode::default(),
@@ -305,6 +301,229 @@ impl OverrideFact {
             }
         };
         format!("override: {}{set} {replaced}", self.flag)
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The letter of a spec
+// ---------------------------------------------------------------------------------------------------------------
+
+/// One effective letter setting and where it came from.
+#[derive(Debug, Clone, Serialize)]
+struct SettingFact {
+    value: String,
+    /// `flag`, `default`, the file and line that wrote it, or for company and title the spec's file.
+    from: String,
+}
+
+impl SettingFact {
+    fn new(cwd: &Path, value: impl ToString, origin: &Origin) -> Self {
+        let from = match origin {
+            Origin::Flag => "flag".to_string(),
+            Origin::Default => "default".to_string(),
+            Origin::Spec(at) => located(cwd, at),
+            Origin::Build(at) => format!("build, {}", located(cwd, at)),
+            Origin::Position(file) => shown_path(cwd, file).display().to_string(),
+        };
+        Self {
+            value: value.to_string(),
+            from,
+        }
+    }
+
+    fn text(&self) -> String {
+        format!("{} ({})", self.value, self.from)
+    }
+}
+
+/// The flags about the machine, shared by what the resume and the letter of a spec report.
+impl EnvironmentFact {
+    fn of(render: &RenderArgs, out: &Path) -> Self {
+        Self {
+            fonts: render.fonts.to_string(),
+            font_path: render.font_path.iter().map(|p| p.display().to_string()).collect(),
+            styles_dir: render.styles_dir.as_ref().map(|p| p.display().to_string()),
+            max_pages: render.max_pages.map(|p| p.into_inner()),
+            out: out.display().to_string(),
+        }
+    }
+}
+
+/// Everything a letter built from a spec reports about its spec. Spec data goes only here, never into the PDF.
+///
+/// Field values (a recipient, a date) are shown through the same scrub as every other text a spec supplies.
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct LetterFacts {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    file: String,
+    position: Option<PositionFacts>,
+    chain: Vec<ChainFact>,
+    /// The letter file, never the resume.
+    content: String,
+    output: SettingFact,
+    links: SettingFact,
+    max_length: Option<SettingFact>,
+    length_unit: Option<SettingFact>,
+    /// The company, title, recipient, and date that are set, by the name a placeholder uses.
+    fields: std::collections::BTreeMap<&'static str, SettingFact>,
+    /// What the PDF is made with; only meaningful when a PDF is made, so `null` for a text letter.
+    style: Option<SettingFact>,
+    paper: Option<SettingFact>,
+    drafts: bool,
+    /// The PDF this run wrote or would write; `null` when none was.
+    pdf: Option<String>,
+    overrides: Vec<OverrideFact>,
+    environment: EnvironmentFact,
+    version: &'static str,
+    #[serde(skip)]
+    fonts_changed: bool,
+    #[serde(skip)]
+    content_at: Located,
+}
+
+impl LetterFacts {
+    /// The facts of building the letter of `resolved`, the spec at `spec_path`, with `applied` and `args`.
+    pub(super) fn new(
+        cwd: &Path,
+        spec_path: &Path,
+        resolved: &ResolvedSpec,
+        letter: &ResolvedLetter,
+        applied: &AppliedLetter,
+        args: &LetterArgs,
+        out: &Path,
+    ) -> Self {
+        let shown_file = |path: &Path| shown_path(cwd, path).display().to_string();
+        let choices = &applied.choices;
+        let make_pdf = choices.output.value != crate::letter::LetterOutput::Text;
+        let mut fields = std::collections::BTreeMap::new();
+        let mut field = |name: &'static str, chosen: Option<(String, &Origin)>| {
+            if let Some((value, origin)) = chosen {
+                fields.insert(name, SettingFact::new(cwd, shown(&value), origin));
+            }
+        };
+        field(
+            "company",
+            choices.company.as_ref().map(|c| (c.value.to_string(), &c.origin)),
+        );
+        field(
+            "title",
+            choices.title.as_ref().map(|c| (c.value.to_string(), &c.origin)),
+        );
+        field(
+            "recipient",
+            choices.recipient.as_ref().map(|c| (c.value.to_string(), &c.origin)),
+        );
+        field("date", choices.date.as_ref().map(|c| (c.value.to_string(), &c.origin)));
+        // The machine flags as typed: a default the command fills in (one page) is not something the user said.
+        let typed = RenderArgs {
+            max_pages: args.render.max_pages,
+            ..args.render_for(choices)
+        };
+        Self {
+            kind: "letter-spec",
+            file: shown_file(spec_path),
+            position: resolved.position.as_ref().map(PositionFacts::from),
+            chain: resolved
+                .chain
+                .iter()
+                .map(|link| ChainFact {
+                    name: link.name.as_ref().map(ToString::to_string),
+                    file: shown_file(&link.path),
+                })
+                .collect(),
+            content: shown_file(&letter.content.path),
+            output: SettingFact::new(cwd, choices.output.value, &choices.output.origin),
+            links: SettingFact::new(cwd, choices.links.value, &choices.links.origin),
+            max_length: choices
+                .max_length
+                .as_ref()
+                .map(|m| SettingFact::new(cwd, m.value, &m.origin)),
+            length_unit: choices
+                .max_length
+                .as_ref()
+                .map(|_| SettingFact::new(cwd, choices.length_unit.value, &choices.length_unit.origin)),
+            fields,
+            style: make_pdf.then(|| SettingFact::new(cwd, &choices.style.value, &choices.style.origin)),
+            paper: make_pdf.then(|| SettingFact::new(cwd, paper_name(choices.paper.value), &choices.paper.origin)),
+            drafts: args.select.drafts,
+            pdf: None,
+            overrides: applied.overrides.iter().map(|o| OverrideFact::of(cwd, o)).collect(),
+            environment: EnvironmentFact::of(&typed, out),
+            version: env!("CARGO_PKG_VERSION"),
+            fonts_changed: typed.fonts != FontsMode::default(),
+            content_at: letter.content.at.clone(),
+        }
+    }
+
+    /// Where the spec wrote `[letter] content =`.
+    pub(super) fn content_at(&self) -> &Located {
+        &self.content_at
+    }
+
+    /// The record for one run, which names the PDF it wrote or would write.
+    pub(super) fn record(&self, pdf: Option<&Path>) -> Self {
+        Self {
+            pdf: pdf.map(|p| p.display().to_string()),
+            ..self.clone()
+        }
+    }
+
+    /// The lines a person reads under the letter's line, without indentation.
+    pub(super) fn lines(&self) -> Vec<String> {
+        let mut head = format!("spec: {}", self.file);
+        if !self.overrides.is_empty() {
+            head.push_str(", plus overrides");
+        }
+        if self.drafts {
+            head.push_str(", with drafts");
+        }
+        let mut out = vec![head];
+        if let Some(line) = self.position.as_ref().and_then(PositionFacts::line) {
+            out.push(format!("position: {line}"));
+        }
+        let chain: Vec<String> = self
+            .chain
+            .iter()
+            .map(|link| link.name.clone().unwrap_or_else(|| "the spec".to_string()))
+            .collect();
+        out.push(format!("profiles: {}", chain.join(" -> ")));
+        out.push(format!("letter: {}", self.content));
+        let mut settings = vec![
+            format!("output {}", self.output.text()),
+            format!("links {}", self.links.text()),
+        ];
+        settings.extend(self.max_length.iter().map(|m| format!("max-length {}", m.text())));
+        settings.extend(self.length_unit.iter().map(|u| format!("length-unit {}", u.text())));
+        settings.extend(self.style.iter().map(|s| format!("style {}", s.text())));
+        settings.extend(self.paper.iter().map(|p| format!("paper {}", p.text())));
+        out.push(format!("settings: {}", settings.join("; ")));
+        if !self.fields.is_empty() {
+            let fields: Vec<String> = self.fields.iter().map(|(k, v)| format!("{k} {}", v.text())).collect();
+            out.push(format!("fields: {}", fields.join("; ")));
+        }
+        for item in &self.overrides {
+            out.push(item.line());
+        }
+        if let Some(line) = self.environment_line() {
+            out.push(line);
+        }
+        out
+    }
+
+    fn environment_line(&self) -> Option<String> {
+        let env = &self.environment;
+        let mut parts = Vec::new();
+        if self.fonts_changed {
+            parts.push(format!("--fonts {}", env.fonts));
+        }
+        parts.extend(env.font_path.iter().map(|p| format!("--font-path {p}")));
+        parts.extend(env.styles_dir.iter().map(|p| format!("--styles-dir {p}")));
+        parts.extend(env.max_pages.map(|n| format!("--max-pages {n}")));
+        if env.out != "out" {
+            parts.push(format!("-o {}", env.out));
+        }
+        (!parts.is_empty()).then(|| format!("environment: {}", parts.join("; ")))
     }
 }
 

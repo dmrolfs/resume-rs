@@ -480,7 +480,11 @@ resume letter tests/fixtures/letters/tailored.md --tags platform --prefer techni
 
 | Option | Values and default | What it does |
 |---|---|---|
-| `<FILE>` | one Markdown letter | The letter to validate and print. |
+| `<FILE>` | one Markdown letter; not needed with `--spec` | The letter to validate and print. |
+| `--spec <FILE>` | a position spec | Build the letter the spec names, with the choices it and its profiles make. See [Profiles and position specs](#profiles-and-position-specs). |
+| `--profiles <DIR>` | none; needs `--spec` | Where the profiles are found; without it, `profiles` beside the spec's directory. |
+| `--allow-overrides` | a switch; needs `--spec` | Let the flags a spec can also say replace its choices; the summary lists each. |
+| `--print-spec` | a switch; needs `--spec` | Print the spec as resolved, as one TOML file, and build nothing. |
 | `--tags <TAG>` | comma-separated or repeated | Keep matching, core and untagged standard body paragraphs; conflicts with `--core-only`. |
 | `--core-only` | a switch | Keep eligible core body paragraphs and mandatory frames. |
 | `--prefer <NAME>` | comma-separated or repeated | Preferred alternate wordings, most preferred first. |
@@ -493,7 +497,7 @@ resume letter tests/fixtures/letters/tailored.md --tags platform --prefer techni
 | `--date <DATE>` | none | An explicit ISO date; retained but not printed in website text. |
 | `--links <LINKS>` | `text-and-url` or `text-only`; none at argument parsing | Keep labels plus link destinations, or labels only. |
 | `--max-length <MAX_LENGTH>` | none | Inclusive limit; zero is valid. Never truncates. |
-| `--length-unit <LENGTH_UNIT>` | `utf16`, `scalars`, `bytes`, `words`; none at argument parsing | Requires `--max-length`. Counts the exact final text, including newlines. |
+| `--length-unit <LENGTH_UNIT>` | `utf16`, `scalars`, `bytes`, `words`; none at argument parsing | Needs a maximum length, from `--max-length` or the spec. Counts the exact final text, including newlines. |
 | `-s, --style <STYLE>` | none | Parsed but ignored for text. |
 | `--styles-dir <STYLES_DIR>` | none | Parsed but never opened for text. |
 | `--paper <PAPER>` | `letter` or `a4`; none | Parsed but ignored for text. |
@@ -851,6 +855,7 @@ Keep the files side by side. The spec sits in `positions/`, the profiles it exte
 
 ```text
 baselines/baseline.md
+letters/cover.md
 profiles/principal.toml
 profiles/ai-platform.toml
 positions/acme.toml
@@ -876,6 +881,10 @@ paper = "a4"
 tags = ["ai", "platform"]
 prefer = ["business"]
 pick = { gateway = "short", summary = "ai" }
+
+[letter.select]
+tags = ["platform"]
+prefer = ["short"]
 ```
 
 And the spec for one application, which extends both and adds its own choices:
@@ -899,7 +908,18 @@ tags = ["iceberg"]
 prefer = ["short"]
 pick = { summary = "acme" }
 promote = ["leadership"]
+
+[letter]
+content = "../letters/cover.md"
+recipient = "Hiring Team"
+date = 2026-11-20
+max-length = 2000
+
+[letter.select]
+pick = { opening = "warm" }
 ```
+
+The `[letter]` table is for the cover letter of the same application; [The letter of a spec](#the-letter-of-a-spec) says what it does. A spec without one builds exactly as before.
 
 Build it, and print what it resolves to:
 
@@ -933,6 +953,19 @@ promote = ["leadership"]
 [select.pick]
 gateway = "short"
 summary = "acme"
+
+[letter]
+content = "../letters/cover.md"
+recipient = "Hiring Team"
+date = 2026-11-20
+max-length = 2000
+
+[letter.select]
+tags = ["platform"]
+prefer = ["short"]
+
+[letter.select.pick]
+opening = "warm"
 ```
 
 The `style` is the spec's `mono`, because the spec is more specific than `principal`'s `pragmatic`. The `paper` comes from `ai-platform`, the only file that chose one. The `gateway` pick is `short`, from `ai-platform`, because it is listed after `principal`. Saved beside the original (the path in `content` is relative to the spec's own directory), the printed file resolves to the same choices and needs no profiles.
@@ -1050,6 +1083,59 @@ resume build --spec positions/acme.toml --allow-overrides --core-only --style pr
 Each option you type then **replaces** the spec's choice. `--tags` or `--core-only` replaces the whole scope, so `--tags ai` narrows a spec that keeps four tags to one, and `--core-only` is allowed over a spec that has tags. `--prefer` replaces the whole list. A pick can only come from a file. The summary says `spec: positions/acme.toml, plus overrides` and lists each override with what it replaced and where that was written, and the JSON `overrides` lists the same. The PDF you send should be built without them.
 
 The options about your machine (`--fonts`, `--font-path`, `--styles-dir`, `--max-pages`, `-o`) and `--dry-run` are always allowed. So is `--drafts`, to preview the spec with its unfinished items; the summary says `with drafts`, and the PDF is written as `acme.drafts.pdf`, so a preview never replaces the `acme.pdf` you built to send. A spec file whose name ends in `.drafts` is refused for that reason.
+
+### The letter of a spec
+
+The same spec can say how to build the cover letter for the application, so the letter you send and the resume you send are rebuilt from one file. Add a `[letter]` table that names the letter, and a `[letter.select]` table for what to keep of it. `resume letter --spec` builds it:
+
+```sh
+resume letter --spec positions/acme.toml
+resume letter --spec positions/acme.toml --output-format pdf --allow-overrides
+```
+
+With the worked example above, `resume letter --spec positions/acme.toml` prints the letter on standard output and, on standard error:
+
+```text
+selection: tags platform; prefer short; picks opening.warm
+letter: 5 kept, 0 dropped
+wording opening.warm: pick
+wording evidence.short: preference
+wording summary.default: default
+kept: greeting at line 8
+kept: body at line 16
+kept: body at line 22
+kept: body at line 24
+kept: closing at line 32
+ok printed letter: 132 utf16, 132 scalars, 132 bytes, 23 words, 10 line breaks
+  spec: positions/acme.toml
+  position: Acme; Principal Architect, AI Platform; level principal; dated 2026-11-19; posting https://example.com/jobs/123
+  profiles: principal -> ai-platform -> the spec
+  letter: letters/cover.md
+  settings: output text (default); links text-and-url (default); max-length 2000 (positions/acme.toml:24:14); length-unit utf16 (default)
+  fields: company Acme (positions/acme.toml); date 2026-11-20 (positions/acme.toml:23:8); recipient Hiring Team (positions/acme.toml:22:13); title Principal Architect, AI Platform (positions/acme.toml)
+```
+
+The letter and the resume are chosen apart. `[select]` is the resume's and `[letter.select]` is the letter's, and each is merged over the same profiles by the same rules. A profile can hold `[letter.select]` and nothing else of the letter, because a letter's content, recipient, and date describe one application. A pick of the same group name in each table picks that wording in each document, and neither is checked against the other's content: a letter pick that names nothing in the letter is an error that names the line that wrote it, and a resume pick the letter lacks is not. The letter has no `promote`, because it keeps its written order, and `drafts` is not a key here either.
+
+What `[letter]` can say, each also a flag of [`resume letter`](#resume-letter):
+
+| Key | The flag it matches | What it says |
+|---|---|---|
+| `content` | the `FILE` | The letter, a relative path from the spec's own directory. Required. |
+| `recipient`, `date` | `--recipient`, `--date` | The recipient, and the date (`2026-11-20`). The date is never taken from the clock. |
+| `style`, `paper` | `--style`, `--paper` | What a PDF is made with. Used only when a PDF is made. Without them, the `style` and `paper` under `[build]` are used, so the letter and resume of one application look alike, and the summary says which line chose them. |
+| `output-format`, `links` | `--output-format`, `--links` | `text`, `pdf`, or `both`, and how links print. |
+| `max-length`, `length-unit` | `--max-length`, `--length-unit` | A limit on the text, and what it counts. A unit needs a limit. |
+
+The company and the title come from `[position]`, and nothing else. Neither document reads the other's content: `letter --spec` works when the baseline does not exist yet, and `build --spec` works when the letter does not. A mistake in the shape of the other document's table is still an error for both commands, so a typo is never hidden.
+
+The PDF is named after the spec, with `-letter`: `positions/acme.toml` builds `out/acme-letter.pdf`, beside the resume's `out/acme.pdf`. That name is also the identity written into the PDF, so a viewer sees two documents. With `--drafts` the letter is written as `acme-letter.drafts.pdf`. A spec file whose name ends in `-letter` is refused by both commands, because its resume would be written over the letter of another spec.
+
+Flags beside a spec follow the rule of [Flags beside a spec](#flags-beside-a-spec), and the list is every flag the spec can also say: `--tags`, `--core-only`, `--prefer`, `--style`, `--paper`, `--output-format`, `--max-length`, `--length-unit`, `--links`, `--company`, `--title`, `--recipient`, and `--date`. They are refused unless you add `--allow-overrides`, and the summary lists each with what it replaced and where that was written. The options about your machine, `--drafts`, and `--dry-run` are always allowed. With `--format json` and a PDF, one object with `type` `letter-spec` is written on standard output; it has the keys `file`, `position`, `chain`, `content`, `output`, `links`, `max_length`, `length_unit`, `fields`, `style`, `paper`, `drafts`, `pdf`, `overrides`, `environment`, and `version`. Each setting there is a `value` and where it came from (`from`: `flag`, `default`, or the line that wrote it).
+
+`resume letter --spec positions/acme.toml --print-spec` prints the same resolved spec as `resume build --spec positions/acme.toml --print-spec`, letter included, and builds nothing.
+
+Two runs of one spec give the same text and the same PDF bytes, with `--fonts bundled` for the PDF. The `company`, `title`, and `recipient` you send are in the summary and the JSON record, as for a resume.
 
 ### Rebuilding what you sent
 

@@ -47,6 +47,7 @@ pub fn finding_of(error: &Error) -> Option<Diagnostic> {
         | Error::TypesetPanicked { .. }
         | Error::Compile { .. }
         | Error::ExportPdf { .. }
+        | Error::LetterPicks { .. }
         | Error::Select { .. } => return None,
     };
     Some(Diagnostic {

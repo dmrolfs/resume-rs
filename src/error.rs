@@ -21,6 +21,10 @@ pub enum StemProblem {
     Hidden,
     #[strum(to_string = "its name ends in `.drafts`, which is how the preview of the spec before it is named")]
     DraftsSuffix,
+    #[strum(
+        to_string = "its name ends in `-letter`, which is how the letter of the spec before it is named, so the two would write one PDF"
+    )]
+    LetterSuffix,
 }
 
 /// A style source file as Typst read it, so a renderer can show excerpts of it.
@@ -136,6 +140,10 @@ pub enum Error {
     #[snafu(display("{} changed while it was being fixed", path.display()))]
     InputChanged { path: PathBuf },
 
+    /// A letter's own selection could not be made, said as the selection says it.
+    #[snafu(display("{message}"))]
+    LetterPicks { message: String },
+
     /// A position spec or a profile could not be loaded or resolved.
     #[snafu(display("{source}"))]
     Spec {
@@ -203,7 +211,9 @@ impl Error {
             Self::OutputIsDirectory { .. } => Some("remove it or use -o <DIR> to write elsewhere"),
             Self::OutputExists { .. } => Some("use --force to replace it"),
             Self::InputChanged { .. } => Some("the file was edited meanwhile; nothing was changed, run doctor again"),
-            Self::Select { .. } => Some("pick a ready wording, finish the draft, or build with --drafts to preview it"),
+            Self::Select { .. } | Self::LetterPicks { .. } => {
+                Some("pick a ready wording, finish the draft, or build with --drafts to preview it")
+            }
             Self::Spec { source } => source.hint(),
             Self::SpecContent { source, .. } | Self::TracedToChoice { source, .. } => source.hint(),
             Self::SpecName { .. } => Some("rename the spec file"),

@@ -551,6 +551,10 @@ mod tests {
     use clap::error::ErrorKind;
     use pretty_assertions::assert_eq;
 
+    use crate::letter::{LengthUnit, LetterOutput, LinkStyle};
+    use crate::model::options::Paper;
+    use crate::spec::{LetterChoices, LetterExplicit};
+
     fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
         Cli::try_parse_validated(std::iter::once("resume").chain(args.iter().copied()))
     }
@@ -1152,5 +1156,239 @@ mod tests {
     fn profiles_is_taken_with_a_spec() {
         let cli = cli(&["build", "--spec", "s.toml", "--profiles", "p"]);
         assert_eq!(build_of(&cli).spec.profiles, Some(PathBuf::from("p")));
+    }
+    // ========================================================================
+    // `letter --spec`
+    // ========================================================================
+
+    fn letter_of(cli: &Cli) -> &LetterArgs {
+        match &cli.command {
+            Command::Letter(letter) => letter,
+            other => panic!("expected `letter`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_letter_needs_a_file_or_a_spec_and_never_both() {
+        let by_spec = cli(&["letter", "--spec", "positions/acme.toml"]);
+        assert_eq!(
+            letter_of(&by_spec).spec.spec,
+            Some(PathBuf::from("positions/acme.toml"))
+        );
+        assert!(letter_of(&by_spec).file.is_none());
+        assert_eq!(
+            assert_err!(parse(&["letter"])).kind(),
+            ErrorKind::MissingRequiredArgument
+        );
+        let both = assert_err!(parse(&["letter", "a.md", "--spec", "s.toml"]));
+        assert_eq!(both.kind(), ErrorKind::ArgumentConflict);
+        assert_eq!(both.exit_code(), 2);
+        assert!(both.to_string().contains("a.md"), "{both}");
+        assert_eq!(letter_of(&cli(&["letter", "a.md"])).input(), Some(Path::new("a.md")));
+    }
+
+    #[test]
+    fn letter_profiles_allow_overrides_and_print_spec_each_need_a_spec_even_beside_a_file() {
+        for flag in [
+            &["--profiles", "p"][..],
+            &["--allow-overrides"][..],
+            &["--print-spec"][..],
+        ] {
+            for file in [&[][..], &["a.md"][..]] {
+                let args: Vec<&str> = ["letter"].iter().chain(file).chain(flag).copied().collect();
+                let err = assert_err!(parse(&args));
+                assert!(
+                    matches!(err.kind(), ErrorKind::MissingRequiredArgument),
+                    "{args:?}: {:?} {err}",
+                    err.kind()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_letter_flag_a_spec_can_say_is_an_override_and_the_machine_flags_are_not() {
+        let overrides = [
+            ("--tags", "a", OverrideFlag::Tags),
+            ("--prefer", "short", OverrideFlag::Prefer),
+            ("--style", "mono", OverrideFlag::Style),
+            ("--paper", "a4", OverrideFlag::Paper),
+            ("--output-format", "pdf", OverrideFlag::OutputFormat),
+            ("--max-length", "5", OverrideFlag::MaxLength),
+            ("--links", "text-only", OverrideFlag::Links),
+            ("--company", "Acme", OverrideFlag::Company),
+            ("--title", "Eng", OverrideFlag::Title),
+            ("--recipient", "Dana", OverrideFlag::Recipient),
+            ("--date", "2028-01-01", OverrideFlag::Date),
+        ];
+        for (flag, value, expected) in overrides {
+            let parsed = cli(&["letter", "--spec", "s.toml", "--allow-overrides", flag, value]);
+            assert_eq!(letter_of(&parsed).explicit().flags(), [expected], "{flag}");
+            let err = assert_err!(parse(&["letter", "--spec", "s.toml", flag, value]));
+            assert_eq!(err.exit_code(), 2, "{flag}");
+            assert!(err.to_string().contains(flag), "{flag}: {err}");
+        }
+        let unit = cli(&[
+            "letter",
+            "--spec",
+            "s.toml",
+            "--allow-overrides",
+            "--length-unit",
+            "words",
+        ]);
+        assert_eq!(letter_of(&unit).explicit().flags(), [OverrideFlag::LengthUnit]);
+        let core = cli(&["letter", "--spec", "s.toml", "--allow-overrides", "--core-only"]);
+        assert_eq!(letter_of(&core).explicit().flags(), [OverrideFlag::CoreOnly]);
+        // About the machine, or a preview: allowed beside a spec with no override.
+        let machine = cli(&[
+            "letter",
+            "--spec",
+            "s.toml",
+            "--drafts",
+            "--fonts",
+            "bundled",
+            "--styles-dir",
+            "d",
+            "--max-pages",
+            "2",
+            "-o",
+            "pdfs",
+        ]);
+        assert!(letter_of(&machine).select.drafts);
+        assert_eq!(letter_of(&machine).override_policy(), OverridePolicy::Refuse);
+        assert_eq!(letter_of(&machine).explicit().flags(), []);
+        let with_path = cli(&["letter", "--spec", "s.toml", "--font-path", "f"]);
+        assert_eq!(letter_of(&with_path).render.font_path, [PathBuf::from("f")]);
+    }
+
+    #[test]
+    fn every_stray_letter_flag_is_named_in_one_usage_error() {
+        let err = assert_err!(parse(&[
+            "letter",
+            "--spec",
+            "s.toml",
+            "--tags",
+            "a",
+            "--links",
+            "text-only",
+            "--date",
+            "2028-01-01",
+            "--title",
+            "T",
+        ]));
+        assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
+        let text = err.to_string();
+        assert!(
+            text.contains("--tags, --links, --title and --date cannot be used beside --spec"),
+            "{text}"
+        );
+        assert!(text.contains("--allow-overrides"), "{text}");
+    }
+
+    #[test]
+    fn letter_print_spec_with_a_choosing_flag_is_refused_even_with_allow_overrides() {
+        for extra in [&[][..], &["--allow-overrides"][..]] {
+            let args: Vec<&str> = ["letter", "--spec", "s.toml", "--print-spec", "--links", "text-only"]
+                .iter()
+                .chain(extra)
+                .copied()
+                .collect();
+            let err = assert_err!(parse(&args));
+            assert_eq!(err.exit_code(), 2);
+            assert!(
+                err.to_string().contains("--print-spec") && err.to_string().contains("--links"),
+                "{err}"
+            );
+        }
+        assert_ok!(parse(&["letter", "--spec", "s.toml", "--print-spec"]));
+    }
+
+    #[test]
+    fn a_length_unit_beside_a_spec_may_take_the_specs_limit_but_beside_a_file_it_needs_its_own() {
+        assert_ok!(parse(&[
+            "letter",
+            "--spec",
+            "s.toml",
+            "--allow-overrides",
+            "--length-unit",
+            "words"
+        ]));
+        let err = assert_err!(parse(&["letter", "a.md", "--length-unit", "words"]));
+        assert!(err.to_string().contains("--length-unit requires --max-length"), "{err}");
+        assert_ok!(parse(&[
+            "letter",
+            "a.md",
+            "--max-length",
+            "9",
+            "--length-unit",
+            "words"
+        ]));
+    }
+
+    #[test]
+    fn json_with_a_typed_text_output_beside_a_spec_is_a_usage_error_and_with_the_specs_own_is_the_plans() {
+        let typed = assert_err!(parse(&[
+            "--format",
+            "json",
+            "letter",
+            "--spec",
+            "s.toml",
+            "--allow-overrides",
+            "--output-format",
+            "text",
+        ]));
+        assert!(
+            typed.to_string().contains("--format json cannot share stdout"),
+            "{typed}"
+        );
+        // The output the spec chooses is not known until the spec is read, so the plan judges it.
+        assert_ok!(parse(&["--format", "json", "letter", "--spec", "s.toml"]));
+    }
+
+    #[test]
+    fn no_flag_a_spec_can_say_has_a_clap_default_so_a_typed_flag_is_a_present_one() {
+        // The probe `build` needs for `--style` and `--paper` is not used on `letter` because none of its flags
+        // has a default. This is the guard: a default added to any of them would make an absent flag look typed
+        // and silently replace a spec's value.
+        let command = Cli::command();
+        let letter = command.find_subcommand("letter").expect("letter exists");
+        for id in [
+            "tags",
+            "core_only",
+            "prefer",
+            "style",
+            "paper",
+            "output_format",
+            "max_length",
+            "length_unit",
+            "links",
+            "company",
+            "title",
+            "recipient",
+            "date",
+        ] {
+            let arg = letter
+                .get_arguments()
+                .find(|arg| arg.get_id().as_str() == id)
+                .unwrap_or_else(|| panic!("`letter` has no argument `{id}`"));
+            assert!(arg.get_default_values().is_empty(), "`{id}` has a default: {arg:?}");
+        }
+        let bare = cli(&["letter", "--spec", "s.toml"]);
+        assert_eq!(letter_of(&bare).explicit(), LetterExplicit::default());
+    }
+
+    #[test]
+    fn a_letter_from_a_file_keeps_every_default_it_had() {
+        let bare = cli(&["letter", "a.md"]);
+        let choices = LetterChoices::from_flags(&letter_of(&bare).explicit());
+        assert_eq!(
+            (choices.output.value, choices.links.value, choices.length_unit.value),
+            (LetterOutput::Text, LinkStyle::TextAndUrl, LengthUnit::Utf16)
+        );
+        assert_eq!(choices.paper.value, Paper::default());
+        assert_eq!(choices.style.value.as_ref() as &str, "pragmatic");
+        assert!(choices.max_length.is_none());
+        let render = letter_of(&bare).effective_render();
+        assert_eq!(render.max_pages.map(|p| p.into_inner()), Some(1));
     }
 }

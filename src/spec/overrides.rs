@@ -4,9 +4,12 @@
 use snafu::Snafu;
 use strum::Display;
 
-use super::error::{Located, SpecError};
-use super::merge::ChoiceKey;
-use super::resolved::ResolvedSpec;
+use super::error::{Located, NoLetterTableSnafu, SpecError};
+use super::layer::Sourced;
+use super::letter::ResolvedLetter;
+use super::merge::{ChoiceKey, SelectChoices};
+use super::resolved::{ChainLink, ResolvedSpec};
+use crate::letter::{FieldValue, LengthUnit, LetterDate, LetterFields, LetterOutput, LinkStyle};
 use crate::model::options::Paper;
 use crate::model::{StyleName, VariantName};
 use crate::select::{Scope, SelectedTags, Selection};
@@ -27,6 +30,23 @@ pub enum OverrideFlag {
     Style,
     #[strum(to_string = "--paper")]
     Paper,
+    // The rest are letter flags: a letter spec can say each of them, so each is refused beside `--spec` too.
+    #[strum(to_string = "--output-format")]
+    OutputFormat,
+    #[strum(to_string = "--max-length")]
+    MaxLength,
+    #[strum(to_string = "--length-unit")]
+    LengthUnit,
+    #[strum(to_string = "--links")]
+    Links,
+    #[strum(to_string = "--company")]
+    Company,
+    #[strum(to_string = "--title")]
+    Title,
+    #[strum(to_string = "--recipient")]
+    Recipient,
+    #[strum(to_string = "--date")]
+    Date,
 }
 
 /// What a typed scope flag asks to keep. `--tags` and `--core-only` exclude each other, so there is one scope.
@@ -77,10 +97,7 @@ impl Explicit {
     /// # Errors
     /// [`Refused`] naming every typed flag, when `policy` refuses and any was typed.
     pub fn admit(self, policy: OverridePolicy) -> Result<Admitted, Refused> {
-        let flags = self.flags();
-        if policy == OverridePolicy::Refuse && !flags.is_empty() {
-            return Err(Refused { flags });
-        }
+        policy.check(self.flags())?;
         Ok(Admitted(self))
     }
 }
@@ -94,20 +111,33 @@ pub enum OverridePolicy {
     Allow,
 }
 
-/// Settings that passed the policy. Only [`Explicit::admit`] makes one, so applying settings to a spec without
-/// going through the policy does not compile.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Admitted(Explicit);
+impl OverridePolicy {
+    /// Refuses `flags` when this policy refuses and any was typed.
+    pub(super) fn check(self, flags: Vec<OverrideFlag>) -> Result<(), Refused> {
+        if self == Self::Refuse && !flags.is_empty() {
+            return Err(Refused { flags });
+        }
+        Ok(())
+    }
+}
 
-impl Admitted {
+/// Settings that passed the policy. Only [`Explicit::admit`] and `LetterExplicit::admit` make one, so applying
+/// settings to a spec without going through the policy does not compile.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Admitted<T = Explicit>(pub(super) T);
+
+impl<T> Admitted<T> {
     /// Nothing typed: the spec alone. Only the tests need it: a build admits what it parsed.
     #[cfg(test)]
-    pub(crate) fn none() -> Self {
-        Self::default()
+    pub(crate) fn none() -> Self
+    where
+        T: Default,
+    {
+        Self(T::default())
     }
 
     #[must_use]
-    pub fn explicit(&self) -> &Explicit {
+    pub fn explicit(&self) -> &T {
         &self.0
     }
 }
@@ -141,6 +171,14 @@ pub enum Setting {
     Prefer,
     Style,
     Paper,
+    OutputFormat,
+    MaxLength,
+    LengthUnit,
+    Links,
+    Company,
+    Title,
+    Recipient,
+    Date,
 }
 
 /// What a typed flag replaced.
@@ -177,6 +215,129 @@ pub struct Applied {
     pub overrides: Vec<Override>,
 }
 
+/// Where the choices of one scope (the resume's `[select]`, or the letter's `[letter.select]`) came from.
+///
+/// The two scopes are resolved apart over one chain, so a flag that replaces a letter choice must name the lines of
+/// `[letter.select]` and never the resume's.
+pub(super) struct ScopeView<'a> {
+    select: &'a SelectChoices,
+    chain: &'a [ChainLink],
+    origins: Origins<'a>,
+}
+
+/// Which document's origins a [`ScopeView`] reads.
+#[derive(Clone, Copy)]
+enum Origins<'a> {
+    Resume(&'a ResolvedSpec),
+    Letter(&'a ResolvedLetter),
+}
+
+impl<'a> ScopeView<'a> {
+    pub(super) fn of_resume(spec: &'a ResolvedSpec) -> Self {
+        Self {
+            select: &spec.choices.select,
+            chain: &spec.chain,
+            origins: Origins::Resume(spec),
+        }
+    }
+
+    /// The letter's own scope: `letter.select` and the lines that decided it, over the same chain.
+    pub(super) fn of_letter(spec: &'a ResolvedSpec, letter: &'a ResolvedLetter) -> Self {
+        Self {
+            select: &letter.choices,
+            chain: &spec.chain,
+            origins: Origins::Letter(letter),
+        }
+    }
+
+    fn origin_of(&self, key: &ChoiceKey) -> Option<&'a Located> {
+        match self.origins {
+            Origins::Resume(spec) => spec.origin_of(key),
+            Origins::Letter(letter) => letter.origin_of(key),
+        }
+    }
+
+    /// The place that decided each of `keys`, the first in each file, from the least specific file to the most.
+    ///
+    /// A list such as the tags is decided by several lines of one file; naming the file once, at its first line, is
+    /// enough to find them.
+    pub(super) fn decided_at(&self, keys: impl IntoIterator<Item = ChoiceKey>) -> Vec<Located> {
+        let mut found: Vec<Located> = keys
+            .into_iter()
+            .filter_map(|key| self.origin_of(&key))
+            .cloned()
+            .collect();
+        let rank = |at: &Located| self.chain.iter().position(|link| *link.path == *at.path);
+        found.sort_by(|a, b| {
+            rank(a)
+                .cmp(&rank(b))
+                .then_with(|| (a.line, a.column).cmp(&(b.line, b.column)))
+        });
+        found.dedup_by(|later, earlier| *later.path == *earlier.path);
+        found
+    }
+
+    /// What typing a scope flag replaced.
+    pub(super) fn replaced_scope(&self) -> Replaced {
+        if self.select.core_only == Some(true) {
+            return Replaced::Spec {
+                setting: Setting::CoreOnly,
+                value: Vec::new(),
+                at: self.decided_at([ChoiceKey::CoreOnly]),
+            };
+        }
+        if self.select.tags.is_empty() {
+            return Replaced::Default;
+        }
+        Replaced::Spec {
+            setting: Setting::Tags,
+            value: names(&self.select.tags.iter().collect::<Vec<_>>()),
+            at: self.decided_at(self.select.tags.iter().cloned().map(ChoiceKey::Tag)),
+        }
+    }
+
+    /// What typing `--prefer` replaced.
+    pub(super) fn replaced_prefer(&self) -> Replaced {
+        let prefer = &self.select.prefer;
+        if prefer.is_empty() {
+            return Replaced::Default;
+        }
+        Replaced::Spec {
+            setting: Setting::Prefer,
+            value: names(prefer),
+            at: self.decided_at(prefer.iter().cloned().map(ChoiceKey::Prefer)),
+        }
+    }
+}
+
+/// Overlays the scope and `--prefer` flags on `selection`, recording what each replaced. Shared by both documents.
+pub(super) fn overlay_select(
+    explicit: &Explicit,
+    view: &ScopeView<'_>,
+    selection: &mut Selection,
+    overrides: &mut Vec<Override>,
+) {
+    if let Some(scope) = &explicit.scope {
+        overrides.push(Override {
+            flag: scope.flag(),
+            set: scope_values(scope),
+            replaced: view.replaced_scope(),
+        });
+        selection.scope = match scope {
+            ScopeFlag::Tags(tags) => Scope::Tags(tags.clone()),
+            ScopeFlag::CoreOnly => Scope::CoreOnly,
+        };
+    }
+    if let Some(prefer) = &explicit.prefer {
+        overrides.push(Override {
+            flag: OverrideFlag::Prefer,
+            set: names(prefer),
+            replaced: view.replaced_prefer(),
+        });
+        selection.prefer.clone_from(prefer);
+    }
+}
+
 /// Applies `flags` to `spec`: each typed setting replaces the spec's, and the scope is replaced as one unit.
 ///
 /// The spec is checked alone first, so a flag cannot make a spec build that would not build without it.
@@ -188,25 +349,7 @@ pub fn apply(spec: &ResolvedSpec, flags: &Admitted) -> Result<Applied, SpecError
     let mut selection = spec.to_selection()?;
     let explicit = flags.explicit();
     let mut overrides = Vec::new();
-    if let Some(scope) = &explicit.scope {
-        overrides.push(Override {
-            flag: scope.flag(),
-            set: scope_values(scope),
-            replaced: replaced_scope(spec),
-        });
-        selection.scope = match scope {
-            ScopeFlag::Tags(tags) => Scope::Tags(tags.clone()),
-            ScopeFlag::CoreOnly => Scope::CoreOnly,
-        };
-    }
-    if let Some(prefer) = &explicit.prefer {
-        overrides.push(Override {
-            flag: OverrideFlag::Prefer,
-            set: names(prefer),
-            replaced: replaced_prefer(spec),
-        });
-        selection.prefer.clone_from(prefer);
-    }
+    overlay_select(explicit, &ScopeView::of_resume(spec), &mut selection, &mut overrides);
     if let Some(style) = &explicit.style {
         overrides.push(Override {
             flag: OverrideFlag::Style,
@@ -233,7 +376,7 @@ pub fn apply(spec: &ResolvedSpec, flags: &Admitted) -> Result<Applied, SpecError
     })
 }
 
-fn names<T: ToString>(items: &[T]) -> Vec<String> {
+pub(super) fn names<T: ToString>(items: &[T]) -> Vec<String> {
     items.iter().map(ToString::to_string).collect()
 }
 
@@ -253,57 +396,6 @@ fn scope_values(scope: &ScopeFlag) -> Vec<String> {
     }
 }
 
-/// The place that decided each of `keys`, the first in each file, from the least specific file to the most.
-///
-/// A list such as the tags is decided by several lines of one file; naming the file once, at its first line, is
-/// enough to find them.
-fn decided_at(spec: &ResolvedSpec, keys: impl IntoIterator<Item = ChoiceKey>) -> Vec<Located> {
-    let mut found: Vec<Located> = keys
-        .into_iter()
-        .filter_map(|key| spec.origin_of(&key))
-        .cloned()
-        .collect();
-    let rank = |at: &Located| spec.chain.iter().position(|link| *link.path == *at.path);
-    found.sort_by(|a, b| {
-        rank(a)
-            .cmp(&rank(b))
-            .then_with(|| (a.line, a.column).cmp(&(b.line, b.column)))
-    });
-    found.dedup_by(|later, earlier| *later.path == *earlier.path);
-    found
-}
-
-fn replaced_scope(spec: &ResolvedSpec) -> Replaced {
-    let select = &spec.choices.select;
-    if select.core_only == Some(true) {
-        return Replaced::Spec {
-            setting: Setting::CoreOnly,
-            value: Vec::new(),
-            at: decided_at(spec, [ChoiceKey::CoreOnly]),
-        };
-    }
-    if select.tags.is_empty() {
-        return Replaced::Default;
-    }
-    Replaced::Spec {
-        setting: Setting::Tags,
-        value: names(&select.tags.iter().collect::<Vec<_>>()),
-        at: decided_at(spec, select.tags.iter().cloned().map(ChoiceKey::Tag)),
-    }
-}
-
-fn replaced_prefer(spec: &ResolvedSpec) -> Replaced {
-    let prefer = &spec.choices.select.prefer;
-    if prefer.is_empty() {
-        return Replaced::Default;
-    }
-    Replaced::Spec {
-        setting: Setting::Prefer,
-        value: names(prefer),
-        at: decided_at(spec, prefer.iter().cloned().map(ChoiceKey::Prefer)),
-    }
-}
-
 /// What a spec chose for a single value (`style` or `paper`), which has one place.
 fn replaced_one(spec: &ResolvedSpec, setting: Setting, value: Option<String>) -> Replaced {
     let key = if setting == Setting::Style {
@@ -314,7 +406,371 @@ fn replaced_one(spec: &ResolvedSpec, setting: Setting, value: Option<String>) ->
     value.map_or(Replaced::Default, |value| Replaced::Spec {
         setting,
         value: vec![value],
-        at: decided_at(spec, [key]),
+        at: ScopeView::of_resume(spec).decided_at([key]),
+    })
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The letter
+// ---------------------------------------------------------------------------------------------------------------
+
+/// The letter settings the user typed, and only those: a value not typed is `None`, whatever a flag's default is.
+///
+/// `base` holds what a letter shares with a resume: the scope, `--prefer`, `--style`, and `--paper`. The rest are
+/// what only a letter has. Every one of them is something a spec can say, so each is refused beside `--spec` unless
+/// `--allow-overrides` is given; the flags about the machine are not here.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LetterExplicit {
+    pub base: Explicit,
+    pub output: Option<LetterOutput>,
+    pub max_length: Option<usize>,
+    pub length_unit: Option<LengthUnit>,
+    pub links: Option<LinkStyle>,
+    pub company: Option<FieldValue>,
+    pub title: Option<FieldValue>,
+    pub recipient: Option<FieldValue>,
+    pub date: Option<LetterDate>,
+}
+
+impl LetterExplicit {
+    /// The flags that were typed, in a fixed order.
+    #[must_use]
+    pub fn flags(&self) -> Vec<OverrideFlag> {
+        let mut flags = self.base.flags();
+        flags.extend(
+            [
+                self.output.map(|_| OverrideFlag::OutputFormat),
+                self.max_length.map(|_| OverrideFlag::MaxLength),
+                self.length_unit.map(|_| OverrideFlag::LengthUnit),
+                self.links.map(|_| OverrideFlag::Links),
+                self.company.as_ref().map(|_| OverrideFlag::Company),
+                self.title.as_ref().map(|_| OverrideFlag::Title),
+                self.recipient.as_ref().map(|_| OverrideFlag::Recipient),
+                self.date.map(|_| OverrideFlag::Date),
+            ]
+            .into_iter()
+            .flatten(),
+        );
+        flags.sort();
+        flags
+    }
+
+    /// Lets the settings through, or refuses them, according to `policy`. Typing nothing is always allowed.
+    ///
+    /// # Errors
+    /// [`Refused`] naming every typed flag, when `policy` refuses and any was typed.
+    pub fn admit(self, policy: OverridePolicy) -> Result<Admitted<Self>, Refused> {
+        policy.check(self.flags())?;
+        Ok(Admitted(self))
+    }
+}
+
+/// Where an effective letter setting came from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Origin {
+    /// Typed on the command line.
+    Flag,
+    /// Written in `[letter]` or `[letter.select]`, at this place.
+    Spec(Located),
+    /// Not written for the letter: the spec's `build.style` or `build.paper`, at this place, was used.
+    Build(Located),
+    /// Written in `[position]`, whose lines are not recorded: this is the spec's file.
+    Position(std::sync::Arc<std::path::Path>),
+    /// Nobody chose it: the built-in default.
+    Default,
+}
+
+/// A value and where it came from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Chosen<T> {
+    pub value: T,
+    pub origin: Origin,
+}
+
+impl<T> Chosen<T> {
+    fn new(value: T, origin: Origin) -> Self {
+        Self { value, origin }
+    }
+
+    /// The first of a flag, the spec's value, and a fallback that is set, then the default.
+    fn first(flag: Option<T>, spec: Option<(T, Origin)>, default: T) -> Self {
+        match (flag, spec) {
+            (Some(value), _) => Self::new(value, Origin::Flag),
+            (None, Some((value, origin))) => Self::new(value, origin),
+            (None, None) => Self::new(default, Origin::Default),
+        }
+    }
+}
+
+/// Every effective letter setting, the built-in defaults applied once and after every other layer.
+///
+/// Only [`LetterChoices::from_flags`] and [`apply_letter`] make one, so no setting is filled from a default by a
+/// caller that has not asked the spec first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LetterChoices {
+    pub output: Chosen<LetterOutput>,
+    pub links: Chosen<LinkStyle>,
+    pub max_length: Option<Chosen<usize>>,
+    pub length_unit: Chosen<LengthUnit>,
+    pub company: Option<Chosen<FieldValue>>,
+    pub title: Option<Chosen<FieldValue>>,
+    pub recipient: Option<Chosen<FieldValue>>,
+    pub date: Option<Chosen<LetterDate>>,
+    /// Used only when a PDF is made.
+    pub style: Chosen<StyleName>,
+    /// Used only when a PDF is made.
+    pub paper: Chosen<Paper>,
+}
+
+/// The style a letter is made in when nothing chose one.
+fn default_style() -> StyleName {
+    StyleName::try_new("pragmatic").expect("the built-in style name is valid")
+}
+
+impl LetterChoices {
+    /// The flags alone: a letter built from a file, with no spec.
+    #[must_use]
+    pub fn from_flags(flags: &LetterExplicit) -> Self {
+        let field = |value: &Option<FieldValue>| value.clone().map(|v| Chosen::new(v, Origin::Flag));
+        Self {
+            output: Chosen::first(flags.output, None, LetterOutput::default()),
+            links: Chosen::first(flags.links, None, LinkStyle::default()),
+            max_length: flags.max_length.map(|n| Chosen::new(n, Origin::Flag)),
+            length_unit: Chosen::first(flags.length_unit, None, LengthUnit::default()),
+            company: field(&flags.company),
+            title: field(&flags.title),
+            recipient: field(&flags.recipient),
+            date: flags.date.map(|d| Chosen::new(d, Origin::Flag)),
+            style: Chosen::first(flags.base.style.clone(), None, default_style()),
+            paper: Chosen::first(flags.base.paper, None, Paper::default()),
+        }
+    }
+
+    /// The company, title, recipient, and date the letter is built with.
+    #[must_use]
+    pub fn fields(&self) -> LetterFields {
+        LetterFields {
+            company: self.company.as_ref().map(|c| c.value.clone()),
+            title: self.title.as_ref().map(|c| c.value.clone()),
+            recipient: self.recipient.as_ref().map(|c| c.value.clone()),
+            date: self.date.as_ref().map(|c| c.value),
+        }
+    }
+}
+
+/// A spec's letter with the typed settings applied: what to select and every effective setting.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppliedLetter {
+    pub choices: LetterChoices,
+    /// Drafts are off: whether to preview them is the command line's choice.
+    pub selection: Selection,
+    pub overrides: Vec<Override>,
+}
+
+/// What a flag replaced, when the spec's `[letter]` said a value at `sourced`.
+fn replaced_from<T: ToString>(setting: Setting, sourced: Option<&Sourced<T>>) -> Replaced {
+    sourced.map_or(Replaced::Default, |s| Replaced::Spec {
+        setting,
+        value: vec![s.value.to_string()],
+        at: vec![s.at.clone()],
+    })
+}
+
+/// Applies `flags` to the letter of `spec`: each typed setting replaces the spec's, over the letter's own scope.
+///
+/// The spec is checked alone first (its selection, and its recipient and date as letter fields), so a flag cannot
+/// make a spec build that would not build without it. A letter's style and paper fall back to the spec's
+/// `build.style` and `build.paper` when `[letter]` says none, so the letter and the resume of one job match.
+/// Picks come only from the spec; no flag sets one.
+///
+/// # Errors
+/// [`SpecError::NoLetterTable`] for a spec without `[letter]`; [`SpecError::ScopeConflict`] when the letter's
+/// scope asks for core-only and tags; the errors of `ResolvedLetter::fields` for a recipient or date a letter
+/// cannot print.
+pub fn apply_letter(spec: &ResolvedSpec, flags: &Admitted<LetterExplicit>) -> Result<AppliedLetter, SpecError> {
+    let Some(letter) = &spec.letter else {
+        return NoLetterTableSnafu.fail();
+    };
+    let mut selection = spec.to_letter_selection()?;
+    let from_spec = letter.fields()?;
+    let explicit = flags.explicit();
+    let settings = &letter.settings;
+    let mut overrides = Vec::new();
+    overlay_select(
+        &explicit.base,
+        &ScopeView::of_letter(spec, letter),
+        &mut selection,
+        &mut overrides,
+    );
+
+    // `style` and `paper` are the build's when the letter says none; the line named is the one that chose.
+    let style_spec = settings
+        .style
+        .as_ref()
+        .map(|s| (s.value.clone(), Origin::Spec(s.at.clone())))
+        .or_else(|| {
+            let at = spec.origin_of(&ChoiceKey::Style)?.clone();
+            Some((spec.choices.style.clone()?, Origin::Build(at)))
+        });
+    let paper_spec = settings
+        .paper
+        .as_ref()
+        .map(|p| (p.value, Origin::Spec(p.at.clone())))
+        .or_else(|| {
+            let at = spec.origin_of(&ChoiceKey::Paper)?.clone();
+            Some((spec.choices.paper?, Origin::Build(at)))
+        });
+    let origin_place = |origin: &Origin| match origin {
+        Origin::Spec(at) | Origin::Build(at) => vec![at.clone()],
+        _ => Vec::new(),
+    };
+    if let Some(style) = &explicit.base.style {
+        overrides.push(Override {
+            flag: OverrideFlag::Style,
+            set: vec![style.to_string()],
+            replaced: style_spec
+                .as_ref()
+                .map_or(Replaced::Default, |(value, origin)| Replaced::Spec {
+                    setting: Setting::Style,
+                    value: vec![value.to_string()],
+                    at: origin_place(origin),
+                }),
+        });
+    }
+    if let Some(paper) = explicit.base.paper {
+        overrides.push(Override {
+            flag: OverrideFlag::Paper,
+            set: vec![paper_name(paper)],
+            replaced: paper_spec
+                .as_ref()
+                .map_or(Replaced::Default, |(value, origin)| Replaced::Spec {
+                    setting: Setting::Paper,
+                    value: vec![paper_name(*value)],
+                    at: origin_place(origin),
+                }),
+        });
+    }
+    if let Some(output) = explicit.output {
+        overrides.push(Override {
+            flag: OverrideFlag::OutputFormat,
+            set: vec![output.to_string()],
+            replaced: replaced_from(Setting::OutputFormat, settings.output_format.as_ref()),
+        });
+    }
+    if let Some(max) = explicit.max_length {
+        overrides.push(Override {
+            flag: OverrideFlag::MaxLength,
+            set: vec![max.to_string()],
+            replaced: replaced_from(Setting::MaxLength, settings.max_length.as_ref()),
+        });
+    }
+    if let Some(unit) = explicit.length_unit {
+        overrides.push(Override {
+            flag: OverrideFlag::LengthUnit,
+            set: vec![unit.to_string()],
+            replaced: replaced_from(Setting::LengthUnit, settings.length_unit.as_ref()),
+        });
+    }
+    if let Some(links) = explicit.links {
+        overrides.push(Override {
+            flag: OverrideFlag::Links,
+            set: vec![links.to_string()],
+            replaced: replaced_from(Setting::Links, settings.links.as_ref()),
+        });
+    }
+    // `[position]` records no lines, so what a company or title flag replaced is named without a place.
+    let position = |setting: Setting, value: Option<String>| {
+        value.map_or(Replaced::Default, |value| Replaced::Spec {
+            setting,
+            value: vec![value],
+            at: Vec::new(),
+        })
+    };
+    if let Some(company) = &explicit.company {
+        overrides.push(Override {
+            flag: OverrideFlag::Company,
+            set: vec![company.to_string()],
+            replaced: position(Setting::Company, from_spec.company.as_ref().map(ToString::to_string)),
+        });
+    }
+    if let Some(title) = &explicit.title {
+        overrides.push(Override {
+            flag: OverrideFlag::Title,
+            set: vec![title.to_string()],
+            replaced: position(Setting::Title, from_spec.title.as_ref().map(ToString::to_string)),
+        });
+    }
+    if let Some(recipient) = &explicit.recipient {
+        overrides.push(Override {
+            flag: OverrideFlag::Recipient,
+            set: vec![recipient.to_string()],
+            replaced: replaced_from(Setting::Recipient, settings.recipient.as_ref()),
+        });
+    }
+    if let Some(date) = explicit.date {
+        overrides.push(Override {
+            flag: OverrideFlag::Date,
+            set: vec![date.to_string()],
+            replaced: replaced_from(Setting::Date, settings.date.as_ref()),
+        });
+    }
+
+    let spec_file = letter.content.at.path.clone();
+    let field = |flag: &Option<FieldValue>, spec: Option<FieldValue>, origin: Origin| match (flag, spec) {
+        (Some(value), _) => Some(Chosen::new(value.clone(), Origin::Flag)),
+        (None, Some(value)) => Some(Chosen::new(value, origin)),
+        (None, None) => None,
+    };
+    let choices = LetterChoices {
+        output: Chosen::first(
+            explicit.output,
+            settings
+                .output_format
+                .as_ref()
+                .map(|v| (v.value, Origin::Spec(v.at.clone()))),
+            LetterOutput::default(),
+        ),
+        links: Chosen::first(
+            explicit.links,
+            settings.links.as_ref().map(|v| (v.value, Origin::Spec(v.at.clone()))),
+            LinkStyle::default(),
+        ),
+        max_length: match (explicit.max_length, &settings.max_length) {
+            (Some(n), _) => Some(Chosen::new(n, Origin::Flag)),
+            (None, Some(n)) => Some(Chosen::new(n.value, Origin::Spec(n.at.clone()))),
+            (None, None) => None,
+        },
+        length_unit: Chosen::first(
+            explicit.length_unit,
+            settings
+                .length_unit
+                .as_ref()
+                .map(|v| (v.value, Origin::Spec(v.at.clone()))),
+            LengthUnit::default(),
+        ),
+        company: field(
+            &explicit.company,
+            from_spec.company,
+            Origin::Position(spec_file.clone()),
+        ),
+        title: field(&explicit.title, from_spec.title, Origin::Position(spec_file)),
+        recipient: match (&explicit.recipient, from_spec.recipient, &settings.recipient) {
+            (Some(value), ..) => Some(Chosen::new(value.clone(), Origin::Flag)),
+            (None, Some(value), Some(written)) => Some(Chosen::new(value, Origin::Spec(written.at.clone()))),
+            (None, ..) => None,
+        },
+        date: match (explicit.date, from_spec.date, &settings.date) {
+            (Some(value), ..) => Some(Chosen::new(value, Origin::Flag)),
+            (None, Some(value), Some(written)) => Some(Chosen::new(value, Origin::Spec(written.at.clone()))),
+            (None, ..) => None,
+        },
+        style: Chosen::first(explicit.base.style.clone(), style_spec, default_style()),
+        paper: Chosen::first(explicit.base.paper, paper_spec, Paper::default()),
+    };
+    Ok(AppliedLetter {
+        choices,
+        selection,
+        overrides,
     })
 }
 
@@ -620,5 +1076,383 @@ mod tests {
             ..Explicit::default()
         };
         assert_ok!(explicit.admit(OverridePolicy::Allow));
+    }
+    // -----------------------------------------------------------------------------------------------------------
+    // The letter
+    // -----------------------------------------------------------------------------------------------------------
+
+    /// A spec in a temporary directory with a `[letter]` table; `build` and `letter` are the text after each header.
+    fn letter_spec(build: &str, position: &str, letter: &str) -> (tempfile::TempDir, ResolvedSpec) {
+        let dir = assert_ok!(tempfile::tempdir());
+        let path = dir.path().join("acme.toml");
+        assert_ok!(std::fs::write(
+            &path,
+            format!(
+                "[position]\n{position}\n[build]\ncontent = \"a.md\"\n{build}\n[letter]\ncontent = \"l.md\"\n{letter}\n"
+            )
+        ));
+        let spec = assert_ok!(resolve(&path, None));
+        (dir, spec)
+    }
+
+    fn letter_allowed(explicit: LetterExplicit) -> Admitted<LetterExplicit> {
+        assert_ok!(explicit.admit(OverridePolicy::Allow))
+    }
+
+    fn field(text: &str) -> FieldValue {
+        assert_ok!(FieldValue::try_new(text))
+    }
+
+    fn date(text: &str) -> LetterDate {
+        assert_ok!(text.parse::<LetterDate>())
+    }
+
+    #[test]
+    fn a_letter_spec_with_no_flags_gives_its_own_choices_each_with_the_line_that_chose_it() {
+        let (_dir, spec) = letter_spec(
+            "style = \"mono\"",
+            "company = \"Acme\"\ntitle = \"Engineer\"",
+            "recipient = \"Hiring Team\"\ndate = 2028-02-29\nstyle = \"pragmatic\"\npaper = \"a4\"\n\
+             output-format = \"both\"\nmax-length = 900\nlength-unit = \"scalars\"\nlinks = \"text-only\"",
+        );
+        let applied = assert_ok!(apply_letter(&spec, &Admitted::none()));
+        let c = &applied.choices;
+        assert_eq!(applied.overrides, []);
+        assert_eq!(c.output.value, LetterOutput::Both);
+        assert_eq!(c.links.value, LinkStyle::TextOnly);
+        assert_eq!(c.max_length.as_ref().map(|m| m.value), Some(900));
+        assert_eq!(c.length_unit.value, LengthUnit::Scalars);
+        assert_eq!(c.paper.value, Paper::A4);
+        assert_eq!(c.style.value, assert_ok!(StyleName::try_new("pragmatic")));
+        assert_eq!(c.fields().recipient, Some(field("Hiring Team")));
+        assert_eq!(c.fields().date, Some(date("2028-02-29")));
+        assert_eq!(c.fields().company, Some(field("Acme")));
+        assert_eq!(c.fields().title, Some(field("Engineer")));
+        // Every value written in `[letter]` names a line of the spec.
+        for origin in [
+            &c.output.origin,
+            &c.links.origin,
+            &c.length_unit.origin,
+            &c.paper.origin,
+            &c.style.origin,
+        ] {
+            assert!(matches!(origin, Origin::Spec(at) if at.line > 0), "{origin:?}");
+        }
+        assert!(matches!(
+            c.company.as_ref().map(|c| &c.origin),
+            Some(Origin::Position(_))
+        ));
+    }
+
+    #[test]
+    fn a_letter_the_spec_says_nothing_about_gets_the_built_in_defaults_and_says_so() {
+        let (_dir, spec) = letter_spec("", "", "");
+        let c = assert_ok!(apply_letter(&spec, &Admitted::none())).choices;
+        assert_eq!(
+            (c.output.value, c.links.value, c.length_unit.value, c.paper.value),
+            (
+                LetterOutput::Text,
+                LinkStyle::TextAndUrl,
+                LengthUnit::Utf16,
+                Paper::default()
+            )
+        );
+        assert_eq!(c.style.value, assert_ok!(StyleName::try_new("pragmatic")));
+        for origin in [&c.output.origin, &c.links.origin, &c.style.origin, &c.paper.origin] {
+            assert_eq!(origin, &Origin::Default);
+        }
+        assert!(c.max_length.is_none() && c.company.is_none() && c.recipient.is_none() && c.date.is_none());
+    }
+
+    #[test]
+    fn style_and_paper_fall_back_to_the_builds_then_the_default_and_say_which() {
+        let (_dir, spec) = letter_spec("style = \"mono\"\npaper = \"a4\"", "", "");
+        let c = assert_ok!(apply_letter(&spec, &Admitted::none())).choices;
+        assert_eq!(c.style.value, assert_ok!(StyleName::try_new("mono")));
+        assert_eq!(c.paper.value, Paper::A4);
+        assert!(
+            matches!(&c.style.origin, Origin::Build(at) if at.line == 5),
+            "{:?}",
+            c.style.origin
+        );
+        assert!(
+            matches!(&c.paper.origin, Origin::Build(at) if at.line == 6),
+            "{:?}",
+            c.paper.origin
+        );
+        // The letter's own value wins over the build's, and the build's is not consulted for the other.
+        let (_dir, spec) = letter_spec("style = \"mono\"\npaper = \"a4\"", "", "style = \"pragmatic\"");
+        let c = assert_ok!(apply_letter(&spec, &Admitted::none())).choices;
+        assert_eq!(c.style.value, assert_ok!(StyleName::try_new("pragmatic")));
+        assert!(matches!(c.style.origin, Origin::Spec(_)));
+        assert_eq!(c.paper.value, Paper::A4);
+        assert!(matches!(c.paper.origin, Origin::Build(_)));
+    }
+
+    #[test]
+    fn a_letter_flag_replaces_the_spec_value_and_names_the_letter_line_it_replaced() {
+        let (_dir, spec) = letter_spec(
+            "",
+            "company = \"Acme\"",
+            "recipient = \"Hiring Team\"\ndate = 2028-02-29\noutput-format = \"both\"\nmax-length = 900\n\
+             length-unit = \"scalars\"\nlinks = \"text-only\"",
+        );
+        let flags = letter_allowed(LetterExplicit {
+            output: Some(LetterOutput::Text),
+            max_length: Some(100),
+            length_unit: Some(LengthUnit::Words),
+            links: Some(LinkStyle::TextAndUrl),
+            company: Some(field("Other")),
+            recipient: Some(field("Dana")),
+            date: Some(date("2029-01-01")),
+            ..LetterExplicit::default()
+        });
+        let applied = assert_ok!(apply_letter(&spec, &flags));
+        let c = &applied.choices;
+        assert_eq!(c.output.value, LetterOutput::Text);
+        assert_eq!(c.max_length.as_ref().map(|m| m.value), Some(100));
+        assert_eq!(c.length_unit.value, LengthUnit::Words);
+        assert_eq!(c.links.value, LinkStyle::TextAndUrl);
+        assert_eq!(c.fields().company, Some(field("Other")));
+        assert_eq!(c.fields().recipient, Some(field("Dana")));
+        assert_eq!(c.fields().date, Some(date("2029-01-01")));
+        for origin in [&c.output.origin, &c.length_unit.origin, &c.links.origin] {
+            assert_eq!(origin, &Origin::Flag);
+        }
+        let by_flag: Vec<(OverrideFlag, &Replaced)> = applied.overrides.iter().map(|o| (o.flag, &o.replaced)).collect();
+        assert_eq!(by_flag.len(), 7, "{by_flag:?}");
+        for (flag, replaced) in by_flag {
+            match (flag, replaced) {
+                (OverrideFlag::Company, Replaced::Spec { value, at, .. }) => {
+                    // `[position]` records no line, so only the value is named.
+                    assert_eq!((value.as_slice(), at.len()), (&["Acme".to_string()][..], 0));
+                }
+                (_, Replaced::Spec { at, .. }) => assert_eq!(at.len(), 1, "{flag}: {replaced:?}"),
+                (_, Replaced::Default) => panic!("{flag} replaced a value the spec wrote"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_letter_flag_over_nothing_the_spec_said_replaces_the_default() {
+        let (_dir, spec) = letter_spec("", "", "");
+        let flags = letter_allowed(LetterExplicit {
+            links: Some(LinkStyle::TextOnly),
+            title: Some(field("Engineer")),
+            ..LetterExplicit::default()
+        });
+        let applied = assert_ok!(apply_letter(&spec, &flags));
+        assert!(applied.overrides.iter().all(|o| o.replaced == Replaced::Default));
+        assert_eq!(applied.overrides.len(), 2);
+    }
+
+    #[test]
+    fn a_letter_scope_flag_names_the_letter_select_lines_and_never_the_resumes() {
+        let dir = assert_ok!(tempfile::tempdir());
+        let path = dir.path().join("acme.toml");
+        assert_ok!(std::fs::write(
+            &path,
+            "[build]\ncontent = \"a.md\"\n[select]\ntags = [\"resume-only\"]\nprefer = [\"resume-way\"]\n\
+             [letter]\ncontent = \"l.md\"\n[letter.select]\ntags = [\"ai\"]\nprefer = [\"short\"]\n"
+        ));
+        let spec = assert_ok!(resolve(&path, None));
+        let flags = letter_allowed(LetterExplicit {
+            base: Explicit {
+                scope: Some(tags(&["platform"])),
+                prefer: Some(prefer(&["long"])),
+                ..Explicit::default()
+            },
+            ..LetterExplicit::default()
+        });
+        let applied = assert_ok!(apply_letter(&spec, &flags));
+        let [scope, prefer_override] = applied.overrides.as_slice() else {
+            panic!("two overrides expected: {:?}", applied.overrides)
+        };
+        let Replaced::Spec { setting, value, at } = &scope.replaced else {
+            panic!("tags were chosen: {scope:?}")
+        };
+        assert_eq!((*setting, value.as_slice()), (Setting::Tags, &["ai".to_string()][..]));
+        assert_eq!(at.iter().map(|a| a.line).collect::<Vec<_>>(), [9]);
+        let Replaced::Spec { value, at, .. } = &prefer_override.replaced else {
+            panic!("prefer was chosen")
+        };
+        assert_eq!((value.as_slice(), at[0].line), (&["short".to_string()][..], 10));
+        // The resume's own scope is untouched by the same flags.
+        let resume = assert_ok!(apply(
+            &spec,
+            &allowed(Explicit {
+                scope: Some(tags(&["platform"])),
+                ..Explicit::default()
+            })
+        ));
+        let Replaced::Spec { value, .. } = &resume.overrides[0].replaced else {
+            panic!("resume tags")
+        };
+        assert_eq!(value.as_slice(), ["resume-only"]);
+    }
+
+    #[test]
+    fn the_policy_refuses_every_letter_flag_at_once_in_a_fixed_order() {
+        let all = LetterExplicit {
+            base: Explicit {
+                style: Some(assert_ok!(StyleName::try_new("mono"))),
+                paper: Some(Paper::A4),
+                scope: Some(ScopeFlag::CoreOnly),
+                prefer: Some(prefer(&["short"])),
+            },
+            output: Some(LetterOutput::Pdf),
+            max_length: Some(1),
+            length_unit: Some(LengthUnit::Words),
+            links: Some(LinkStyle::TextOnly),
+            company: Some(field("A")),
+            title: Some(field("B")),
+            recipient: Some(field("C")),
+            date: Some(date("2028-01-01")),
+        };
+        let refused = assert_err!(all.clone().admit(OverridePolicy::Refuse));
+        let text = refused.to_string();
+        assert_eq!(refused.flags.len(), 12, "{text}");
+        assert!(
+            text.starts_with(
+                "--core-only, --prefer, --style, --paper, --output-format, --max-length, --length-unit, --links, \
+                 --company, --title, --recipient and --date cannot be used beside --spec"
+            ),
+            "{text}"
+        );
+        assert_ok!(all.admit(OverridePolicy::Allow));
+        assert_ok!(LetterExplicit::default().admit(OverridePolicy::Refuse));
+    }
+
+    #[test]
+    fn each_letter_flag_alone_is_refused_naming_only_itself() {
+        let cases: Vec<(OverrideFlag, LetterExplicit)> = vec![
+            (
+                OverrideFlag::OutputFormat,
+                LetterExplicit {
+                    output: Some(LetterOutput::Pdf),
+                    ..Default::default()
+                },
+            ),
+            (
+                OverrideFlag::MaxLength,
+                LetterExplicit {
+                    max_length: Some(0),
+                    ..Default::default()
+                },
+            ),
+            (
+                OverrideFlag::LengthUnit,
+                LetterExplicit {
+                    length_unit: Some(LengthUnit::Utf16),
+                    ..Default::default()
+                },
+            ),
+            (
+                OverrideFlag::Links,
+                LetterExplicit {
+                    links: Some(LinkStyle::TextOnly),
+                    ..Default::default()
+                },
+            ),
+            (
+                OverrideFlag::Company,
+                LetterExplicit {
+                    company: Some(field("A")),
+                    ..Default::default()
+                },
+            ),
+            (
+                OverrideFlag::Title,
+                LetterExplicit {
+                    title: Some(field("A")),
+                    ..Default::default()
+                },
+            ),
+            (
+                OverrideFlag::Recipient,
+                LetterExplicit {
+                    recipient: Some(field("A")),
+                    ..Default::default()
+                },
+            ),
+            (
+                OverrideFlag::Date,
+                LetterExplicit {
+                    date: Some(date("2028-01-01")),
+                    ..Default::default()
+                },
+            ),
+        ];
+        for (flag, explicit) in cases {
+            assert_eq!(explicit.flags(), [flag]);
+            let refused = assert_err!(explicit.admit(OverridePolicy::Refuse));
+            assert_eq!(refused.flags, [flag]);
+        }
+    }
+
+    #[test]
+    fn a_flag_cannot_make_a_letter_spec_with_a_broken_recipient_build() {
+        let (_dir, spec) = letter_spec("", "", "recipient = \"two\\u2028lines\"");
+        let flags = letter_allowed(LetterExplicit {
+            recipient: Some(field("Dana")),
+            ..LetterExplicit::default()
+        });
+        assert!(matches!(
+            assert_err!(apply_letter(&spec, &flags)),
+            SpecError::UnsafeText { .. }
+        ));
+    }
+
+    #[test]
+    fn a_spec_without_a_letter_table_is_no_letter_table_whatever_the_flags() {
+        let (_dir, spec) = spec_text("", "");
+        for flags in [
+            Admitted::none(),
+            letter_allowed(LetterExplicit {
+                links: Some(LinkStyle::TextOnly),
+                ..Default::default()
+            }),
+        ] {
+            assert!(matches!(
+                assert_err!(apply_letter(&spec, &flags)),
+                SpecError::NoLetterTable
+            ));
+        }
+    }
+
+    #[test]
+    fn a_letter_that_asks_for_core_only_and_tags_cannot_be_rescued_by_a_flag() {
+        let dir = assert_ok!(tempfile::tempdir());
+        let path = dir.path().join("acme.toml");
+        assert_ok!(std::fs::write(
+            &path,
+            "[build]\ncontent = \"a.md\"\n[letter]\ncontent = \"l.md\"\n[letter.select]\ncore-only = true\ntags = [\"ai\"]\n"
+        ));
+        let spec = assert_ok!(resolve(&path, None));
+        let flags = letter_allowed(LetterExplicit {
+            base: Explicit {
+                scope: Some(tags(&["x"])),
+                ..Explicit::default()
+            },
+            ..LetterExplicit::default()
+        });
+        assert!(matches!(
+            assert_err!(apply_letter(&spec, &flags)),
+            SpecError::ScopeConflict { .. }
+        ));
+    }
+
+    #[test]
+    fn the_resume_flag_ids_the_build_probe_asks_about_are_unchanged_by_the_letter_flags() {
+        // `OverrideFlag` order decides the order `Refused` lists flags; a letter flag sorts after every resume flag.
+        let resume = [
+            OverrideFlag::Tags,
+            OverrideFlag::CoreOnly,
+            OverrideFlag::Prefer,
+            OverrideFlag::Style,
+            OverrideFlag::Paper,
+        ];
+        assert!(resume.windows(2).all(|w| w[0] < w[1]));
+        assert!(OverrideFlag::Paper < OverrideFlag::OutputFormat);
     }
 }

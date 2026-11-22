@@ -1,0 +1,5 @@
+# ABOUTME: A profile that holds only `letter.select`, which is all a profile may say about a letter.
+# ABOUTME: It puts a profile chain on the path the CI build resolves, where Windows and macOS join paths differently.
+
+[letter.select]
+tags = ["platform"]
