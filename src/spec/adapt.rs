@@ -28,6 +28,7 @@ impl ResolvedSpec {
             drafts: false,
             prefer: select.prefer.clone(),
             picks: select.pick.clone(),
+            promote: select.promote.clone(),
         })
     }
 
@@ -137,6 +138,16 @@ mod tests {
     fn a_spec_that_chooses_nothing_selects_the_default() {
         let (_dir, spec) = spec_text("");
         assert_eq!(assert_ok!(spec.to_selection()), Selection::default());
+    }
+
+    #[test]
+    fn promote_comes_through_in_merged_order() {
+        let (_dir, spec) = spec_text("[select]\npromote = [\"leadership\", \"ai\"]\n");
+        let promote = assert_ok!(spec.to_selection()).promote;
+        assert_eq!(
+            promote.iter().map(AsRef::as_ref).collect::<Vec<_>>(),
+            ["leadership", "ai"]
+        );
     }
 
     #[test]

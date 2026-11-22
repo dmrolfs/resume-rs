@@ -1,5 +1,5 @@
 //! ABOUTME: Property tests of selection over generated annotated resumes: what survives, what renders once,
-//! ABOUTME: what keeps its order, that a second selection changes nothing, and that no draft leaks out.
+//! ABOUTME: what keeps its order (unless promoted), how `promote` orders lists, and that no draft leaks out.
 
 use std::collections::BTreeSet;
 
@@ -11,6 +11,7 @@ use resume::model::{
 };
 use resume::select::rules::{self, Facts, Verdict};
 use resume::select::{Scope, SelectError, SelectedTags, Selection, SelectionReport, select};
+use std::collections::BTreeMap;
 
 fn cases() -> u32 {
     std::env::var("PROPTEST_CASES")
@@ -84,8 +85,8 @@ struct RoleSpec {
     /// A plain blurb, or a group whose first wording is the blurb and whose others are the paragraphs after it.
     blurb: Option<Run>,
     bullets: Vec<Run>,
-    /// A paragraph after the bullets: body prose, never a blurb wording.
-    closing: Option<Note>,
+    /// Paragraphs after the bullets: body prose, never a blurb wording; two make a run `promote` can order.
+    closing: Vec<Note>,
     eras: Vec<(Note, Vec<Run>)>,
 }
 
@@ -94,7 +95,7 @@ fn role() -> impl Strategy<Value = RoleSpec> {
         note(),
         prop::option::of(run()),
         bullets(),
-        prop::option::weighted(0.3, note()),
+        prop::collection::vec(note(), 0..=2),
         prop::collection::vec((note(), bullets()), 0..=2),
     )
         .prop_map(|(note, blurb, bullets, closing, eras)| RoleSpec {
@@ -203,7 +204,7 @@ impl Writer {
                 writer.out.push_str(&line);
                 writer.runs(role.blurb.as_slice(), false);
                 writer.runs(&role.bullets, true);
-                if let Some(note) = &role.closing {
+                for note in &role.closing {
                     let id = writer.leaf_id();
                     writer.out.push_str(&format!("{id}{}\n\n", note.tokens(None)));
                 }
@@ -267,6 +268,8 @@ fn selection_strategy() -> impl Strategy<Value = Selection> {
                     )
                 })
                 .collect(),
+            // Promote-free, so "keeps order" below stays a true and meaningful check; ordering has its own properties.
+            promote: Vec::new(),
         })
 }
 
@@ -427,7 +430,7 @@ proptest! {
         let output = leaves(&tailored);
         let output_ids = ids(&tailored);
 
-        // Output leaves are input leaves, in the same order, with the same text.
+        // Output leaves are input leaves, in the same order, with the same text (the strategy never promotes).
         prop_assert!(is_subsequence(&output_ids, &ids(&resume)), "{output_ids:?}");
 
         // Every eligible @core leaf survives; for a group, exactly one of its wordings does.
@@ -527,7 +530,7 @@ fn strip(section: SectionSpec) -> SectionSpec {
                 note: none(),
                 blurb: role.blurb.map(|_| Run::Plain(none())),
                 bullets: runs(role.bullets),
-                closing: role.closing.map(|_| none()),
+                closing: role.closing.iter().map(|_| none()).collect(),
                 eras: role.eras.into_iter().map(|(_, items)| (none(), runs(items))).collect(),
             })
             .collect(),
@@ -634,4 +637,216 @@ fn containers_marked_draft(resume: &Resume, drafts: bool) -> usize {
         }
     }
     count
+}
+
+// ---- promote ----------------------------------------------------------------------------------------------
+
+/// A promote list: some of the generated tags, plus `d`, which nothing carries, in any order.
+fn promote_strategy() -> impl Strategy<Value = Vec<Tag>> {
+    prop::sample::subsequence(vec!["a", "b", "c", "d"], 0..=4)
+        .prop_shuffle()
+        .prop_map(|names| names.into_iter().map(|n| assert_ok!(Tag::try_new(n))).collect())
+}
+
+/// One orderable list of a tailored resume: its kind, and its leaves with their containers' annotations.
+#[derive(Debug)]
+struct List {
+    kind: &'static str,
+    leaves: Vec<Leaf>,
+}
+
+/// The resume as a skeleton (headings, blurbs, page breaks, and each list as its sorted ids) and its lists.
+/// Two resumes with equal skeletons differ at most in the order inside their lists.
+fn shape(resume: &Resume) -> (Vec<String>, Vec<List>) {
+    let mut skeleton = Vec::new();
+    let mut lists: Vec<List> = Vec::new();
+    let leaf = |content: &[Inline], a: &Annotations, containers: &[&Annotations]| Leaf {
+        id: id(content),
+        annotations: a.clone(),
+        containers: containers.iter().map(|c| (*c).clone()).collect(),
+        fallback: None,
+    };
+    let mut close = |skeleton: &mut Vec<String>, list: List| {
+        let mut ids: Vec<&str> = list.leaves.iter().map(|l| l.id.as_str()).collect();
+        ids.sort_unstable();
+        skeleton.push(format!("{} {}", list.kind, ids.join(" ")));
+        lists.push(list);
+    };
+    for section in &resume.sections {
+        skeleton.push(format!("section {}", section.title));
+        let s = [&section.annotations];
+        let mut run: Vec<Leaf> = Vec::new();
+        for block in &section.blocks {
+            if let Block::Paragraph { content, annotations } = block {
+                run.push(leaf(content, annotations, &s));
+                continue;
+            }
+            if !run.is_empty() {
+                close(
+                    &mut skeleton,
+                    List {
+                        kind: "paragraphs",
+                        leaves: std::mem::take(&mut run),
+                    },
+                );
+            }
+            match block {
+                Block::Paragraph { .. } => unreachable!(),
+                Block::Bullets { items } => {
+                    let leaves = items.iter().map(|b| leaf(&b.content, &b.annotations, &s)).collect();
+                    close(
+                        &mut skeleton,
+                        List {
+                            kind: "bullets",
+                            leaves,
+                        },
+                    );
+                }
+                Block::PageBreak => skeleton.push("page-break".into()),
+                Block::Role(role) => {
+                    skeleton.push(format!("role {}", role.company));
+                    if let Some(blurb) = &role.blurb {
+                        skeleton.push(format!("blurb {}", id(blurb)));
+                    }
+                    let r = [&section.annotations, &role.annotations];
+                    let mut run: Vec<Leaf> = Vec::new();
+                    for part in &role.body {
+                        if let RoleBlock::Paragraph { content, annotations } = part {
+                            run.push(leaf(content, annotations, &r));
+                            continue;
+                        }
+                        if !run.is_empty() {
+                            close(
+                                &mut skeleton,
+                                List {
+                                    kind: "paragraphs",
+                                    leaves: std::mem::take(&mut run),
+                                },
+                            );
+                        }
+                        match part {
+                            RoleBlock::Paragraph { .. } => unreachable!(),
+                            RoleBlock::Bullets { items } => {
+                                let leaves = items.iter().map(|b| leaf(&b.content, &b.annotations, &r)).collect();
+                                close(
+                                    &mut skeleton,
+                                    List {
+                                        kind: "bullets",
+                                        leaves,
+                                    },
+                                );
+                            }
+                            RoleBlock::Era {
+                                name,
+                                items,
+                                annotations,
+                                ..
+                            } => {
+                                skeleton.push(format!("era {name}"));
+                                let e = [&section.annotations, &role.annotations, annotations];
+                                let leaves = items.iter().map(|b| leaf(&b.content, &b.annotations, &e)).collect();
+                                close(
+                                    &mut skeleton,
+                                    List {
+                                        kind: "bullets",
+                                        leaves,
+                                    },
+                                );
+                            }
+                        }
+                    }
+                    if !run.is_empty() {
+                        close(
+                            &mut skeleton,
+                            List {
+                                kind: "paragraphs",
+                                leaves: run,
+                            },
+                        );
+                    }
+                }
+            }
+        }
+        if !run.is_empty() {
+            close(
+                &mut skeleton,
+                List {
+                    kind: "paragraphs",
+                    leaves: run,
+                },
+            );
+        }
+    }
+    (skeleton, lists)
+}
+
+/// The rank the rule gives, computed apart from the code under test: the smallest place in `promote` of any tag
+/// the leaf or a container above it carries; `promote.len()` (after every place) for none.
+fn oracle_rank(leaf: &Leaf, promote: &[Tag]) -> usize {
+    let carries =
+        |tag: &Tag| leaf.annotations.tags.contains(tag) || leaf.containers.iter().any(|c| c.tags.contains(tag));
+    promote.iter().position(carries).unwrap_or(promote.len())
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(cases()))]
+
+    #[test]
+    fn promote_only_permutes_each_list_by_the_rule_stably_and_reports_exactly_what_rose(
+        resume in resume_strategy(),
+        selection in selection_strategy(),
+        promote in promote_strategy(),
+    ) {
+        let Ok((plain, plain_report)) = select(&resume, &selection) else { return Ok(()) };
+        let promoting = Selection { promote: promote.clone(), ..selection.clone() };
+        let (ordered, report) = prop_assert_ok(select(&resume, &promoting))?;
+        prop_assert!(plain_report.reordered.is_empty());
+
+        // Same lists, same members, same everything else: nothing crosses a list, containers keep their order.
+        let (plain_skeleton, plain_lists) = shape(&plain);
+        let (ordered_skeleton, ordered_lists) = shape(&ordered);
+        prop_assert_eq!(&plain_skeleton, &ordered_skeleton);
+        // Ordering never changes what is kept or why.
+        prop_assert_eq!(&report.dropped, &plain_report.dropped);
+
+        let mut rose: BTreeSet<String> = BTreeSet::new();
+        for (before, after) in plain_lists.iter().zip(&ordered_lists) {
+            let was: BTreeMap<&str, usize> = before.leaves.iter().enumerate().map(|(i, l)| (l.id.as_str(), i)).collect();
+            for pair in after.leaves.windows(2) {
+                let (x, y) = (oracle_rank(&pair[0], &promote), oracle_rank(&pair[1], &promote));
+                prop_assert!(x <= y, "{} ranks {x} above {} at {y}", pair[0].id, pair[1].id);
+                if x == y {
+                    prop_assert!(was[pair[0].id.as_str()] < was[pair[1].id.as_str()], "equal ranks swapped: {} {}", pair[0].id, pair[1].id);
+                }
+            }
+            for (now, leaf) in after.leaves.iter().enumerate() {
+                if now < was[leaf.id.as_str()] {
+                    rose.insert(leaf.id.clone());
+                }
+            }
+        }
+        let reported: BTreeSet<String> = report.reordered.iter().flat_map(|r| r.moved_up.iter().map(|m| m.node.label.clone())).collect();
+        prop_assert_eq!(&reported, &rose);
+        for record in &report.reordered {
+            prop_assert!(record.moved_up.iter().all(|m| m.to < m.from && m.from <= record.kept));
+        }
+        let firsts: Vec<usize> = report.reordered.iter().map(|r| r.moved_up[0].node.index).collect();
+        let mut sorted = firsts.clone();
+        sorted.sort_unstable();
+        prop_assert_eq!(firsts, sorted, "records are in document order");
+
+        // Reports are exact, not only as a set: one entry per item that rose, never repeated.
+        let total: usize = report.reordered.iter().map(|r| r.moved_up.len()).sum();
+        prop_assert_eq!(total, rose.len());
+
+        // A promote list no item answers to changes nothing.
+        if rose.is_empty() {
+            prop_assert_eq!(&ordered, &plain);
+        }
+
+        // Ordering again changes nothing and reports nothing.
+        let (again, second) = prop_assert_ok(select(&ordered, &promoting))?;
+        prop_assert_eq!(&again, &ordered);
+        prop_assert!(second.reordered.is_empty());
+    }
 }

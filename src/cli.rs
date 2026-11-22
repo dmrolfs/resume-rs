@@ -315,6 +315,8 @@ impl SelectArgs {
             drafts: self.drafts,
             prefer: self.prefer.clone(),
             picks: std::collections::BTreeMap::new(),
+            // Ordering is a spec's choice; there is no flag for it.
+            promote: Vec::new(),
         }
     }
 }

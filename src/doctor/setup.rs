@@ -34,7 +34,6 @@ pub fn finding_of(error: &Error) -> Option<Diagnostic> {
         | Error::SpecName { .. }
         | Error::OverridesRefused { .. }
         | Error::TracedToChoice { .. }
-        | Error::PromoteNotApplied { .. }
         | Error::InputChanged { .. }
         | Error::Spec { .. }
         | Error::Watch { .. }

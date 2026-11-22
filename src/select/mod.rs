@@ -8,15 +8,18 @@ use snafu::Snafu;
 use crate::model::{Alternate, GroupName, Resume, Tag, VariantName};
 
 mod inventory;
+mod order;
 mod resume;
 pub mod rules;
 pub(crate) use self::summary::selection_line;
+#[cfg(test)]
+mod order_tests;
 mod summary;
 #[cfg(test)]
 mod tests;
 
 pub use self::inventory::{GroupUse, Inventory, KeywordUse, TagUse, VariantUse};
-pub use self::resume::{Chosen, Dropped, NodeRef, SelectionReport, UnknownPick, select};
+pub use self::resume::{Chosen, Dropped, MovedUp, NodeRef, Reordered, SelectionReport, UnknownPick, select};
 pub use self::rules::{ChosenBy, DropReason};
 pub use self::summary::{CorePages, CoreSkip, KindCount, SelectionRecord, SelectionSummary};
 pub use crate::model::NodeKind;
@@ -48,6 +51,10 @@ pub struct Selection {
     pub prefer: Vec<VariantName>,
     /// The variant each named group renders, overriding `prefer`.
     pub picks: BTreeMap<GroupName, VariantName>,
+    /// Tags whose items rise within their own list (a list of bullets, or a run of adjacent paragraphs), most
+    /// promoted first; the first place among an item's own and inherited tags decides its rank. Only a spec
+    /// sets it, and a letter's selection leaves it empty: letters keep their authored order.
+    pub promote: Vec<Tag>,
 }
 
 /// Which items a selection keeps, before drafts and wordings.
@@ -91,10 +98,12 @@ pub struct UnknownNames {
     pub wordings: Vec<VariantName>,
     /// Every wording name the resume's groups use, sorted.
     pub known_wordings: Vec<VariantName>,
+    /// Promote tags that no node carries, in promote order, each once.
+    pub promote: Vec<Tag>,
 }
 
 impl UnknownNames {
-    /// Checks `selection`'s tags and preferred wordings against the names `resume` uses, drafts included.
+    /// Checks `selection`'s tags, preferred wordings, and promote tags against the names `resume` uses, drafts included.
     #[must_use]
     pub fn of(resume: &Resume, selection: &Selection) -> Self {
         let nodes = resume.nodes();
@@ -124,7 +133,14 @@ impl UnknownNames {
                 wordings.push(name.clone());
             }
         }
+        let mut promote: Vec<Tag> = Vec::new();
+        for tag in selection.promote.iter().filter(|t| !known_tags.contains(t)) {
+            if !promote.contains(tag) {
+                promote.push(tag.clone());
+            }
+        }
         Self {
+            promote,
             tags: asked.into_iter().filter(|t| !known_tags.contains(t)).cloned().collect(),
             known_tags: known_tags.into_iter().cloned().collect(),
             wordings,
@@ -135,7 +151,7 @@ impl UnknownNames {
     /// True when every name asked for is used.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.tags.is_empty() && self.wordings.is_empty()
+        self.tags.is_empty() && self.wordings.is_empty() && self.promote.is_empty()
     }
 }
 

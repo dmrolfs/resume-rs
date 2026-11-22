@@ -127,6 +127,7 @@ impl SelectionSummary {
         for node in &report.verify {
             out.push(format!("to verify: {}", at(node)));
         }
+        out.extend(self.moved_up_lines(line_of, &at));
         if let Some(line) = self.drafts_line() {
             out.push(line);
         }
@@ -190,6 +191,46 @@ impl SelectionSummary {
         Some(format!("wordings: {} chosen ({})", chosen.len(), how.join(", ")))
     }
 
+    /// One line per list in which `promote` moved something up, naming the risen items' lines top first; one line
+    /// saying nothing moved when a promote list is set, so a typo or an already-first list is not taken for a bug.
+    fn moved_up_lines(
+        &self,
+        line_of: &dyn Fn(usize) -> Option<usize>,
+        at: &dyn Fn(&super::NodeRef) -> String,
+    ) -> Vec<String> {
+        if self.selection.promote.is_empty() {
+            return Vec::new();
+        }
+        if self.report.reordered.is_empty() {
+            return vec!["moved up: nothing".to_string()];
+        }
+        self.report
+            .reordered
+            .iter()
+            .map(|r| {
+                let lines: Option<Vec<String>> = r
+                    .moved_up
+                    .iter()
+                    .map(|m| line_of(m.node.index).map(|l| l.to_string()))
+                    .collect();
+                let lines = lines.map_or_else(String::new, |l| {
+                    format!(" ({} {})", if l.len() == 1 { "line" } else { "lines" }, l.join(", "))
+                });
+                let what = if r.kept == 1 {
+                    r.kind.to_string()
+                } else {
+                    format!("{}s", r.kind)
+                };
+                format!(
+                    "moved up in {}: {} of {} {what}{lines}",
+                    at(&r.container),
+                    r.moved_up.len(),
+                    r.kept
+                )
+            })
+            .collect()
+    }
+
     fn drafts_line(&self) -> Option<String> {
         let report = &self.report;
         match (self.selection.drafts, report.drafts_left_out, report.drafts_included) {
@@ -212,6 +253,8 @@ pub struct SelectionRecord<'a> {
     scope: &'static str,
     tags: Vec<String>,
     prefer: Vec<String>,
+    /// The tags whose items rise within their own list, most promoted first; empty unless a spec promotes.
+    promote: Vec<String>,
     /// The wording each named group was told to render, by group name; empty unless a spec picked.
     picks: BTreeMap<String, String>,
     drafts: bool,
@@ -219,6 +262,8 @@ pub struct SelectionRecord<'a> {
     chosen: Vec<ChosenRecord>,
     dropped: Vec<DroppedRecord>,
     verify: Vec<NodeRecord>,
+    /// Each list in which `promote` moved something up, in document order.
+    reordered: Vec<ReorderedRecord>,
     skipped_drafts: Vec<String>,
     drafts_left_out: usize,
     drafts_included: usize,
@@ -238,6 +283,24 @@ struct DroppedRecord {
     #[serde(flatten)]
     node: NodeRecord,
     reason: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ReorderedRecord {
+    container: NodeRecord,
+    /// What the list holds: `bullet` or `paragraph`.
+    kind: NodeKind,
+    kept: usize,
+    moved_up: Vec<MovedUpRecord>,
+}
+
+#[derive(Debug, Serialize)]
+struct MovedUpRecord {
+    #[serde(flatten)]
+    node: NodeRecord,
+    /// 1-based positions among the list's kept items.
+    from: usize,
+    to: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -271,6 +334,10 @@ pub(crate) fn selection_line(selection: &Selection) -> String {
                 .collect::<Vec<_>>()
                 .join(", ")
         ));
+    }
+    if !selection.promote.is_empty() {
+        let promote: Vec<String> = selection.promote.iter().map(ToString::to_string).collect();
+        parts.push(format!("promote {}", promote.join(", ")));
     }
     if !selection.picks.is_empty() {
         let picks: Vec<String> = selection.picks.iter().map(|(g, v)| format!("{g}.{v}")).collect();
@@ -307,6 +374,7 @@ impl<'a> SelectionRecord<'a> {
                 Scope::All | Scope::CoreOnly => Vec::new(),
             },
             prefer: names(&selection.prefer),
+            promote: selection.promote.iter().map(ToString::to_string).collect(),
             picks: selection
                 .picks
                 .iter()
@@ -333,6 +401,24 @@ impl<'a> SelectionRecord<'a> {
                 })
                 .collect(),
             verify: report.verify.iter().map(node).collect(),
+            reordered: report
+                .reordered
+                .iter()
+                .map(|r| ReorderedRecord {
+                    container: node(&r.container),
+                    kind: r.kind,
+                    kept: r.kept,
+                    moved_up: r
+                        .moved_up
+                        .iter()
+                        .map(|m| MovedUpRecord {
+                            node: node(&m.node),
+                            from: m.from,
+                            to: m.to,
+                        })
+                        .collect(),
+                })
+                .collect(),
             skipped_drafts: report
                 .skipped_drafts
                 .iter()

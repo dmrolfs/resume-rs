@@ -168,12 +168,6 @@ pub enum Error {
         source: Box<Error>,
     },
 
-    /// A spec or profile has `promote`, and ordering is not built, so a build would not be what the file says.
-    #[snafu(display("`promote` is not applied by this version: {}", promoted(promote)))]
-    PromoteNotApplied {
-        promote: Vec<(crate::model::Tag, crate::spec::Located)>,
-    },
-
     /// The operating system would not report changes to a path, so `watch` cannot see edits there.
     #[snafu(display("cannot watch {} for changes: {source}", path.display()))]
     Watch { path: PathBuf, source: notify::Error },
@@ -214,9 +208,6 @@ impl Error {
             Self::SpecContent { source, .. } | Self::TracedToChoice { source, .. } => source.hint(),
             Self::SpecName { .. } => Some("rename the spec file"),
             Self::OverridesRefused { .. } => Some("add --allow-overrides to replace the spec's choices"),
-            Self::PromoteNotApplied { .. } => {
-                Some("remove `promote` from the profile or spec that wrote it; ordering is not available yet")
-            }
             _ => None,
         }
     }
@@ -225,15 +216,6 @@ impl Error {
 /// `positions/acme.toml:9:5, profiles/base.toml:2:8`: every place a choice was written.
 fn located_list(at: &[crate::spec::Located]) -> String {
     at.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
-}
-
-/// `` `leadership` (profiles/principal.toml:7:12), `ai` (positions/acme.toml:9:5) ``: each tag and where it was written.
-fn promoted(promote: &[(crate::model::Tag, crate::spec::Located)]) -> String {
-    promote
-        .iter()
-        .map(|(tag, at)| format!("`{tag}` ({at})"))
-        .collect::<Vec<_>>()
-        .join(", ")
 }
 
 /// `; available styles: mono, pragmatic`, or nothing when no style is known.
@@ -252,7 +234,7 @@ fn errors_in(diagnostics: &[Diagnostic]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use claims::{assert_ok, assert_some};
+    use claims::assert_some;
 
     fn path() -> PathBuf {
         PathBuf::from("out/Resume.pdf")
@@ -302,14 +284,6 @@ mod tests {
         assert_eq!(
             refused.hint(),
             Some("add --allow-overrides to replace the spec's choices")
-        );
-        let promote = Error::PromoteNotApplied {
-            promote: vec![(assert_ok!(crate::model::Tag::try_new("ai")), at.clone())],
-        };
-        assert!(assert_some!(promote.hint()).contains("remove `promote`"));
-        assert!(
-            promote.to_string().contains("`ai` (positions/acme.toml:4:9)"),
-            "{promote}"
         );
         // A wrapper lends the hint of the error it wraps, and names the places in its own text.
         let wrapped = Error::TracedToChoice {

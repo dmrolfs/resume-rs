@@ -8,6 +8,7 @@ use crate::model::{
     RoleBlock, Section, Status, Tag, VariantName,
 };
 
+use super::order::{self, Promotion};
 use super::rules::{self, ChosenBy, DropReason, Facts, GroupFacts, Resolution, Variant, Verdict};
 use super::{SelectError, Selection};
 
@@ -30,6 +31,29 @@ pub struct SelectionReport {
     pub drafts_left_out: usize,
     /// With drafts on: each item, wording, and container marked `@draft`.
     pub drafts_included: usize,
+    /// Each list in which `promote` moved something up, in document order.
+    pub reordered: Vec<Reordered>,
+}
+
+/// A list (bullets, or a run of adjacent paragraphs) in which promotion moved something up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reordered {
+    /// The section, role, or era that holds the list.
+    pub container: NodeRef,
+    /// What the list holds: bullets or paragraphs.
+    pub kind: NodeKind,
+    /// How many items the list kept.
+    pub kept: usize,
+    /// The items that now stand higher than before, top first.
+    pub moved_up: Vec<MovedUp>,
+}
+
+/// An item that rose: its baseline node, and where it was and is among its list's kept items (1-based).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MovedUp {
+    pub node: NodeRef,
+    pub from: usize,
+    pub to: usize,
 }
 
 /// One thing a selection left out.
@@ -91,8 +115,9 @@ impl NodeRef {
 }
 
 /// Tailors `resume` to `selection`: keeps the selected items, renders one wording per kept group, and drops every
-/// section, role, and era left with nothing under it. Text is never added or rewritten; the only move is a chosen
-/// blurb wording written as the paragraph after the blurb taking the blurb's place.
+/// section, role, and era left with nothing under it. Text is never added or rewritten. Two things move: a chosen
+/// blurb wording written as the paragraph after the blurb takes the blurb's place, and, with `promote`, items rise
+/// within their own list (a list of bullets, or a run of paragraphs adjacent in the output). Nothing crosses a list.
 ///
 /// Expects a resume that parsed with no errors, whose groups the parser checked: names unique, a `default` in
 /// each, variants adjacent, of one kind, and with one priority.
@@ -108,10 +133,50 @@ pub fn select(resume: &Resume, selection: &Selection) -> Result<(Resume, Selecti
         .collect();
     let mut tailored = Resume::new(resume.name.clone(), resume.contact.clone(), sections);
     tailored.schema = resume.schema;
-    Ok((tailored, walker.report))
+    let mut report = walker.report;
+    // Paragraph runs are ordered when their container closes, after the lists inside it. Lists cover disjoint
+    // ranges of node indices, so any moved item's index puts its list in document order.
+    report
+        .reordered
+        .sort_by_key(|r| r.moved_up.iter().map(|m| m.node.index).min());
+    Ok((tailored, report))
 }
 
 type Tags = BTreeSet<Tag>;
+
+/// A kept item that can be ordered: its text, for the report's label, and its annotations, for its rank.
+trait Item {
+    fn content(&self) -> &[Inline];
+    fn annotations(&self) -> &Annotations;
+}
+
+impl Item for Bullet {
+    fn content(&self) -> &[Inline] {
+        &self.content
+    }
+
+    fn annotations(&self) -> &Annotations {
+        &self.annotations
+    }
+}
+
+/// A paragraph's content and annotations.
+impl Item for (Vec<Inline>, Annotations) {
+    fn content(&self) -> &[Inline] {
+        &self.0
+    }
+
+    fn annotations(&self) -> &Annotations {
+        &self.1
+    }
+}
+
+/// A kept block of a container before its paragraph runs are ordered: a paragraph with its node index, or any
+/// other block, which ends a run.
+enum Slot<B> {
+    Paragraph(usize, Vec<Inline>, Annotations),
+    Other(B),
+}
 
 /// One alternate group: its variants, the facts it is judged by, and the decision.
 #[derive(Debug)]
@@ -146,6 +211,7 @@ enum Gate {
 
 struct Walker<'s> {
     selection: &'s Selection,
+    promotion: Promotion<'s>,
     groups: BTreeMap<GroupName, Group>,
     report: SelectionReport,
     /// The index the next node takes, in the order `Resume::nodes` visits them.
@@ -185,6 +251,7 @@ impl<'s> Walker<'s> {
         };
         Ok(Self {
             selection,
+            promotion: Promotion::new(&selection.promote),
             groups,
             report,
             next: 0,
@@ -201,29 +268,28 @@ impl<'s> Walker<'s> {
         let node = NodeRef::new(NodeKind::Section, section.title.as_ref(), self.index());
         let gate = self.enter(&section.annotations, Gate::Open, &node);
         let tags = inherit(&Tags::new(), &section.annotations);
-        let mut blocks = Vec::new();
+        let mut slots = Vec::new();
         for block in &section.blocks {
             match block {
                 Block::Paragraph { content, annotations } => {
                     let index = self.index();
                     let node = || NodeRef::leaf(NodeKind::Paragraph, content, index);
                     if let Some(annotations) = self.leaf(annotations, &tags, gate, None, node) {
-                        blocks.push(Block::Paragraph {
-                            content: content.clone(),
-                            annotations,
-                        });
+                        slots.push(Slot::Paragraph(index, content.clone(), annotations));
                     }
                 }
                 Block::Bullets { items } => {
-                    let items = self.bullets(items, &tags, gate);
+                    let items = self.bullets(items, &tags, gate, &node);
                     if !items.is_empty() {
-                        blocks.push(Block::Bullets { items });
+                        slots.push(Slot::Other(Block::Bullets { items }));
                     }
                 }
-                Block::Role(role) => blocks.extend(self.role(role, &tags, gate).map(Block::Role)),
-                Block::PageBreak => blocks.push(Block::PageBreak),
+                Block::Role(role) => slots.extend(self.role(role, &tags, gate).map(|r| Slot::Other(Block::Role(r)))),
+                Block::PageBreak => slots.push(Slot::Other(Block::PageBreak)),
             }
         }
+        let paragraph = |content, annotations| Block::Paragraph { content, annotations };
+        let blocks = self.paragraph_runs(slots, paragraph, &tags, &node);
         let holds = |blocks: &[Block]| blocks.iter().any(|b| !matches!(b, Block::PageBreak));
         let emptied = holds(&section.blocks) && !holds(&blocks);
         self.leave(gate, emptied, &section.annotations, node).then(|| Section {
@@ -260,16 +326,13 @@ impl<'s> Walker<'s> {
                     if blurb_wording {
                         blurb = Some((content.clone(), kept));
                     } else {
-                        body.push(RoleBlock::Paragraph {
-                            content: content.clone(),
-                            annotations: kept,
-                        });
+                        body.push(Slot::Paragraph(index, content.clone(), kept));
                     }
                 }
                 RoleBlock::Bullets { items } => {
-                    let items = self.bullets(items, &tags, gate);
+                    let items = self.bullets(items, &tags, gate, &node);
                     if !items.is_empty() {
-                        body.push(RoleBlock::Bullets { items });
+                        body.push(Slot::Other(RoleBlock::Bullets { items }));
                     }
                 }
                 RoleBlock::Era {
@@ -277,9 +340,11 @@ impl<'s> Walker<'s> {
                     period,
                     items,
                     annotations,
-                } => body.extend(self.era(name, period, items, annotations, &tags, gate)),
+                } => body.extend(self.era(name, period, items, annotations, &tags, gate).map(Slot::Other)),
             }
         }
+        let paragraph = |content, annotations| RoleBlock::Paragraph { content, annotations };
+        let body = self.paragraph_runs(body, paragraph, &tags, &node);
         let held = role.blurb.is_some() || !role.body.is_empty();
         let emptied = held && blurb.is_none() && body.is_empty();
         let (blurb, blurb_annotations) = blurb.unzip();
@@ -315,7 +380,7 @@ impl<'s> Walker<'s> {
     ) -> Option<RoleBlock> {
         let node = NodeRef::new(NodeKind::Era, name.as_ref(), self.index());
         let gate = self.enter(annotations, above, &node);
-        let kept = self.bullets(items, &inherit(inherited, annotations), gate);
+        let kept = self.bullets(items, &inherit(inherited, annotations), gate, &node);
         let emptied = !items.is_empty() && kept.is_empty();
         self.leave(gate, emptied, annotations, node).then(|| RoleBlock::Era {
             name: name.clone(),
@@ -325,8 +390,9 @@ impl<'s> Walker<'s> {
         })
     }
 
-    fn bullets(&mut self, items: &[Bullet], tags: &Tags, gate: Gate) -> Vec<Bullet> {
-        items
+    /// The kept bullets of one list, ordered by `promote`.
+    fn bullets(&mut self, items: &[Bullet], tags: &Tags, gate: Gate, container: &NodeRef) -> Vec<Bullet> {
+        let kept: Vec<(usize, Bullet)> = items
             .iter()
             .filter_map(|bullet| {
                 let index = self.index();
@@ -337,7 +403,82 @@ impl<'s> Walker<'s> {
                         content: bullet.content.clone(),
                         annotations,
                     })
+                    .map(|bullet| (index, bullet))
             })
+            .collect();
+        self.ordered(kept, tags, container, NodeKind::Bullet)
+    }
+
+    /// A container's kept blocks, with each run of adjacent paragraphs ordered by `promote` as one list.
+    fn paragraph_runs<B>(
+        &mut self,
+        slots: Vec<Slot<B>>,
+        paragraph: impl Fn(Vec<Inline>, Annotations) -> B,
+        inherited: &Tags,
+        container: &NodeRef,
+    ) -> Vec<B> {
+        let mut out = Vec::with_capacity(slots.len());
+        let mut run: Vec<(usize, (Vec<Inline>, Annotations))> = Vec::new();
+        let flush = |walker: &mut Self, run: &mut Vec<_>, out: &mut Vec<B>| {
+            let ordered = walker.ordered(std::mem::take(run), inherited, container, NodeKind::Paragraph);
+            out.extend(ordered.into_iter().map(|(c, a)| paragraph(c, a)));
+        };
+        for slot in slots {
+            match slot {
+                Slot::Paragraph(index, content, annotations) => run.push((index, (content, annotations))),
+                Slot::Other(block) => {
+                    flush(self, &mut run, &mut out);
+                    out.push(block);
+                }
+            }
+        }
+        flush(self, &mut run, &mut out);
+        out
+    }
+
+    /// One list's kept items, stably sorted by rank, with a [`Reordered`] record when something rose.
+    ///
+    /// Every item shares `inherited`, so a container's promote tag caps every item's rank at its own place.
+    fn ordered<T: Item>(
+        &mut self,
+        items: Vec<(usize, T)>,
+        inherited: &Tags,
+        container: &NodeRef,
+        kind: NodeKind,
+    ) -> Vec<T> {
+        if self.promotion.is_empty() || items.len() < 2 {
+            return items.into_iter().map(|(_, item)| item).collect();
+        }
+        let cap = self.promotion.rank_of(inherited);
+        let ranks: Vec<order::Rank> = items
+            .iter()
+            .map(|(_, item)| cap.min(self.promotion.rank_of(&item.annotations().tags)))
+            .collect();
+        let permutation = order::permutation(&ranks);
+        let risen = order::risen(&permutation);
+        if !risen.is_empty() {
+            let moved_up = risen
+                .iter()
+                .map(|&(from, to)| {
+                    let (index, item) = &items[from];
+                    MovedUp {
+                        node: NodeRef::leaf(kind, item.content(), *index),
+                        from: from + 1,
+                        to: to + 1,
+                    }
+                })
+                .collect();
+            self.report.reordered.push(Reordered {
+                container: container.clone(),
+                kind,
+                kept: items.len(),
+                moved_up,
+            });
+        }
+        let mut items: Vec<Option<T>> = items.into_iter().map(|(_, item)| Some(item)).collect();
+        permutation
+            .into_iter()
+            .map(|i| items[i].take().expect("a permutation names each item once"))
             .collect()
     }
 

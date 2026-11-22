@@ -15,7 +15,7 @@ pub struct SelectChoices {
     pub tags: BTreeSet<Tag>,
     /// Most preferred first.
     pub prefer: Vec<VariantName>,
-    /// The order in which tagged items are promoted, first first. Reserved for rsm-141.23.3.
+    /// The tags whose items rise within their own list, most promoted first (`Selection::promote`).
     pub promote: Vec<Tag>,
     pub pick: BTreeMap<GroupName, VariantName>,
     pub core_only: Option<bool>,

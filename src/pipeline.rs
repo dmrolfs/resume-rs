@@ -258,6 +258,8 @@ pub enum NameOrigin {
 pub struct NameOrigins {
     tags: BTreeMap<Tag, NameOrigin>,
     wordings: BTreeMap<VariantName, NameOrigin>,
+    /// Apart from `tags`: one tag can be selected in one file and promoted in another.
+    promoted: BTreeMap<Tag, NameOrigin>,
 }
 
 impl NameOrigins {
@@ -267,6 +269,10 @@ impl NameOrigins {
 
     pub fn wording(&mut self, wording: VariantName, origin: NameOrigin) {
         self.wordings.insert(wording, origin);
+    }
+
+    pub fn promoted(&mut self, tag: Tag, origin: NameOrigin) {
+        self.promoted.insert(tag, origin);
     }
 }
 
@@ -306,6 +312,7 @@ fn unknown_name_findings(
         UnknownKind {
             code: DiagnosticCode::UnknownTag,
             what: "tag",
+            names: "tags",
             flag: "--tags",
             document,
             tags_hint,
@@ -319,6 +326,7 @@ fn unknown_name_findings(
         UnknownKind {
             code: DiagnosticCode::UnknownWording,
             what: "wording",
+            names: "wordings",
             flag: "--prefer",
             document,
             tags_hint,
@@ -328,6 +336,21 @@ fn unknown_name_findings(
                 .map(|w| origin_of(w.to_string(), origins.wordings.get(w)))
                 .collect(),
             known: unknown.known_wordings.iter().map(ToString::to_string).collect(),
+        },
+        UnknownKind {
+            code: DiagnosticCode::UnknownTag,
+            what: "tag",
+            names: "promote tags",
+            // No flag sets it; a selection built in code without origins names the key.
+            flag: "promote",
+            document,
+            tags_hint,
+            asked: unknown
+                .promote
+                .iter()
+                .map(|t| origin_of(t.to_string(), origins.promoted.get(t)))
+                .collect(),
+            known: unknown.known_tags.iter().map(ToString::to_string).collect(),
         },
     ];
     kinds
@@ -343,7 +366,10 @@ fn unknown_name_findings(
 /// The names of one kind (tags or wordings) a selection asked for that the document lacks, and where each was written.
 struct UnknownKind {
     code: DiagnosticCode,
+    /// One name of this kind, for the hint that lists what the document uses.
     what: &'static str,
+    /// The names of this kind, for the message: `tags`, `wordings`, `promote tags`.
+    names: &'static str,
     /// The flag a name of this kind is typed with.
     flag: &'static str,
     /// What the names were looked for in: `resume` or `letter`.
@@ -394,7 +420,7 @@ impl UnknownKind {
                 } else {
                     ("profile", Severity::Note)
                 };
-                (severity, format!("{who} {what}s {}", each.join(", ")))
+                (severity, format!("{who} {} {}", self.names, each.join(", ")))
             }
         };
         Some(Diagnostic {
@@ -493,6 +519,7 @@ mod tests {
             known_tags: vec![tag("real")],
             wordings: wordings.iter().map(|w| wording(w)).collect(),
             known_wordings: vec![wording("default")],
+            promote: Vec::new(),
         }
     }
 
@@ -575,6 +602,57 @@ mod tests {
         assert_eq!(found[0].hints[1], "`resume tags <file>` lists every tag and wording");
         let some = unknown_names_from(Path::new("r.md"), &unknown(&["a"], &[]), &NameOrigins::default());
         assert_eq!(some[0].hints[0], "the resume's tags are `real`");
+    }
+
+    #[test]
+    fn an_unknown_promote_tag_is_a_tag_finding_of_its_own_warned_from_the_spec_and_noted_from_a_profile() {
+        let mut origins = NameOrigins::default();
+        origins.promoted(tag("lede"), NameOrigin::Spec("positions/acme.toml:5:12".into()));
+        origins.promoted(tag("shared"), NameOrigin::Profile("profiles/p.toml:2:12".into()));
+        let asked = UnknownNames {
+            promote: vec![tag("lede"), tag("shared")],
+            ..unknown(&["lede"], &[])
+        };
+        let found = unknown_names_from(Path::new("r.md"), &asked, &origins);
+        let seen: Vec<(DiagnosticCode, Severity, &str)> =
+            found.iter().map(|d| (d.code, d.severity, d.message.as_str())).collect();
+        assert_eq!(
+            seen,
+            [
+                (
+                    DiagnosticCode::UnknownTag,
+                    Severity::Warning,
+                    "--tags `lede`: not used in r.md"
+                ),
+                (
+                    DiagnosticCode::UnknownTag,
+                    Severity::Warning,
+                    "spec promote tags `lede` (positions/acme.toml:5:12): not used in r.md"
+                ),
+                (
+                    DiagnosticCode::UnknownTag,
+                    Severity::Note,
+                    "profile promote tags `shared` (profiles/p.toml:2:12): not used in r.md"
+                ),
+            ],
+            "a tag selected by a flag and promoted by the spec is two findings, each naming where it was written"
+        );
+        assert!(
+            found[1].hints.iter().any(|h| h.contains("`real`")),
+            "lists the resume's tags"
+        );
+    }
+
+    #[test]
+    fn unknown_names_finds_promote_tags_no_node_carries_once_each_in_promote_order() {
+        let resume = assert_some!(crate::markdown::parse("r.md", TEXT).valid()).clone();
+        let selection = Selection {
+            promote: vec![tag("zz"), tag("aa"), tag("zz")],
+            ..Selection::default()
+        };
+        let found = UnknownNames::of(&resume, &selection);
+        assert_eq!(found.promote, vec![tag("zz"), tag("aa")]);
+        assert!(!found.is_empty());
     }
 
     #[test]

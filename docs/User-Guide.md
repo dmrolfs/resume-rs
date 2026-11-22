@@ -898,6 +898,7 @@ style = "mono"
 tags = ["iceberg"]
 prefer = ["short"]
 pick = { summary = "acme" }
+promote = ["leadership"]
 ```
 
 Build it, and print what it resolves to:
@@ -927,6 +928,7 @@ paper = "a4"
 [select]
 tags = ["ai", "iceberg", "leadership", "platform"]
 prefer = ["short", "business", "technical"]
+promote = ["leadership"]
 
 [select.pick]
 gateway = "short"
@@ -949,7 +951,7 @@ Both kinds of file are TOML and strict: a key the program does not know is an er
 | `prefer` | under `[select]` | The wordings to prefer, most preferred first, as `--prefer` does. |
 | `pick` | under `[select]` | The wording a named group must use: `pick = { gateway = "short" }`. A group or wording the baseline does not have is an error that names the line that wrote it, and no PDF is made. |
 | `core-only` | under `[select]` | `true` keeps only `@core` items. It cannot be combined with `tags` in the files that are merged. |
-| `promote` | under `[select]` | Reserved for ordering, which is not available yet. A spec or profile that has it is refused, so a build is never different from what the files say. |
+| `promote` | under `[select]` | The tags whose items come first, most promoted first. See [Ordering with promote](#ordering-with-promote). |
 
 `drafts` is never a key. Whether to preview drafts is a choice you make at the command line, so a file can never put unfinished text into a PDF you send.
 
@@ -958,7 +960,7 @@ Both kinds of file are TOML and strict: a key the program does not know is an er
 The files are applied from the least specific to the most specific: each profile after the profiles it extends, the profiles in the order `extends` lists them, and the spec last. Later is more specific. A profile that two files extend, such as a shared base, is applied once.
 
 - `tags` are a union of every file's tags.
-- `prefer` lists the most specific file's wordings first, then the wordings of less specific files that are not listed yet.
+- `prefer` and `promote` list the most specific file's names first, then the names of less specific files that are not listed yet.
 - `pick`, `style`, `paper`, and `core-only` are decided by the most specific file that has one. A pick is decided for each group on its own.
 
 If the files cannot be put in one order, because a spec lists `["b", "base"]` while `b` extends `base`, the build stops and names both. A cycle is an error that prints the way round. The most you can nest is 8 levels and 32 profiles.
@@ -977,9 +979,10 @@ ok out/acme.pdf  mono  1 page  0 errors, 0 warnings, 1 note  built in 65ms
   content: baselines/baseline.md
   environment: --fonts bundled
   fonts: body Carlito (fallback for Calibri); display Carlito (fallback for Calibri); mono DejaVu Sans Mono (bundled)
-  selection: tags ai, iceberg, leadership, platform; prefer short, business, technical; picks gateway.short, summary.acme
+  selection: tags ai, iceberg, leadership, platform; prefer short, business, technical; promote leadership; picks gateway.short, summary.acme
   kept: 2 sections, 1 role, 1 blurb, 1 paragraph, 3 bullets; dropped: 2 paragraphs, 3 bullets (of which 4 other wordings)
   wordings: 2 chosen (2 pick)
+  moved up in role at line 18 "Analytical Engines Ltd · Principal Engineer": 1 of 3 bullets (line 27)
   core alone: not measured (no-core)
 note[unknown-wording]: profile wordings `business` (profiles/ai-platform.toml:6:11), `technical` (profiles/principal.toml:6:11): not used in baselines/baseline.md
  = help: the resume's wordings are `acme`, `ai`, `default`, `long`, `short`
@@ -992,6 +995,42 @@ The spec lines come before anything else is said, so you see which spec and whic
 The PDF is named after the spec, not the baseline: `positions/acme.toml` builds `acme.pdf`, and that name is also the identity written into the PDF. Two specs over one baseline therefore write two files. Two specs with the same name in different directories would write the same file, and so would two names that differ only in capitals on macOS and Windows, so give each application its own file name.
 
 With `--format json`, a build writes one object with `type` `spec` on standard output, before the `selection` object and the findings. Every key is always there: `file`, `position` (the fields of `[position]`, each `null` when unset; `null` itself when the spec has no `[position]`), `chain` (the `name` and `file` of each link; the spec's `name` is `null`), `content`, `pdf` (the file written or, with `--dry-run`, the file that would be written; `null` when there is none), `style`, `paper`, `drafts`, `overrides`, `environment`, and `version`. Each override has the `flag`, the values it `set` (none for a switch), what it `replaced` (`null` when the spec chose nothing, else the `setting` and its `value` list), and `at`, where the spec chose it, one place for each file. The `selection` object also has `picks`, which is empty for a build of a file.
+
+### Ordering with promote
+
+Selection keeps and drops items; `promote` also moves them.
+The first items of a role are the ones a reader takes in, so a leadership application can put its leadership bullets first while a technical one keeps the baseline's order, from one baseline.
+
+`promote = ["people", "leadership"]` ranks each item by the first of those tags it carries, counting the tags it inherits from its section, role, or era: `people` items first, then `leadership` items, then the rest.
+Items of equal rank keep the baseline's order, so promoting changes only what it must.
+The worked example promotes `leadership`, so in the Analytical Engines role "Mentored 6 engineers through promotion" rises above "Cut a weekly run", and the summary says so with the bullet's line:
+
+```text
+  moved up in role at line 18 "Analytical Engines Ltd · Principal Engineer": 1 of 3 bullets (line 27)
+```
+
+What moves, and what never does:
+
+- Items move only within their own list.
+  A list is the bullets between two other blocks, or a run of paragraphs next to each other.
+  A bullet never moves past a paragraph, a page break, an era line, or into another role, and paragraphs and bullets never trade places.
+- Sections, roles, eras, page breaks, and a role's blurb stay where they are.
+- A group of wordings ranks by the tags of all its wordings, and the wording chosen renders in the group's place.
+- A nested bullet is already flattened by the parser ([`nested-list`](#code-nested-list)), so it orders as a bullet of its own and can move away from its parent.
+- `@core`, `@extra`, `@draft`, and `@verify` do not change rank.
+  Promoting decides order only after selection has decided what is kept.
+
+A tag you add only to rank an item also counts for selection.
+A general bullet (untagged, so every build keeps it) that you tag `#people` is dropped by a build with `tags = ["arch"]`.
+Tag it for every audience that keeps it: `#people #arch`.
+
+A bullet that only one audience keeps can sit anywhere in the baseline, because the other builds never show it.
+Put it where that audience should read it, and it needs no promote tag.
+
+The summary has one `moved up` line for each list in which something rose, or `moved up: nothing` when nothing did.
+The JSON `selection` object has `promote` and `reordered` (the `container`, the list's `kind` and `kept` count, and each item that rose with its `from` and `to` place).
+A promote tag the baseline does not use is reported like any other tag: a warning when the spec wrote it, a note when only a profile did.
+Letters keep the order you wrote.
 
 ### Flags beside a spec
 

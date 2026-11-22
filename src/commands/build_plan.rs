@@ -8,8 +8,7 @@ use snafu::ResultExt;
 use super::Env;
 use super::spec_report::{SpecFacts, located};
 use crate::cli::{BuildArgs, RenderArgs};
-use crate::error::{Error, OverridesRefusedSnafu, PromoteNotAppliedSnafu, SpecNameSnafu, SpecSnafu, StemProblem};
-use crate::model::Tag;
+use crate::error::{Error, OverridesRefusedSnafu, SpecNameSnafu, SpecSnafu, StemProblem};
 use crate::pipeline::{NameOrigin, NameOrigins};
 use crate::select::{Scope, Selection};
 use crate::spec::{self, ChoiceKey, Located, OverrideFlag, ResolvedSpec};
@@ -85,35 +84,13 @@ pub(super) fn resolve(args: &BuildArgs, spec_path: &Path) -> Result<ResolvedSpec
     spec::resolve(spec_path, args.spec.profiles.as_deref()).context(SpecSnafu)
 }
 
-/// A spec with `promote` cannot be built faithfully until ordering exists, and a build that ignored it would
-/// not be the build the file describes.
-fn refuse_unapplied_promote(resolved: &ResolvedSpec) -> Result<(), Error> {
-    let promote: Vec<(Tag, Located)> = resolved
-        .choices
-        .select
-        .promote
-        .iter()
-        .filter_map(|tag| {
-            let at = resolved.origin_of(&ChoiceKey::Promote(tag.clone()))?;
-            Some((tag.clone(), at.clone()))
-        })
-        .collect();
-    if promote.is_empty() {
-        Ok(())
-    } else {
-        PromoteNotAppliedSnafu { promote }.fail()
-    }
-}
-
 /// Plans the build of `resolved`, the spec at `spec_path`, under the options of `args`.
 ///
 /// # Errors
-/// - `Error::PromoteNotApplied` - the spec or a profile has `promote`.
 /// - `Error::OverridesRefused` - flags beside the spec that the policy refuses.
 /// - `Error::Spec` - the spec alone asks for core-only and tags.
 /// - `Error::SpecName` - the spec's file name cannot name a PDF.
 pub(super) fn plan(args: &BuildArgs, spec_path: &Path, resolved: ResolvedSpec, env: &Env) -> Result<SpecPlan, Error> {
-    refuse_unapplied_promote(&resolved)?;
     let admitted = args
         .explicit()
         .admit(args.override_policy())
@@ -178,6 +155,12 @@ fn name_origins(
             if let Some(origin) = origin_of(ChoiceKey::Tag(tag.clone())) {
                 names.tag(tag.clone(), origin);
             }
+        }
+    }
+    // No flag replaces `promote`, so every promote tag was written in a file.
+    for tag in &selection.promote {
+        if let Some(origin) = origin_of(ChoiceKey::Promote(tag.clone())) {
+            names.promoted(tag.clone(), origin);
         }
     }
     if !overridden(OverrideFlag::Prefer) {
@@ -341,29 +324,5 @@ mod tests {
         let allowed = unvalidated(&["build", "--spec", &spec_arg, "--tags", "ai", "--allow-overrides"]);
         let resolved = assert_ok!(resolve(&allowed, &spec));
         assert!(plan(&allowed, &spec, resolved, &env_in(dir.path())).is_ok());
-    }
-
-    #[test]
-    fn a_profile_that_promotes_is_refused_with_the_place_that_wrote_it() {
-        let dir = assert_ok!(tempfile::tempdir());
-        assert_ok!(std::fs::create_dir_all(dir.path().join("profiles")));
-        assert_ok!(std::fs::create_dir_all(dir.path().join("positions")));
-        assert_ok!(std::fs::write(
-            dir.path().join("profiles/p.toml"),
-            "[select]\npromote = [\"ai\"]\n"
-        ));
-        let spec = dir.path().join("positions/acme.toml");
-        assert_ok!(std::fs::write(
-            &spec,
-            "extends = [\"p\"]\n[build]\ncontent = \"a.md\"\n"
-        ));
-        let args = unvalidated(&["build", "--spec", &spec.display().to_string()]);
-        let resolved = assert_ok!(resolve(&args, &spec));
-        let Error::PromoteNotApplied { promote } = plan_error(&args, &spec, resolved, dir.path()) else {
-            panic!("promote should be refused")
-        };
-        assert_eq!(promote.len(), 1);
-        assert!(promote[0].1.path.ends_with("p.toml"), "{:?}", promote[0].1);
-        assert_eq!(promote[0].1.line, 2);
     }
 }

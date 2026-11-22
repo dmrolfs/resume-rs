@@ -685,20 +685,57 @@ fn a_picked_draft_wording_names_the_line_that_picked_it() {
 }
 
 #[test]
-fn a_spec_with_promote_is_refused_naming_the_line_and_print_spec_still_prints_it() {
+fn a_spec_that_promotes_reorders_the_pdf_says_what_moved_and_builds_the_same_bytes_twice() {
     let work = Workspace::new();
-    let spec = spec_with(&work, "acme", "[select]\npromote = [\"ai\"]");
+    let spec = spec_with(&work, "acme", "[select]\npromote = [\"leadership\"]");
+    let first = build_spec(&work, &spec, &work.out(), &[]);
+    assert_eq!(first.outcome, Outcome::Success, "{}", first.stderr);
+    stderr_has(&first, "selection: everything; promote leadership");
+    // Baseline lines 22 (gateway), 25, 26, 27 (Mentored); `Mentored` and the `long`-tagged group rise.
+    stderr_has(&first, "moved up in role at line 18");
+    let once = pdf_in(&work.out(), "acme.pdf");
+    assert_ok!(fs::remove_file(work.out().join("acme.pdf")));
+    let again = build_spec(&work, &spec, &work.out(), &[]);
+    assert_eq!(again.outcome, Outcome::Success, "{}", again.stderr);
+    assert_eq!(
+        once,
+        pdf_in(&work.out(), "acme.pdf"),
+        "the same spec builds the same bytes"
+    );
+    let text = common::page_texts(&once).join(" ");
+    assert!(
+        common::position(&text, "Mentored 6 engineers") < common::position(&text, "Cut a weekly run"),
+        "{text}"
+    );
+    // Negative control: the same spec without `promote` keeps the baseline order.
+    let plain = spec_with(&work, "plain", "");
+    let run = build_spec(&work, &plain, &work.out(), &[]);
+    assert_eq!(run.outcome, Outcome::Success, "{}", run.stderr);
+    let plain_pdf = pdf_in(&work.out(), "plain.pdf");
+    let text = common::page_texts(&plain_pdf).join(" ");
+    assert!(common::position(&text, "Cut a weekly run") < common::position(&text, "Mentored 6 engineers"));
+    assert!(!run.stderr.contains("moved up"), "{}", run.stderr);
+}
+
+#[test]
+fn a_promote_tag_the_spec_wrote_that_the_baseline_lacks_warns_naming_the_line() {
+    let work = Workspace::new();
+    let spec = spec_with(&work, "acme", "[select]\npromote = [\"leadershp\"]");
     let run = build_spec(&work, &spec, &work.out(), &[]);
-    assert_eq!(run.outcome, Outcome::Failure);
-    let at = spec.display();
+    assert_eq!(
+        run.outcome,
+        Outcome::Success,
+        "a typo moves nothing and fails nothing: {}",
+        run.stderr
+    );
     stderr_has(
         &run,
-        &format!("`promote` is not applied by this version: `ai` ({at}:4:12)"),
+        &format!(
+            "warning[unknown-tag]: spec promote tags `leadershp` ({}:4:12): not used in baseline.md",
+            shown(&["positions", "acme.toml"])
+        ),
     );
-    assert!(!work.out().exists());
-    let printed = build_spec(&work, &spec, &work.out(), &["--print-spec"]);
-    assert_eq!(printed.outcome, Outcome::Success);
-    assert!(printed.stdout.contains("promote = [\"ai\"]"), "{}", printed.stdout);
+    stderr_has(&run, "moved up: nothing");
 }
 
 #[test]
@@ -931,19 +968,58 @@ fn a_flag_that_repeats_a_bad_spec_name_is_judged_as_the_flag() {
 }
 
 #[test]
-fn a_promote_only_a_profile_wrote_is_refused_naming_that_profile() {
+fn a_promote_only_a_profile_wrote_is_applied_and_an_unknown_one_is_only_a_note() {
     let work = Workspace::new();
-    work.file("profiles/shared.toml", "[select]\npromote = [\"ai\"]\n");
+    work.file(
+        "profiles/shared.toml",
+        "[select]\npromote = [\"leadership\", \"people\"]\n",
+    );
     let spec = spec_with(&work, "acme", "");
     assert_ok!(fs::write(
         &spec,
         "extends = [\"shared\"]\n[build]\ncontent = \"../baseline.md\"\n"
     ));
     let run = build_spec(&work, &spec, &work.out(), &[]);
-    assert_eq!(run.outcome, Outcome::Failure);
-    let profile = work.path().join("profiles").join("shared.toml");
-    stderr_has(&run, &format!("`ai` ({}:2:12)", profile.display()));
-    assert!(!work.out().exists());
+    assert_eq!(run.outcome, Outcome::Success, "{}", run.stderr);
+    stderr_has(&run, "promote leadership, people");
+    stderr_has(&run, "moved up in role");
+    stderr_has(
+        &run,
+        &format!(
+            "note[unknown-tag]: profile promote tags `people` ({}:2:26)",
+            shown(&["profiles", "shared.toml"])
+        ),
+    );
+}
+
+#[test]
+fn promote_origins_survive_a_tag_override_and_the_most_specific_file_names_a_repeated_tag() {
+    let work = Workspace::new();
+    work.file("profiles/shared.toml", "[select]\npromote = [\"shared\", \"typo\"]\n");
+    let spec = spec_with(&work, "acme", "");
+    assert_ok!(fs::write(
+        &spec,
+        "extends = [\"shared\"]\n[build]\ncontent = \"../baseline.md\"\n[select]\npromote = [\"typo\"]\n"
+    ));
+    let run = build_spec(&work, &spec, &work.out(), &["--allow-overrides", "--tags", "typo"]);
+    assert_eq!(run.outcome, Outcome::Success, "{}", run.stderr);
+    stderr_has(&run, "warning[unknown-tag]: --tags `typo`: not used in baseline.md");
+    let at = shown(&["positions", "acme.toml"]);
+    stderr_has(
+        &run,
+        &format!("warning[unknown-tag]: spec promote tags `typo` ({at}:5:12): not used in baseline.md"),
+    );
+    let profile = shown(&["profiles", "shared.toml"]);
+    stderr_has(
+        &run,
+        &format!("note[unknown-tag]: profile promote tags `shared` ({profile}:2:12): not used in baseline.md"),
+    );
+    assert_eq!(
+        run.stderr.matches("`typo`").count(),
+        2,
+        "one finding per place: {}",
+        run.stderr
+    );
 }
 
 #[test]
