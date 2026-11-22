@@ -242,7 +242,19 @@ impl DiagnosticCode {
             LetterSelectionRequired => &Advice {
                 summary: "The annotated letter needs paragraph selection before it can be built.",
                 why: "Project convention: publishing every annotated paragraph could include drafts or multiple alternate wordings.",
-                fix: "Until letter selection is available, use an unannotated letter containing only the paragraphs you chose.",
+                fix: "Current letter builds select annotations automatically; use --tags, --core-only, --prefer or --drafts to tailor the result. This code describes the legacy refusal.",
+                example: None,
+            },
+            LetterBodyEmpty => &Advice {
+                summary: "Selection leaves the letter body empty.",
+                why: "Project convention: a cover letter must retain at least one authored body paragraph.",
+                fix: "Choose matching tags, retain a core paragraph, or finish draft wording.",
+                example: None,
+            },
+            LetterFrameNotReady => &Advice {
+                summary: "The letter greeting or closing has no ready wording.",
+                why: "Project convention: selection cannot silently omit a mandatory letter frame.",
+                fix: "Provide a ready greeting and closing wording.",
                 example: None,
             },
             TextLimitExceeded => &Advice {

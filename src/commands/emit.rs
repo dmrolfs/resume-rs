@@ -30,6 +30,13 @@ impl<'a, 'io> Reporter<'a, 'io> {
         Sources::new(Some(self.cwd.to_path_buf()))
     }
 
+    pub(super) fn shown<'p>(&self, path: &'p Path) -> &'p Path {
+        path.strip_prefix(self.cwd)
+            .ok()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(path)
+    }
+
     /// One summary line, with its marker in color when color is on. A failure to write to stderr has nowhere
     /// to be reported, so it is dropped.
     pub(super) fn summary(&mut self, line: &BuildLine<'_>) {

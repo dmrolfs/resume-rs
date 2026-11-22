@@ -95,14 +95,9 @@ fn every_content_failure_keeps_stdout_empty() {
     for (input, expected) in [
         (SOURCE.replace("{{title}}", "{{recipient}}"), "placeholder-unresolved"),
         (SOURCE.replace("## Closing", "## Wrong"), "letter-unknown-section"),
-        // Selection does not exist yet, so a draft or an alternate wording must never be printed.
         (
             SOURCE.replace("{{company}}.", "{{company}}. <!-- @draft -->"),
-            "has annotations",
-        ),
-        (
-            SOURCE.replace("Dear Team,", "Dear Team, <!-- =hello.default -->"),
-            "has annotations",
+            "letter-body-empty",
         ),
     ] {
         assert_ok!(std::fs::write(&path, input));

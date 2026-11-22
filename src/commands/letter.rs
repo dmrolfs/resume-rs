@@ -18,7 +18,7 @@ pub(super) fn run(cli: &Cli, args: &LetterArgs, env: &Env, io: &mut Io<'_>) -> O
         return Outcome::Failure;
     }
     let mut reporter = Reporter::new(cli.format, &env.cwd, io);
-    match prepare(args, &mut reporter) {
+    match prepare(args, cli.format, &mut reporter) {
         Ok((letter, text)) => {
             let mode = args.output_format.unwrap_or_default();
             let pdf = if mode != crate::letter::LetterOutput::Text {
@@ -74,8 +74,95 @@ enum CommandFailure {
     Findings,
 }
 
+fn select_letter(
+    source: &crate::letter::LetterSource,
+    args: &LetterArgs,
+    text: &str,
+    format: crate::model::options::OutputFormat,
+    out: &mut Reporter<'_, '_>,
+) -> Result<SelectedLetter, CommandFailure> {
+    use crate::letter::{LetterSelectError, SourceItem};
+    let selection = args.select.selection();
+    let annotations = std::iter::once(&source.greeting)
+        .chain(&source.body)
+        .chain(std::iter::once(&source.closing))
+        .flat_map(|item| match item {
+            SourceItem::Paragraph(item) => std::slice::from_ref(item),
+            SourceItem::Alternates(group) => group.variants(),
+        })
+        .map(|item| &item.annotations);
+    let unknown = crate::select::UnknownNames::from_annotations(annotations, &selection);
+    let mut sources = out.sources();
+    sources.insert(&args.file, text);
+    let findings = crate::pipeline::unknown_letter_names(&args.file, &unknown);
+    out.diagnostics(&sources, &findings.iter().collect::<Vec<_>>());
+    let mut report = |report: &crate::letter::LetterReport| {
+        if !super::letter_report::is_silent(report, &selection) {
+            let record = super::letter_report::LetterSelectionRecord::new(
+                out.shown(&args.file).display().to_string(),
+                text,
+                report,
+                &selection,
+            );
+            if format == crate::model::options::OutputFormat::Json {
+                out.record(&record);
+            } else {
+                for line in record.lines(&selection) {
+                    out.line(&line);
+                }
+            }
+        }
+    };
+    match crate::letter::select(source, &selection) {
+        Ok((selected, explanation)) => {
+            report(&explanation);
+            Ok(selected)
+        }
+        Err(error) => {
+            let (code, range) = match &error {
+                LetterSelectError::EmptyBody { report: explanation } => {
+                    report(explanation);
+                    (
+                        DiagnosticCode::LetterBodyEmpty,
+                        source
+                            .body
+                            .first()
+                            .map(|item| match item {
+                                SourceItem::Paragraph(item) => item.piece.range.clone(),
+                                SourceItem::Alternates(group) => group.variants()[0].piece.range.clone(),
+                            })
+                            .unwrap_or(0..0),
+                    )
+                }
+                LetterSelectError::FrameNotReady { range, .. } => (DiagnosticCode::LetterFrameNotReady, range.clone()),
+                // CLI flags cannot create picks; specs wire this typed error in T5.
+                LetterSelectError::PickedDraft { .. } => {
+                    out.line(&format!("error: {error}"));
+                    return Err(CommandFailure::Findings);
+                }
+            };
+            let finding = Diagnostic {
+                severity: Severity::Error,
+                code,
+                message: error.to_string(),
+                span: Some(Span {
+                    file: args.file.clone(),
+                    kind: SourceKind::Markdown,
+                    range,
+                }),
+                hints: vec![code.advice().fix.to_owned()],
+                fix: None,
+            };
+            out.diagnostics(&sources, &[&finding]);
+            out.line("error: no letter printed");
+            Err(CommandFailure::Findings)
+        }
+    }
+}
+
 fn prepare(
     args: &LetterArgs,
+    format: crate::model::options::OutputFormat,
     out: &mut Reporter<'_, '_>,
 ) -> Result<(crate::letter::Letter, crate::letter::PlainLetter), CommandFailure> {
     // Judge the byte limit before decoding: a bounded prefix can end inside a UTF-8 character.
@@ -118,27 +205,7 @@ fn prepare(
         return Err(CommandFailure::Findings);
     };
     let settings = args.effective();
-    // Refuse annotations until selection can choose paragraphs without leaking drafts or alternates.
-    let selected = SelectedLetter::try_from(source).map_err(|refused| {
-        let finding = Diagnostic {
-            severity: Severity::Error,
-            code: DiagnosticCode::LetterSelectionRequired,
-            message: refused.to_string(),
-            span: Some(Span {
-                file: args.file.clone(),
-                kind: SourceKind::Markdown,
-                range: refused.range,
-            }),
-            hints: vec![
-                "use an unannotated letter with explicitly chosen paragraphs until letter selection is available"
-                    .into(),
-            ],
-            fix: None,
-        };
-        out.diagnostics(&sources, &[&finding]);
-        out.line("error: no letter printed");
-        CommandFailure::Findings
-    })?;
+    let selected = select_letter(&source, args, &text, format, out)?;
     let letter = resolve(selected, &settings.fields, &args.file).map_err(|findings| {
         out.diagnostics(&sources, &findings.iter().collect::<Vec<_>>());
         out.line("error: no letter printed");

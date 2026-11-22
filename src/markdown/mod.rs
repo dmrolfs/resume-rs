@@ -550,6 +550,8 @@ mod tests {
             PlaceholderUnresolved,
             TextLimitExceeded,
             LetterSelectionRequired,
+            LetterBodyEmpty,
+            LetterFrameNotReady,
             AnnotationUnknownKeyword,
             AnnotationMalformed,
             AnnotationConflict,

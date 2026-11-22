@@ -261,6 +261,22 @@ Explicit backslash escapes and placeholders split across comment/formatting boun
 Only actual Markdown comments are annotations; visible escaped/code lookalikes are not instructions.
 This update supersedes any conflicting verbatim-only or broad lexical-ban proposal in the raw reports.
 
+## Letter tailoring CLI, rsm-vqr.3
+
+The letter command flattens the same `SelectArgs` as resume commands: tags, core-only, prefer and drafts.
+The common preparation path parses, checks unknown names, selects and reports, resolves fields, then checks exact text limits before rendering or writing.
+Unknown-name checking shares an annotation inventory, including frames, drafts and unselected variants.
+Letter warnings omit the resume-only `resume tags` hint.
+Report presentation lives in `commands/letter_report.rs`, keeping command JSON and human formatting out of the selection model.
+Human reports remain on stderr; PDF plus JSON emits a `type: letter-selection` record using source part/line locations and no paragraph prose or application values.
+The record is silent for an unchanged default selection, like resume reports.
+A source line index avoids rescanning the entire document for every report item.
+Empty selected bodies emit `letter-body-empty` after their selection explanation, before any output replacement.
+`letter-frame-not-ready` supports defensive library-constructed frames; the parser rejects frame status annotations earlier.
+The published `letter-selection-required` code remains explainable for compatibility with v0.1.0, but letter builds no longer emit it.
+The unannotated `SelectedLetter::try_from` convenience remains available to existing library callers.
+Specs and explicit picks remain T5; no new CLI flag semantics are introduced.
+
 ## Letter selection library, rsm-vqr.2
 
 `letter::select(&LetterSource, &Selection)` returns a `SelectedLetter` and range-located `LetterReport`.
@@ -278,7 +294,7 @@ The six stable tests documented in `src/select/rules.rs` pin selected-draft beha
 `tests/letter_select_property_test.rs` compares letter and resume body outcomes and reports across generated scopes, annotations, picks and preferences.
 Repeating selection from the same source is deterministic.
 Resume-style reselecting of the result is not applicable: `SelectedLetter` intentionally drops selection annotations.
-CLI wiring and unknown tag/preference validation remain `rsm-vqr.3`; this library addition does not remove the command's temporary selection-required guard.
+CLI wiring and unknown tag/preference validation were completed in `rsm-vqr.3`, as described above.
 
 ## Annotation integration update, rsm-vqr.1
 
@@ -287,7 +303,8 @@ This update supersedes the earlier parser-reservation baseline below.
 `SelectedLetter::try_from` accepts only unannotated sources and returns located `SelectionRequired` otherwise, including lone default groups.
 The letter command reports that refusal as `letter-selection-required` before resolution, PDF preparation or text output.
 Annotation syntax uses the shared `annotation-*` and `alternate-*` findings.
-Selection of annotated letters belongs to `rsm-vqr.2`; the command does not guess defaults or publish drafts in its absence.
+Selection of annotated letters is implemented by `rsm-vqr.2`, with CLI wiring in `rsm-vqr.3`.
+The checked unannotated conversion remains a library convenience, not the command's selection path.
 
 ## Detailed decisions and final review disposition
 

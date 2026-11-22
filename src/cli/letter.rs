@@ -42,6 +42,8 @@ pub struct LetterArgs {
     pub length_unit: Option<LengthUnit>,
     #[command(flatten)]
     pub render: LetterRenderArgs,
+    #[command(flatten)]
+    pub select: super::SelectArgs,
 }
 
 #[derive(Debug, Args)]

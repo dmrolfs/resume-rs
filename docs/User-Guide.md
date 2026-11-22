@@ -455,8 +455,18 @@ The letter source uses `# Name`, optional contact, and `## Greeting`, `## Body`,
 Use `{{company}}`, `{{title}}` and `{{recipient}}` in letter paragraphs; HTML character references can spell the braces too.
 Values are inserted literally, never reparsed as Markdown.
 The parser accepts and validates letter annotations using the shared annotation and alternate-group rules.
-Building any annotated letter, even a lone default group, currently fails with `letter-selection-required` at the annotation.
-Until letter selection is available, use an unannotated letter with only the paragraphs you explicitly chose; do not simply remove draft markers from unwanted content.
+Letter builds share the resume `--tags`, `--core-only`, `--prefer` and `--drafts` flags.
+With no flags, all ready paragraphs remain and each group uses its default ready wording, falling back to its first ready wording if the default is a draft.
+Tag selection keeps eligible core and untagged standard paragraphs; `--core-only` keeps only eligible core body paragraphs.
+Greeting and closing remain under every scope, with alternate wording selected normally.
+Body order stays authored, and selecting an empty body is an error.
+Only selected wording requires application field values; malformed placeholders anywhere still fail parsing.
+Unknown tags and preferred wording names warn rather than fail, as they do for resumes.
+Human selection reports list kept/dropped locations, chosen variants, draft counts and verification reminders on stderr, without copying letter prose.
+With `--output-format pdf --format json`, nontrivial selections produce a `"type": "letter-selection"` record on stdout instead, containing `file`, `scope`, `tags`, `prefer`, `drafts`, `kept`, `dropped`, `chosen`, `verify`, `skipped_drafts`, `drafts_left_out` and `drafts_included`.
+Locations have a `part` and 1-based `line`; dropped entries add `reason`, and chosen entries have `group`, `variant`, `by` and `not_chosen`.
+An unchanged default selection is silent; text/both output still refuses JSON diagnostics.
+Read every verification reminder and review paragraph coherence yourself.
 
 From a source checkout, these examples use the [synthetic letter](../tests/fixtures/letters/valid.md).
 For your own application, copy that file, edit its paragraphs, and substitute its path and your fields.
@@ -465,11 +475,16 @@ Read the complete text and PDF before submission; checks cannot establish truthf
 ```sh
 resume letter tests/fixtures/letters/valid.md --company Acme --title Architect --recipient Team
 resume letter tests/fixtures/letters/valid.md --company Acme --title Architect --recipient Team --max-length 2000 --length-unit utf16
+resume letter tests/fixtures/letters/tailored.md --tags platform --prefer technical
 ```
 
 | Option | Values and default | What it does |
 |---|---|---|
 | `<FILE>` | one Markdown letter | The letter to validate and print. |
+| `--tags <TAG>` | comma-separated or repeated | Keep matching, core and untagged standard body paragraphs; conflicts with `--core-only`. |
+| `--core-only` | a switch | Keep eligible core body paragraphs and mandatory frames. |
+| `--prefer <NAME>` | comma-separated or repeated | Preferred alternate wordings, most preferred first. |
+| `--drafts` | a switch | Include authored draft wording for preview. |
 | `--output-format <OUTPUT_FORMAT>` | `text`, `pdf` or `both`; none at argument parsing | Product format; text goes to stdout, PDF to a file. |
 | `-o, --out <DIR>` | none at argument parsing | PDF directory, ignored for text; resolves to `out`. |
 | `--company <COMPANY>` | none | Literal company field. |
@@ -910,6 +925,8 @@ How the Markdown is written. Every command that reads a resume reports these.
 | <a id="code-placeholder-position"></a>`placeholder-position` | error | A placeholder appears outside permitted letter text. |
 | <a id="code-text-limit-exceeded"></a>`text-limit-exceeded` | error | The letter text exceeds its configured length limit. |
 | <a id="code-letter-selection-required"></a>`letter-selection-required` | error | The annotated letter needs paragraph selection before it can be built. |
+| <a id="code-letter-body-empty"></a>`letter-body-empty` | error | Selection leaves the letter body empty. |
+| <a id="code-letter-frame-not-ready"></a>`letter-frame-not-ready` | error | The letter greeting or closing has no ready wording. |
 
 ### Content codes
 

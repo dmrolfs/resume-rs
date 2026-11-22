@@ -277,7 +277,7 @@ pub struct SelectArgs {
     #[arg(long, value_name = "NAME", value_delimiter = ',', value_parser = parse_variant)]
     pub prefer: Vec<VariantName>,
 
-    /// Keep what is marked `@draft`, to preview the resume once the drafts are ready.
+    /// Keep what is marked `@draft`, to preview the document once the drafts are ready.
     #[arg(long)]
     pub drafts: bool,
 }

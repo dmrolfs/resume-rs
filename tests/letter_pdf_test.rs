@@ -388,7 +388,7 @@ fn both_product_matches_text_and_pdf_is_committed_at_first_stdout_write() {
             fail_write,
             fail_flush,
         };
-        let (result, err) = run(root.path(), &["--output-format", "both"], &mut observer);
+        let (result, err) = run(root.path(), &["--output-format", "both", "--drafts"], &mut observer);
         if fail_write || fail_flush {
             assert_eq!(result, Outcome::Failure);
             assert!(err.contains("PDF remains"));
@@ -401,17 +401,17 @@ fn both_product_matches_text_and_pdf_is_committed_at_first_stdout_write() {
 }
 
 #[test]
-fn annotations_require_selection_with_an_exact_located_error_before_output() {
+fn empty_selected_body_has_a_located_error_before_output() {
     let root = assert_ok!(tempfile::tempdir());
     let target = root.path().join("out").join("neutral-letter.pdf");
     assert_ok!(std::fs::create_dir(root.path().join("out")));
     assert_ok!(std::fs::write(&target, b"prior"));
-    for comment in ["<!-- @draft -->", "<!-- =body.default -->", "<!-- #platform -->"] {
-        let source = SOURCE.replace(
+    for comment in ["<!-- @draft -->", "<!-- =body.default @draft -->"] {
+        let source = SOURCE.replace("I seek {{title}} at {{company}}.\n\n", "").replace(
             "My distinctive letter paragraph.",
             &format!("My distinctive letter paragraph. {comment}"),
         );
-        let start = assert_some!(source.find(comment));
+        let start = assert_some!(source.find("My distinctive letter paragraph."));
         assert_ok!(std::fs::write(root.path().join("neutral.md"), &source));
         let mut stdout = Vec::new();
         let (outcome, _) = run(
@@ -425,9 +425,7 @@ fn annotations_require_selection_with_an_exact_located_error_before_output() {
             .map(|line| assert_ok!(serde_json::from_str(line)))
             .collect();
         let finding = assert_some!(
-            records
-                .iter()
-                .find(|record| record["code"] == "letter-selection-required"),
+            records.iter().find(|record| record["code"] == "letter-body-empty"),
             "{records:?}"
         );
         assert_eq!(finding["severity"], "error");
@@ -437,7 +435,10 @@ fn annotations_require_selection_with_an_exact_located_error_before_output() {
         assert_eq!(finding["line"], line);
         assert_eq!(finding["column"], column);
         assert_eq!(finding["end_line"], line);
-        assert_eq!(finding["end_column"], column + comment.chars().count());
+        assert_eq!(
+            finding["end_column"],
+            column + "My distinctive letter paragraph. ".chars().count() + comment.chars().count()
+        );
         assert_eq!(finding["file"], "neutral.md");
         for extra in [
             vec!["--output-format", "text"],
@@ -448,11 +449,12 @@ fn annotations_require_selection_with_an_exact_located_error_before_output() {
             let (outcome, stderr) = run(root.path(), &extra, &mut stdout);
             assert_eq!(outcome, Outcome::Failure);
             assert!(stdout.is_empty());
-            assert!(stderr.contains("letter-selection-required"), "{stderr}");
+            assert!(stderr.contains("letter-body-empty"), "{stderr}");
             assert_eq!(assert_ok!(std::fs::read(&target)), b"prior");
         }
     }
     let source = SOURCE
+        .replace("I seek {{title}} at {{company}}.\n\n", "")
         .replace("Dear {{recipient}},", "Dear {{recipient}}, <!-- =greeting.default -->")
         .replace(
             "My distinctive letter paragraph.",
@@ -487,10 +489,11 @@ fn annotations_require_selection_with_an_exact_located_error_before_output() {
         .lines()
         .map(|line| assert_ok!(serde_json::from_str(line)))
         .collect();
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0]["code"], "letter-selection-required");
-    assert_eq!(records[0]["line"], 7);
-    assert_eq!(records[0]["column"], 21);
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0]["type"], "letter-selection");
+    assert_eq!(records[1]["code"], "letter-body-empty");
+    assert_eq!(records[1]["line"], 11);
+    assert_eq!(records[1]["column"], 1);
     assert_eq!(assert_ok!(std::fs::read(&target)), b"prior");
 }
 

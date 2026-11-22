@@ -228,18 +228,31 @@ pub struct Selected {
 /// One warning per unknown kind of name, listing what the file does use, so a typo is caught before it quietly
 /// selects nothing.
 pub(crate) fn unknown_names(file: &Path, unknown: &UnknownNames) -> Vec<Diagnostic> {
+    unknown_name_findings(
+        file,
+        unknown,
+        "resume",
+        Some("`resume tags <file>` lists every tag and wording"),
+    )
+}
+
+pub(crate) fn unknown_letter_names(file: &Path, unknown: &UnknownNames) -> Vec<Diagnostic> {
+    unknown_name_findings(file, unknown, "letter", None)
+}
+
+fn unknown_name_findings(file: &Path, unknown: &UnknownNames, document: &str, hint: Option<&str>) -> Vec<Diagnostic> {
     let finding = |code: DiagnosticCode, asked: String, what: &str, known: String| {
         let has = if known.is_empty() {
-            format!("the resume uses no {what}s")
+            format!("the {document} uses no {what}s")
         } else {
-            format!("the resume's {what}s are {known}")
+            format!("the {document}'s {what}s are {known}")
         };
         Diagnostic {
             severity: code.default_severity(),
             code,
             message: format!("{asked}: not used in {}", file.display()),
             span: None,
-            hints: vec![has, "`resume tags <file>` lists every tag and wording".to_string()],
+            hints: std::iter::once(has).chain(hint.map(str::to_owned)).collect(),
             fix: None,
         }
     };

@@ -97,7 +97,7 @@ impl SelectionSummary {
         if self.is_silent() {
             return Vec::new();
         }
-        let mut out = vec![self.selection_line(), self.counts_line()];
+        let mut out = vec![selection_line(&self.selection), self.counts_line()];
         if let Some(line) = self.wordings_line() {
             out.push(line);
         }
@@ -140,26 +140,6 @@ impl SelectionSummary {
             });
         }
         out
-    }
-
-    fn selection_line(&self) -> String {
-        let selection = &self.selection;
-        let mut parts = vec![match &selection.scope {
-            Scope::All => "everything".to_string(),
-            Scope::CoreOnly => "core only".to_string(),
-            Scope::Tags(tags) => {
-                let names: Vec<String> = tags.as_set().iter().map(ToString::to_string).collect();
-                format!("tags {}", names.join(", "))
-            }
-        }];
-        if !selection.prefer.is_empty() {
-            let names: Vec<String> = selection.prefer.iter().map(ToString::to_string).collect();
-            parts.push(format!("prefer {}", names.join(", ")));
-        }
-        if selection.drafts {
-            parts.push("with drafts".to_string());
-        }
-        format!("selection: {}", parts.join("; "))
     }
 
     fn counts_line(&self) -> String {
@@ -264,6 +244,36 @@ struct ChosenRecord {
     variant: String,
     by: String,
     not_chosen: Vec<String>,
+}
+
+pub(crate) fn selection_line(selection: &Selection) -> String {
+    let mut parts = vec![match &selection.scope {
+        Scope::All => "everything".to_string(),
+        Scope::CoreOnly => "core only".to_string(),
+        Scope::Tags(tags) => format!(
+            "tags {}",
+            tags.as_set()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }];
+    if !selection.prefer.is_empty() {
+        parts.push(format!(
+            "prefer {}",
+            selection
+                .prefer
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if selection.drafts {
+        parts.push("with drafts".to_string());
+    }
+    format!("selection: {}", parts.join("; "))
 }
 
 impl<'a> SelectionRecord<'a> {

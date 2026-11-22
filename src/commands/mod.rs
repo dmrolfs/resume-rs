@@ -8,6 +8,7 @@ mod export;
 mod export_style;
 mod letter;
 mod letter_pdf;
+mod letter_report;
 mod licenses;
 pub mod report;
 mod styles;

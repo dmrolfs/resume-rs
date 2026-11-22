@@ -10,6 +10,7 @@ use crate::model::{Alternate, GroupName, Resume, Tag, VariantName};
 mod inventory;
 mod resume;
 pub mod rules;
+pub(crate) use self::summary::selection_line;
 mod summary;
 #[cfg(test)]
 mod tests;
@@ -97,10 +98,20 @@ impl UnknownNames {
     #[must_use]
     pub fn of(resume: &Resume, selection: &Selection) -> Self {
         let nodes = resume.nodes();
-        let known_tags: BTreeSet<&Tag> = nodes.iter().flat_map(|n| &n.annotations.tags).collect();
-        let known_wordings: BTreeSet<&VariantName> = nodes
+        Self::from_annotations(nodes.iter().map(|n| n.annotations), selection)
+    }
+
+    /// Checks all authored annotations, including drafts and unselected variants.
+    #[must_use]
+    pub fn from_annotations<'a>(
+        annotations: impl Iterator<Item = &'a crate::model::Annotations>,
+        selection: &Selection,
+    ) -> Self {
+        let annotations: Vec<_> = annotations.collect();
+        let known_tags: BTreeSet<&Tag> = annotations.iter().flat_map(|a| &a.tags).collect();
+        let known_wordings: BTreeSet<&VariantName> = annotations
             .iter()
-            .filter_map(|n| n.annotations.alternate.as_ref())
+            .filter_map(|a| a.alternate.as_ref())
             .map(|a| &a.variant)
             .collect();
         let asked: Vec<&Tag> = match &selection.scope {

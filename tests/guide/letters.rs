@@ -17,7 +17,7 @@ fn documented_letter_commands_produce_the_same_checked_letter() {
         );
         let dir = assert_ok!(tempfile::tempdir());
         // Run the documented path unchanged from a checkout-shaped temporary directory.
-        let fixture = PathBuf::from("tests/fixtures/letters/valid.md");
+        let fixture = PathBuf::from(assert_some!(command.split_whitespace().nth(2)));
         assert_ok!(std::fs::create_dir_all(dir.path().join(assert_some!(fixture.parent()))));
         assert_ok!(std::fs::copy(root().join(&fixture), dir.path().join(&fixture)));
         let output = assert_ok!(
@@ -33,7 +33,11 @@ fn documented_letter_commands_produce_the_same_checked_letter() {
         );
         assert_eq!(
             String::from_utf8_lossy(&output.stdout),
-            "Dear Team,\n\nI am applying for Architect at Acme.\n\nMy work includes shared platforms (https://example.invalid/) and Rust.\n\nSincerely,\nAlex Example\n"
+            if command.contains("tailored.md") {
+                "Hello Team,\n\nI build dependable services. \n\nI deliver shared infrastructure. \n\nRegards,\nAlex Example\n"
+            } else {
+                "Dear Team,\n\nI am applying for Architect at Acme.\n\nMy work includes shared platforms (https://example.invalid/) and Rust.\n\nSincerely,\nAlex Example\n"
+            }
         );
         let pdf = dir.path().join("out/valid-letter.pdf");
         if command.contains("--output-format both") {

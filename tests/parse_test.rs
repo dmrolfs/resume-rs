@@ -266,7 +266,12 @@ fn every_format_code_is_demonstrated_by_a_fixture() {
     seen.push(DiagnosticCode::TextLimitExceeded);
     assert_ok!(std::fs::write(
         &path,
-        include_str!("fixtures/letters/valid.md").replace("Sincerely,", "Sincerely, <!-- =closing.default -->")
+        include_str!("fixtures/letters/valid.md")
+            .replace(
+                "at &#123;&#123;company&#125;&#125;.",
+                "at &#123;&#123;company&#125;&#125;. <!-- @draft -->"
+            )
+            .replace("and `Rust`.", "and `Rust`. <!-- @draft -->")
     ));
     let mut stdout = Vec::new();
     let mut stderr = resume::diagnostics::termcolor::Buffer::no_color();
@@ -282,9 +287,17 @@ fn every_format_code_is_demonstrated_by_a_fixture() {
         resume::commands::Outcome::Failure
     );
     assert!(stdout.is_empty());
-    assert!(String::from_utf8_lossy(stderr.as_slice()).contains("letter-selection-required"));
-    seen.push(DiagnosticCode::LetterSelectionRequired);
-    for code in DiagnosticCode::iter().filter(|c| c.category() == Category::Format) {
+    assert!(String::from_utf8_lossy(stderr.as_slice()).contains("letter-body-empty"));
+    seen.push(DiagnosticCode::LetterBodyEmpty);
+    // Legacy refusal and defensive frame error cannot be emitted by current valid CLI parses.
+    // Frames reject status annotations at parse time; direct library callers can still hit FrameNotReady.
+    for code in DiagnosticCode::iter().filter(|c| {
+        c.category() == Category::Format
+            && !matches!(
+                c,
+                DiagnosticCode::LetterSelectionRequired | DiagnosticCode::LetterFrameNotReady
+            )
+    }) {
         assert!(seen.contains(&code), "no fixture produces `{code}`");
     }
 }
