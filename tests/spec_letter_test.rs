@@ -95,6 +95,15 @@ fn the_letter_selection_is_built_from_the_letter_choices_only() {
 }
 
 #[test]
+fn a_resume_promote_list_orders_the_resume_and_never_the_letter() {
+    let toml = spec_text("[select]\npromote = [\"ai\"]\n[letter]\ncontent = \"l.md\"\n");
+    let (_dir, result) = resolve_files(&[("spec.toml", &toml)]);
+    let spec = assert_ok!(result);
+    assert_eq!(strings(&assert_ok!(spec.to_selection()).promote), ["ai"]);
+    assert!(assert_ok!(spec.to_letter_selection()).promote.is_empty());
+}
+
+#[test]
 fn each_scope_keeps_its_own_scope_kind() {
     let toml =
         spec_text("[select]\ntags = [\"ai\"]\n[letter]\ncontent = \"l.md\"\n[letter.select]\ncore-only = true\n");

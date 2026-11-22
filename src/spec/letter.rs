@@ -296,6 +296,8 @@ impl ResolvedSpec {
             drafts: false,
             prefer: select.prefer.clone(),
             picks: select.pick.clone(),
+            // `[letter.select]` has no `promote`: a letter keeps its written order.
+            promote: Vec::new(),
         })
     }
 
