@@ -34,8 +34,9 @@ fn specs() -> Vec<PathBuf> {
 }
 
 fn shown(text: &str) -> String {
-    let base = root().display().to_string();
-    text.replace(&base, "<fixtures>").replace('\\', "/")
+    // Separators first, so a Windows root (backslashes, or a mix in an error text) is found the same way.
+    let base = root().display().to_string().replace('\\', "/");
+    text.replace('\\', "/").replace(&base, "<fixtures>")
 }
 
 fn snapshot() -> String {
@@ -69,6 +70,9 @@ fn every_resume_only_fixture_resolves_as_it_did_before_the_letter_table() {
         std::fs::write(&golden, &now).expect("the snapshot can be written");
         return;
     }
-    let before = std::fs::read_to_string(&golden).expect("golden.txt exists");
+    // A Windows checkout may have turned the line ends into CRLF.
+    let before = std::fs::read_to_string(&golden)
+        .expect("golden.txt exists")
+        .replace("\r\n", "\n");
     pretty_assertions::assert_eq!(before, now);
 }
