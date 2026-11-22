@@ -114,6 +114,10 @@ struct State {
     items: [Vec<Item>; 3],
     /// Every paragraph in a section, as the group check sees it; the payload is its place in `items`.
     candidates: Vec<GroupItem<(usize, usize)>>,
+    /// Paragraphs that show nothing, per section. Each is reported once and kept out of `items`, as the resume
+    /// parser drops such a paragraph, so the wordings on either side of it stay adjacent; they still count toward
+    /// a frame's one paragraph so that an empty greeting is one error and not two.
+    empty: [usize; 3],
     owned: HashSet<usize>,
 }
 impl State {
@@ -218,10 +222,7 @@ impl State {
                 "letter paragraph has no visible content",
                 sink,
             );
-            self.items[section.index()].push(Item::plain(Piece {
-                content,
-                range: p.range.clone(),
-            }));
+            self.empty[section.index()] += 1;
             return;
         }
         if section != Section::Body {
@@ -300,7 +301,9 @@ impl State {
                     &format!("missing ## {section}"),
                     sink,
                 ),
-                Some(range) if built[i].is_empty() || (i != 1 && built[i].len() != 1) => {
+                Some(range)
+                    if built[i].len() + self.empty[i] == 0 || (i != 1 && built[i].len() + self.empty[i] != 1) =>
+                {
                     report(
                         Code::LetterSectionShape,
                         range.clone(),
@@ -367,4 +370,80 @@ fn source_items(items: Vec<Item>, section: usize, groups: &[Vec<(usize, usize)>]
 }
 fn report(code: Code, range: std::ops::Range<usize>, message: &str, sink: &mut Sink<'_>) {
     sink.report(Finding::new(code, range, message).hint(code.advice().fix));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use claims::assert_some;
+    use pretty_assertions::assert_eq;
+
+    fn body(text: &str) -> String {
+        format!("# Alex Example\n\n## Greeting\n\nHi.\n\n## Body\n\n{text}\n\n## Closing\n\nBye.\n")
+    }
+
+    fn codes(input: &str) -> Vec<String> {
+        parse_letter("letter.md", input)
+            .diagnostics()
+            .iter()
+            .map(|d| d.code.to_string())
+            .collect()
+    }
+
+    /// The model the parser holds even though the letter has an error, for tests that look inside it.
+    fn model(input: &str) -> LetterSource {
+        assert_some!(parse_letter("letter.md", input).letter).clone()
+    }
+
+    #[test]
+    fn variants_either_side_of_a_paragraph_that_shows_nothing_stay_one_group() {
+        // Dropping the empty paragraph, as the resume parser does, leaves the wordings next to each other.
+        let input = body("A. <!-- =x.default -->\n\n![](x.png)\n\nB. <!-- =x.short -->");
+        let source = model(&input);
+        assert_eq!(source.body.len(), 1);
+        let SourceItem::Alternates(group) = &source.body[0] else {
+            panic!("a group expected")
+        };
+        assert_eq!(group.variants().len(), 2);
+        assert_eq!(codes(&input), ["letter-unsupported-block", "letter-section-shape"]);
+    }
+
+    #[test]
+    fn a_paragraph_whose_only_link_is_invalid_has_one_error_and_does_not_count_as_showing_nothing() {
+        // The link is the one fault; its words are still on the page as far as the author is concerned.
+        let input = body("[words](relative/path)");
+        assert_eq!(codes(&input), ["invalid-link"]);
+        // It keeps its place, so it still stands between the wordings on either side of it.
+        let between = body("A. <!-- =x.default -->\n\n[words](relative/path)\n\nB. <!-- =x.short -->");
+        assert_eq!(codes(&between), ["invalid-link", "alternate-not-adjacent"]);
+    }
+
+    #[test]
+    fn a_paragraph_that_shows_nothing_is_reported_once_whatever_its_section() {
+        // Greeting and closing want exactly one paragraph; the empty one counts as that one and adds no second error.
+        for (input, expected) in [
+            (
+                body("B.").replace("Hi.", "**<!-- ordinary -->**"),
+                vec!["letter-section-shape"],
+            ),
+            (
+                body("B.").replace("Bye.", "![](x.png)"),
+                vec!["letter-unsupported-block", "letter-section-shape"],
+            ),
+            (
+                body("![](x.png)"),
+                vec!["letter-unsupported-block", "letter-section-shape"],
+            ),
+            (
+                body("B.").replace("Hi.", "Hi.\n\n![](x.png)"),
+                vec![
+                    "letter-section-shape",
+                    "letter-unsupported-block",
+                    "letter-section-shape",
+                ],
+            ),
+        ] {
+            assert_eq!(codes(&input), expected, "{input}");
+        }
+    }
 }
