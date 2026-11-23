@@ -35,8 +35,10 @@ rustc-ice-*.txt
 
 # Session working docs (planning scripts, font comparison with local-only proprietary fonts); never commit.
 # Long-lived design docs live in ref/.
-# `/history/*`, not `/history/`: git cannot re-include a file inside an ignored directory.
-/history/*
-# Exception: rsm-141.23.3's records, redacted of private resume text before publishing (owner, 2026-11-22).
-# Add another bead's records only after the same review; never the font comparison.
-!/history/rsm-141.23.3_*.md
+# Analysis and review records live in the private sibling repository resume-analysis
+# (https://github.com/dmrolfs/resume-analysis), never here: see AGENTS.md. A local history/ is scratch.
+/history/
+# GoodSync metadata.
+_gsdata_/
+# Local Dolt server settings for beads; machine-specific.
+.beads/dolt-server-config.yaml

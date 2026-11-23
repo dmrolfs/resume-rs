@@ -23,6 +23,18 @@ bd close <id>         # Complete work
 bd dolt push          # Push beads data to remote
 ```
 
+## Analysis and Review Records (`history/`)
+
+This repository is public. Analysis, design, oracle, and review records never go in it.
+They go in the private sibling repository [resume-analysis](https://github.com/dmrolfs/resume-analysis), cloned beside this one at `../resume-analysis`.
+
+- Write each record to `../resume-analysis/history/<bead-id>_<topic>.md`, then commit and push it in that repository.
+  This applies wherever a skill or a dispatch prompt says `history/`, including subagent output files: give the subagent the `../resume-analysis/history/...` path.
+- A `history/` directory in this checkout or a worktree is ignored scratch. Copy anything worth keeping to `resume-analysis` before removing a worktree.
+- Commit messages and bead notes may name a record by its path in `resume-analysis` (`resume-analysis:history/<file>`).
+- `resume-analysis` may hold personal details and local paths; it must stay private. Never copy its text into this repository, an issue, or a public comment without redacting it first.
+- Never put font files in either repository's `history/`: the font comparison holds proprietary fonts.
+
 ## Non-Interactive Shell Commands
 
 **ALWAYS use non-interactive flags** with file operations to avoid hanging on confirmation prompts.
