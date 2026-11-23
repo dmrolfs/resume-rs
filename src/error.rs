@@ -140,9 +140,9 @@ pub enum Error {
     #[snafu(display("{} changed while it was being fixed", path.display()))]
     InputChanged { path: PathBuf },
 
-    /// A letter's own selection could not be made, said as the selection says it.
-    #[snafu(display("{message}"))]
-    LetterPicks { message: String },
+    /// A letter's own selection could not be made, so a spec's pick names a draft wording.
+    #[snafu(display("{source}"))]
+    LetterPicks { source: crate::letter::LetterSelectError },
 
     /// A position spec or a profile could not be loaded or resolved.
     #[snafu(display("{source}"))]

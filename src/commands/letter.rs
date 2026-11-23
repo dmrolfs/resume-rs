@@ -89,7 +89,11 @@ pub(super) fn run(cli: &Cli, args: &LetterArgs, env: &Env, io: &mut Io<'_>) -> O
 /// is done (`--print-spec`).
 fn planned(cli: &Cli, args: &LetterArgs, env: &Env, out: &mut Reporter<'_, '_>) -> Result<Option<LetterPlan>, ()> {
     let Some(spec_path) = &args.spec.spec else {
-        let file = args.input().expect("clap requires a file without a spec");
+        // `validate` has refused a run with neither a file nor a spec, so a file is here.
+        let Some(file) = args.input() else {
+            out.line("error: a letter needs a FILE or --spec");
+            return Err(());
+        };
         return Ok(Some(letter_plan::plan_file(args, file)));
     };
     let resolved = letter_plan::resolve(args, spec_path).map_err(|error| out.error(&error))?;
@@ -330,11 +334,8 @@ impl LetterPlan {
 
     /// For a draft wording a spec picked, the same error naming the lines that picked it.
     fn picked_draft(&self, picks: &[crate::model::Alternate], error: &crate::letter::LetterSelectError) -> Error {
-        let message = Error::LetterPicks {
-            message: error.to_string(),
-        };
-        let Some(spec) = &self.spec else { return message };
-        let Some(letter) = &spec.resolved.letter else {
+        let message = Error::LetterPicks { source: error.clone() };
+        let Some(letter) = self.spec.as_ref().and_then(|spec| spec.resolved.letter.as_ref()) else {
             return message;
         };
         let at: Vec<_> = picks

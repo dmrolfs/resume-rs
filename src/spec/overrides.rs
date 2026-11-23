@@ -505,8 +505,10 @@ impl<T> Chosen<T> {
 /// Every effective letter setting, the built-in defaults applied once and after every other layer.
 ///
 /// Only [`LetterChoices::from_flags`] and [`apply_letter`] make one, so no setting is filled from a default by a
-/// caller that has not asked the spec first.
+/// caller that has not asked the spec first: `non_exhaustive` stops a struct literal outside this crate, and the
+/// constructors are the only way in.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct LetterChoices {
     pub output: Chosen<LetterOutput>,
     pub links: Chosen<LinkStyle>,
@@ -754,15 +756,33 @@ pub fn apply_letter(spec: &ResolvedSpec, flags: &Admitted<LetterExplicit>) -> Re
             Origin::Position(spec_file.clone()),
         ),
         title: field(&explicit.title, from_spec.title, Origin::Position(spec_file)),
-        recipient: match (&explicit.recipient, from_spec.recipient, &settings.recipient) {
-            (Some(value), ..) => Some(Chosen::new(value.clone(), Origin::Flag)),
-            (None, Some(value), Some(written)) => Some(Chosen::new(value, Origin::Spec(written.at.clone()))),
-            (None, ..) => None,
+        // A value is never dropped for want of a place: if `fields()` ever gains a source that `settings` lacks, the
+        // letter's `content` line is named rather than the value lost.
+        recipient: match (&explicit.recipient, from_spec.recipient) {
+            (Some(value), _) => Some(Chosen::new(value.clone(), Origin::Flag)),
+            (None, Some(value)) => Some(Chosen::new(
+                value,
+                Origin::Spec(
+                    settings
+                        .recipient
+                        .as_ref()
+                        .map_or_else(|| letter.content.at.clone(), |r| r.at.clone()),
+                ),
+            )),
+            (None, None) => None,
         },
-        date: match (explicit.date, from_spec.date, &settings.date) {
-            (Some(value), ..) => Some(Chosen::new(value, Origin::Flag)),
-            (None, Some(value), Some(written)) => Some(Chosen::new(value, Origin::Spec(written.at.clone()))),
-            (None, ..) => None,
+        date: match (explicit.date, from_spec.date) {
+            (Some(value), _) => Some(Chosen::new(value, Origin::Flag)),
+            (None, Some(value)) => Some(Chosen::new(
+                value,
+                Origin::Spec(
+                    settings
+                        .date
+                        .as_ref()
+                        .map_or_else(|| letter.content.at.clone(), |d| d.at.clone()),
+                ),
+            )),
+            (None, None) => None,
         },
         style: Chosen::first(explicit.base.style.clone(), style_spec, default_style()),
         paper: Chosen::first(explicit.base.paper, paper_spec, Paper::default()),
@@ -779,7 +799,7 @@ mod tests {
     use super::*;
     use crate::model::Tag;
     use crate::spec::resolve;
-    use claims::{assert_err, assert_ok};
+    use claims::{assert_err, assert_ok, assert_some};
     use pretty_assertions::assert_eq;
 
     /// A spec in a temporary directory, extending nothing, with `body` after its `[build]` table.
@@ -1454,5 +1474,235 @@ mod tests {
         ];
         assert!(resume.windows(2).all(|w| w[0] < w[1]));
         assert!(OverrideFlag::Paper < OverrideFlag::OutputFormat);
+    }
+    /// The lines of a generated `letter_spec`, by the key that starts the line, so a test names a line by its key.
+    fn line_of(dir: &tempfile::TempDir, key: &str) -> usize {
+        let text = assert_ok!(std::fs::read_to_string(dir.path().join("acme.toml")));
+        let found = text
+            .lines()
+            .position(|l| l.starts_with(key))
+            .unwrap_or_else(|| panic!("no line starts with `{key}` in:\n{text}"));
+        found + 1
+    }
+
+    #[test]
+    fn each_letter_flag_names_the_setting_the_value_and_the_line_it_replaced() {
+        let (dir, spec) = letter_spec(
+            "style = \"mono\"\npaper = \"a4\"",
+            "company = \"Acme\"\ntitle = \"Engineer\"",
+            "recipient = \"Hiring Team\"\ndate = 2028-02-29\nstyle = \"pragmatic\"\npaper = \"letter\"\n\
+             output-format = \"both\"\nmax-length = 900\nlength-unit = \"scalars\"\nlinks = \"text-only\"",
+        );
+        let flags = letter_allowed(LetterExplicit {
+            base: Explicit {
+                style: Some(assert_ok!(StyleName::try_new("mono"))),
+                paper: Some(Paper::A4),
+                ..Explicit::default()
+            },
+            output: Some(LetterOutput::Text),
+            max_length: Some(100),
+            length_unit: Some(LengthUnit::Words),
+            links: Some(LinkStyle::TextAndUrl),
+            company: Some(field("Other")),
+            title: Some(field("Staff")),
+            recipient: Some(field("Dana")),
+            date: Some(date("2029-01-01")),
+        });
+        let applied = assert_ok!(apply_letter(&spec, &flags));
+        /// One override as the report states it: the flag, what it set, and what it replaced and where.
+        #[derive(Debug, PartialEq, Eq)]
+        struct Row(OverrideFlag, Vec<String>, Setting, Vec<String>, Vec<usize>);
+        let got: Vec<Row> = applied
+            .overrides
+            .iter()
+            .map(|o| {
+                let Replaced::Spec { setting, value, at } = &o.replaced else {
+                    panic!("{} replaced nothing: {o:?}", o.flag)
+                };
+                Row(
+                    o.flag,
+                    o.set.clone(),
+                    *setting,
+                    value.clone(),
+                    at.iter().map(|a| a.line).collect(),
+                )
+            })
+            .collect();
+        let line = |key: &str| vec![line_of(&dir, key)];
+        let v = |s: &str| vec![s.to_string()];
+        assert_eq!(
+            got,
+            [
+                Row(
+                    OverrideFlag::Style,
+                    v("mono"),
+                    Setting::Style,
+                    v("pragmatic"),
+                    line("style = \"pragmatic\"")
+                ),
+                Row(
+                    OverrideFlag::Paper,
+                    v("a4"),
+                    Setting::Paper,
+                    v("letter"),
+                    line("paper = \"letter\"")
+                ),
+                Row(
+                    OverrideFlag::OutputFormat,
+                    v("text"),
+                    Setting::OutputFormat,
+                    v("both"),
+                    line("output-format")
+                ),
+                Row(
+                    OverrideFlag::MaxLength,
+                    v("100"),
+                    Setting::MaxLength,
+                    v("900"),
+                    line("max-length")
+                ),
+                Row(
+                    OverrideFlag::LengthUnit,
+                    v("words"),
+                    Setting::LengthUnit,
+                    v("scalars"),
+                    line("length-unit")
+                ),
+                Row(
+                    OverrideFlag::Links,
+                    v("text-and-url"),
+                    Setting::Links,
+                    v("text-only"),
+                    line("links")
+                ),
+                // `[position]` records no line, so only the value it replaced is named.
+                Row(OverrideFlag::Company, v("Other"), Setting::Company, v("Acme"), vec![]),
+                Row(OverrideFlag::Title, v("Staff"), Setting::Title, v("Engineer"), vec![]),
+                Row(
+                    OverrideFlag::Recipient,
+                    v("Dana"),
+                    Setting::Recipient,
+                    v("Hiring Team"),
+                    line("recipient")
+                ),
+                Row(
+                    OverrideFlag::Date,
+                    v("2029-01-01"),
+                    Setting::Date,
+                    v("2028-02-29"),
+                    line("date")
+                ),
+            ]
+        );
+        let c = &applied.choices;
+        assert_eq!(c.fields().title, Some(field("Staff")));
+        assert_eq!(c.fields().company, Some(field("Other")));
+        assert_eq!(c.style.value, assert_ok!(StyleName::try_new("mono")));
+        assert_eq!(c.paper.value, Paper::A4);
+    }
+
+    #[test]
+    fn a_flag_over_the_builds_style_or_paper_names_the_build_line_and_not_the_letters() {
+        let (dir, spec) = letter_spec("style = \"mono\"\npaper = \"a4\"", "", "");
+        let flags = letter_allowed(LetterExplicit {
+            base: Explicit {
+                style: Some(assert_ok!(StyleName::try_new("pragmatic"))),
+                paper: Some(Paper::Letter),
+                ..Explicit::default()
+            },
+            ..LetterExplicit::default()
+        });
+        let applied = assert_ok!(apply_letter(&spec, &flags));
+        let at = |o: &Override| match &o.replaced {
+            Replaced::Spec { at, .. } => at.iter().map(|a| a.line).collect::<Vec<_>>(),
+            Replaced::Default => panic!("a build value was replaced"),
+        };
+        let [style, paper] = applied.overrides.as_slice() else {
+            panic!("two overrides expected: {:?}", applied.overrides)
+        };
+        assert_eq!(at(style), [line_of(&dir, "style = \"mono\"")]);
+        assert_eq!(at(paper), [line_of(&dir, "paper = \"a4\"")]);
+    }
+
+    #[test]
+    fn every_origin_a_letter_names_is_the_exact_line_that_wrote_it() {
+        let (dir, spec) = letter_spec(
+            "",
+            "",
+            "recipient = \"T\"\ndate = 2028-02-29\nstyle = \"pragmatic\"\npaper = \"a4\"\noutput-format = \"pdf\"\n\
+             max-length = 900\nlength-unit = \"words\"\nlinks = \"text-only\"",
+        );
+        let c = assert_ok!(apply_letter(&spec, &Admitted::none())).choices;
+        let line = |origin: &Origin| match origin {
+            Origin::Spec(at) => at.line,
+            other => panic!("expected a spec line, got {other:?}"),
+        };
+        assert_eq!(line(&c.output.origin), line_of(&dir, "output-format"));
+        assert_eq!(line(&c.links.origin), line_of(&dir, "links"));
+        assert_eq!(line(&c.length_unit.origin), line_of(&dir, "length-unit"));
+        assert_eq!(line(&c.style.origin), line_of(&dir, "style"));
+        assert_eq!(line(&c.paper.origin), line_of(&dir, "paper"));
+        assert_eq!(
+            line(&assert_some!(c.max_length.as_ref()).origin),
+            line_of(&dir, "max-length")
+        );
+        assert_eq!(
+            line(&assert_some!(c.recipient.as_ref()).origin),
+            line_of(&dir, "recipient")
+        );
+        assert_eq!(
+            line(&assert_some!(c.date.as_ref()).origin),
+            line_of(&dir, "date = 2028")
+        );
+    }
+
+    #[test]
+    fn a_letter_override_changes_the_selection_itself_and_not_only_the_report() {
+        let dir = assert_ok!(tempfile::tempdir());
+        let path = dir.path().join("acme.toml");
+        assert_ok!(std::fs::write(
+            &path,
+            "[build]\ncontent = \"a.md\"\n[letter]\ncontent = \"l.md\"\n[letter.select]\ntags = [\"ai\"]\nprefer = [\"short\"]\n"
+        ));
+        let spec = assert_ok!(resolve(&path, None));
+        let by_tags = assert_ok!(apply_letter(
+            &spec,
+            &letter_allowed(LetterExplicit {
+                base: Explicit {
+                    scope: Some(tags(&["platform"])),
+                    prefer: Some(prefer(&["long"])),
+                    ..Explicit::default()
+                },
+                ..LetterExplicit::default()
+            })
+        ));
+        assert_eq!(by_tags.selection.scope, tags_scope(&["platform"]));
+        assert_eq!(by_tags.selection.prefer, prefer(&["long"]));
+        let by_core = assert_ok!(apply_letter(
+            &spec,
+            &letter_allowed(LetterExplicit {
+                base: Explicit {
+                    scope: Some(ScopeFlag::CoreOnly),
+                    ..Explicit::default()
+                },
+                ..LetterExplicit::default()
+            })
+        ));
+        assert_eq!(by_core.selection.scope, Scope::CoreOnly);
+        let Replaced::Spec { setting, value, .. } = &by_core.overrides[0].replaced else {
+            panic!("the letter chose tags")
+        };
+        assert_eq!((*setting, value.as_slice()), (Setting::Tags, &["ai".to_string()][..]));
+        // Nothing typed: the letter's own scope, never the resume's.
+        let own = assert_ok!(apply_letter(&spec, &Admitted::none())).selection;
+        assert_eq!(own.scope, tags_scope(&["ai"]));
+        assert_eq!(own.prefer, prefer(&["short"]));
+    }
+
+    fn tags_scope(names: &[&str]) -> Scope {
+        let ScopeFlag::Tags(tags) = tags(names) else {
+            unreachable!()
+        };
+        Scope::Tags(tags)
     }
 }

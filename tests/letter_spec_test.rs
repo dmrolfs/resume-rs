@@ -138,15 +138,16 @@ fn the_summary_names_the_spec_the_chain_the_letter_and_where_each_setting_came_f
     let work = Workspace::new();
     let staged = stage(&work);
     let run = letter_spec(&work, &staged.spec, &work.out(), &[]);
-    let root = staged.root.display().to_string();
+    let sep = std::path::MAIN_SEPARATOR;
+    let file = format!("letter-scopes{sep}positions{sep}acme.toml");
     let lines: Vec<&str> = run
         .stderr
         .lines()
         .filter(|l| l.starts_with("  ") && !l.starts_with("  fonts"))
         .collect();
-    let _ = root;
+    assert!(!lines.is_empty(), "no spec lines in:\n{}", run.stderr);
     assert_eq!(
-        lines[0],
+        *assert_some!(lines.first()),
         format!(
             "  spec: letter-scopes{0}positions{0}acme.toml",
             std::path::MAIN_SEPARATOR
@@ -159,20 +160,15 @@ fn the_summary_names_the_spec_the_chain_the_letter_and_where_each_setting_came_f
     );
     let settings = assert_some!(lines.iter().find(|l| l.starts_with("  settings: ")));
     for part in [
-        "output both (",
-        "links text-only (",
-        "max-length 2000 (",
-        "length-unit scalars (",
-        "style pragmatic (",
-        "paper a4 (",
+        format!("output both ({file}:22:17)"),
+        format!("links text-only ({file}:25:9)"),
+        format!("max-length 2000 ({file}:23:14)"),
+        format!("length-unit scalars ({file}:24:15)"),
+        format!("style pragmatic ({file}:20:9)"),
+        format!("paper a4 ({file}:21:9)"),
     ] {
-        assert!(settings.contains(part), "{part} in {settings}");
+        assert!(settings.contains(&part), "{part} in {settings}");
     }
-    // Every setting the spec wrote names a line of the spec; a default says `default`.
-    assert!(
-        settings.contains("acme.toml:22:") || settings.contains("acme.toml"),
-        "{settings}"
-    );
     let fields = assert_some!(lines.iter().find(|l| l.starts_with("  fields: ")));
     assert!(
         fields.contains("company Acme (") && fields.contains("recipient Hiring Team ("),
@@ -243,6 +239,7 @@ fn json_with_a_spec_that_prints_text_is_an_error_before_anything_is_read_and_a_t
     let refused = letter_spec(&work, &spec, &work.out(), &["--format", "json"]);
     assert_eq!(refused.outcome, Outcome::Failure);
     assert_eq!(refused.stdout, "");
+    has(&refused, "--format json cannot share stdout with letter text");
     let allowed = letter_spec(
         &work,
         &spec,
@@ -480,13 +477,17 @@ fn the_resume_and_the_letter_of_one_spec_are_two_files_and_two_documents() {
     assert_eq!(letter_spec(&work, &staged.spec, &out, &[]).outcome, Outcome::Success);
     let (resume, letter) = (pdf_in(&out, "acme.pdf"), pdf_in(&out, "acme-letter.pdf"));
     assert_ne!(resume, letter);
-    // One `--out` holds both, and the two do not share a document identity.
-    let id = |pdf: &[u8]| {
-        let text = String::from_utf8_lossy(pdf);
-        let at = assert_some!(text.find("/ID"));
-        text[at..at + 80].to_string()
+    // One `--out` holds both, and the two do not share a document identity: the first half of the trailer `/ID`.
+    let id = |pdf: &[u8]| -> Vec<u8> {
+        let doc = assert_ok!(lopdf::Document::load_mem(pdf));
+        let ids = assert_ok!(assert_ok!(doc.trailer.get(b"ID")).as_array());
+        assert_ok!(ids[0].as_str()).to_vec()
     };
-    assert_ne!(id(&resume).split(')').next(), id(&letter).split(')').next());
+    assert_ne!(id(&resume), id(&letter), "the resume and its letter are two documents");
+    // The control: the same letter built again has the same identity, so the comparison can tell them apart.
+    let again = work.path().join("again");
+    assert_eq!(letter_spec(&work, &staged.spec, &again, &[]).outcome, Outcome::Success);
+    assert_eq!(id(&letter), id(&pdf_in(&again, "acme-letter.pdf")));
 }
 
 // ============================================================================
@@ -712,11 +713,20 @@ fn a_spec_that_asks_for_core_only_and_tags_in_its_letter_cannot_be_rescued_by_a_
     let spec = spec_with_letter(
         &work,
         "conflict",
-        "[letter]\ncontent = \"../letters/base.md\"\n[letter.select]\ncore-only = true\ntags = [\"platform\"]\n",
+        "[letter]\ncontent = \"../letters/base.md\"\nrecipient = \"T\"\n[letter.select]\ncore-only = true\ntags = [\"platform\"]\n",
     );
     let run = letter_spec(&work, &spec, &work.out(), &["--allow-overrides", "--tags", "platform"]);
     assert_eq!(run.outcome, Outcome::Failure);
     assert_eq!(run.stdout, "");
+    has(&run, "`core-only` is true");
+    // The control: without the conflict the same spec, flag and recipient build, so the failure above is the conflict.
+    let fine = spec_with_letter(
+        &work,
+        "no-conflict",
+        "[letter]\ncontent = \"../letters/base.md\"\nrecipient = \"T\"\n[letter.select]\ntags = [\"platform\"]\n",
+    );
+    let ok = letter_spec(&work, &fine, &work.out(), &["--allow-overrides", "--tags", "platform"]);
+    assert_eq!(ok.outcome, Outcome::Success, "{}", ok.stderr);
 }
 
 #[test]
@@ -845,7 +855,11 @@ fn the_letter_falls_back_to_the_builds_style_and_paper_only_when_a_pdf_is_made()
     assert!((w - 595.0).abs() < 2.0, "{w}");
     // Text mode never reports a style or a paper, which it does not use.
     let text_run = letter_spec(&work, &spec, &work.out(), &[]);
-    assert!(!text_run.stderr.contains("paper a4"), "{}", text_run.stderr);
+    let settings = assert_some!(text_run.stderr.lines().find(|l| l.starts_with("  settings: ")));
+    assert!(
+        !settings.contains("paper ") && !settings.contains("style "),
+        "{settings}"
+    );
 }
 
 // ============================================================================
@@ -888,4 +902,183 @@ fn a_dry_run_prints_the_spec_lines_and_writes_nothing() {
     has(&run, "ok would write letter PDF");
     has(&run, "  spec: ");
     assert!(!work.out().exists());
+}
+
+// ============================================================================
+// What the review found was not pinned
+// ============================================================================
+
+fn json_record(run: &Run) -> serde_json::Value {
+    let record = assert_some!(run.stdout.lines().find(|l| l.contains("\"type\":\"letter-spec\"")));
+    assert_ok!(serde_json::from_str(record))
+}
+
+#[test]
+fn a_style_override_names_the_letter_style_line_it_replaced() {
+    let work = Workspace::new();
+    let staged = stage(&work);
+    let run = letter_spec(
+        &work,
+        &staged.spec,
+        &work.out(),
+        &[
+            "--allow-overrides",
+            "--style",
+            "pragmatic",
+            "--output-format",
+            "pdf",
+            "--format",
+            "json",
+        ],
+    );
+    assert_eq!(run.outcome, Outcome::Success, "{}", run.stderr);
+    let value = json_record(&run);
+    let overrides = assert_some!(value["overrides"].as_array());
+    let style = assert_some!(overrides.iter().find(|o| o["flag"] == "--style"));
+    assert_eq!(style["set"], serde_json::json!(["pragmatic"]));
+    assert_eq!(style["replaced"]["setting"], "style");
+    assert_eq!(style["replaced"]["value"], serde_json::json!(["pragmatic"]));
+    let at = style["at"].to_string();
+    assert!(at.contains("acme.toml:20:9"), "the letter's `style =` line: {at}");
+    assert_eq!(
+        value["style"],
+        serde_json::json!({"value": "pragmatic", "from": "flag"})
+    );
+}
+
+#[test]
+fn an_unknown_letter_tag_names_its_letter_select_line_and_never_the_resumes() {
+    let work = Workspace::new();
+    let spec = spec_with_letter(
+        &work,
+        "unknown",
+        "[letter]\ncontent = \"../letters/base.md\"\nrecipient = \"T\"\n[letter.select]\ntags = [\"nosuchtag\"]\nprefer = [\"nosuchwording\"]\n",
+    );
+    let path = work.path().join("unknown/positions/acme.toml");
+    let text = assert_ok!(fs::read_to_string(&path));
+    // A resume `[select]` of its own, on an earlier line, so a finding that named it would be wrong.
+    assert_ok!(fs::write(
+        &path,
+        text.replace("[letter]\n", "[select]\ntags = [\"resume-only\"]\n\n[letter]\n")
+    ));
+    let run = letter_spec(&work, &spec, &work.out(), &[]);
+    assert_eq!(run.outcome, Outcome::Success, "{}", run.stderr);
+    has(&run, "warning[unknown-tag]: spec tags `nosuchtag` (");
+    has(&run, "warning[unknown-wording]: spec wordings `nosuchwording` (");
+    let written = assert_ok!(fs::read_to_string(&path));
+    let line_of = |key: &str| 1 + assert_some!(written.lines().position(|l| l.starts_with(key)));
+    has(&run, &format!("acme.toml:{}:", line_of("tags = [\"nosuchtag")));
+    has(&run, &format!("acme.toml:{}:", line_of("prefer = [\"nosuchwording")));
+    assert!(!run.stderr.contains("resume-only"), "{}", run.stderr);
+    // A name typed as a flag is the flag's, not the spec's: even one the spec also wrote, so the flag is blamed.
+    let typed = letter_spec(
+        &work,
+        &spec,
+        &work.out(),
+        &["--allow-overrides", "--tags", "nosuchtag", "--prefer", "nosuchwording"],
+    );
+    has(&typed, "warning[unknown-tag]: --tags `nosuchtag`");
+    has(&typed, "warning[unknown-wording]: --prefer `nosuchwording`");
+    assert!(!typed.stderr.contains("spec tags"), "{}", typed.stderr);
+    assert!(!typed.stderr.contains("spec wordings"), "{}", typed.stderr);
+}
+
+#[test]
+fn a_name_only_a_profile_wrote_is_a_note_naming_the_profile_line() {
+    let work = Workspace::new();
+    let staged = stage(&work);
+    let run = letter_spec(&work, &staged.spec, &work.out(), &[]);
+    // `ai` is written only by the ai-platform profile, and the fixture's letter has no `#ai` item.
+    has(&run, "note[unknown-tag]: profile tags `ai` (");
+    has(&run, "ai-platform.toml:5:9");
+}
+
+#[test]
+fn an_unknown_style_the_letter_falls_back_to_names_the_build_line() {
+    let work = Workspace::new();
+    let spec = spec_with_letter(
+        &work,
+        "badbuild",
+        "[letter]\ncontent = \"../letters/base.md\"\nrecipient = \"T\"\n",
+    );
+    let path = work.path().join("badbuild/positions/acme.toml");
+    let text = assert_ok!(fs::read_to_string(&path));
+    assert_ok!(fs::write(
+        &path,
+        text.replace("[build]\n", "[build]\nstyle = \"no-such-style\"\n")
+    ));
+    let run = letter_spec(
+        &work,
+        &spec,
+        &work.out(),
+        &["--allow-overrides", "--output-format", "pdf"],
+    );
+    assert_eq!(run.outcome, Outcome::Failure);
+    has(&run, "no-such-style");
+    has(&run, "chosen at");
+    let written = assert_ok!(fs::read_to_string(&path));
+    let line = 1 + assert_some!(written.lines().position(|l| l.starts_with("style = ")));
+    has(&run, &format!("acme.toml:{line}:"));
+    // Text mode never opens a style, so the same spec prints its letter.
+    assert_eq!(letter_spec(&work, &spec, &work.out(), &[]).outcome, Outcome::Success);
+}
+
+#[test]
+fn the_equivalence_sees_tags_links_and_limits_because_the_letter_has_them() {
+    let work = Workspace::new();
+    let letter = "# Ada\n\n## Greeting\n\nDear {{recipient}},\n\n## Body\n\n\
+                  Kept [site](https://example.invalid/a). <!-- #platform -->\n\n\
+                  Dropped by tags. <!-- #ai -->\n\n## Closing\n\nRegards,\n";
+    let spec = spec_with_letter(
+        &work,
+        "eq",
+        "[letter]\ncontent = \"../letters/tags.md\"\nrecipient = \"Team\"\nlinks = \"text-only\"\nmax-length = 500\n\
+         [letter.select]\ntags = [\"platform\"]\n",
+    );
+    let file = work.path().join("eq/letters/tags.md");
+    assert_ok!(fs::write(&file, letter));
+    let from_spec = letter_spec(&work, &spec, &work.out(), &[]);
+    assert_eq!(from_spec.outcome, Outcome::Success, "{}", from_spec.stderr);
+    assert!(from_spec.stdout.contains("Kept site."), "{}", from_spec.stdout);
+    assert!(
+        !from_spec.stdout.contains("https://"),
+        "links text-only: {}",
+        from_spec.stdout
+    );
+    assert!(!from_spec.stdout.contains("Dropped by tags"), "{}", from_spec.stdout);
+    let flagged: Vec<String> = [
+        "letter",
+        &file.display().to_string(),
+        "--recipient",
+        "Team",
+        "--links",
+        "text-only",
+        "--max-length",
+        "500",
+        "--tags",
+        "platform",
+    ]
+    .map(String::from)
+    .into();
+    assert_eq!(
+        work.run(&flagged).stdout,
+        from_spec.stdout,
+        "the spec says what the flags say"
+    );
+    // The controls: each setting, changed, changes the result, so the equality above could not hold by accident.
+    let link = letter_spec(
+        &work,
+        &spec,
+        &work.out(),
+        &["--allow-overrides", "--links", "text-and-url"],
+    );
+    assert!(link.stdout.contains("https://example.invalid/a"), "{}", link.stdout);
+    let other = letter_spec(&work, &spec, &work.out(), &["--allow-overrides", "--tags", "ai"]);
+    assert!(
+        other.stdout.contains("Dropped by tags") && !other.stdout.contains("Kept site"),
+        "{}",
+        other.stdout
+    );
+    let tight = letter_spec(&work, &spec, &work.out(), &["--allow-overrides", "--max-length", "5"]);
+    assert_eq!(tight.outcome, Outcome::Failure);
 }

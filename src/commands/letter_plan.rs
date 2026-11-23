@@ -116,10 +116,8 @@ pub(super) fn plan_file(args: &LetterArgs, file: &Path) -> LetterPlan {
     LetterPlan {
         content: file.to_path_buf(),
         shown: file.to_path_buf(),
-        selection: Selection {
-            drafts: args.select.drafts,
-            ..args.select.selection()
-        },
+        // `selection()` carries `--drafts`: no spec has chosen anything here to leave drafts off.
+        selection: args.select.selection(),
         output: choices.output.value,
         text: LetterTextSettings::of(&choices),
         render: args.render_for(&choices),
@@ -198,14 +196,20 @@ pub(super) fn plan_spec(
     if format == OutputFormat::Json && choices.output.value != LetterOutput::Pdf {
         return Err(PlanError::Usage(Usage::JsonWithText));
     }
-    let letter = resolved.letter.as_ref().expect("apply_letter checked the letter table");
+    let Some(letter) = resolved.letter.as_ref() else {
+        return Err(Error::Spec {
+            source: Box::new(crate::spec::SpecError::NoLetterTable),
+        }
+        .into());
+    };
     let names = name_origins(&env.cwd, &resolved, letter, &applied.selection, &applied.overrides);
     let style_at = match &choices.style.origin {
         crate::spec::Origin::Spec(at) | crate::spec::Origin::Build(at) => Some(at.clone()),
         _ => None,
     };
     let render = args.render_for(choices);
-    let facts = LetterFacts::new(&env.cwd, spec_path, &resolved, letter, &applied, args, &out_dir(args));
+    let out = out_dir(args);
+    let facts = LetterFacts::new(&env.cwd, spec_path, &resolved, letter, &applied, args, &out);
     let selection = Selection {
         drafts: args.select.drafts,
         ..applied.selection
@@ -218,7 +222,7 @@ pub(super) fn plan_spec(
         text: LetterTextSettings::of(choices),
         render,
         pdf,
-        out_dir: out_dir(args),
+        out_dir: out,
         spec: Some(LetterSpecRun {
             facts,
             resolved,
@@ -274,4 +278,31 @@ fn name_origins(
         }
     }
     names
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use claims::assert_ok;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn a_letter_built_from_a_file_keeps_the_name_and_identity_it_always_had() {
+        let pdf = LetterPdf::of_file(Path::new("dir/Cover.md"));
+        assert_eq!((pdf.ident(), pdf.file_name()), ("Cover", "Cover-letter.pdf"));
+    }
+
+    #[test]
+    fn a_letter_built_from_a_spec_is_named_and_identified_by_the_specs_stem_and_letter() {
+        let spec = Path::new("positions/acme.toml");
+        let pdf = assert_ok!(LetterPdf::of_spec(spec, false));
+        assert_eq!((pdf.ident(), pdf.file_name()), ("acme-letter", "acme-letter.pdf"));
+        let preview = assert_ok!(LetterPdf::of_spec(spec, true));
+        assert_eq!(
+            (preview.ident(), preview.file_name()),
+            ("acme-letter.drafts", "acme-letter.drafts.pdf")
+        );
+        // The identity is the file name without `.pdf`: one value, so the two cannot come from different places.
+        assert_eq!(format!("{}.pdf", pdf.ident()), pdf.file_name());
+    }
 }

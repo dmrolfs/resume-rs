@@ -149,6 +149,10 @@ impl LetterArgs {
             return Err("--font-path cannot be used with --fonts bundled".into());
         }
         let in_spec_mode = self.spec.spec.is_some();
+        // Clap requires one of them, but a library caller builds the arguments itself.
+        if !in_spec_mode && self.file.is_none() {
+            return Err("a letter needs a FILE or --spec".into());
+        }
         // A typed output format is known now; one the spec supplies is the plan's to judge.
         let output_known = self.output_format.is_some() || !in_spec_mode;
         if format == OutputFormat::Json && output_known && self.output_format.unwrap_or_default() != LetterOutput::Pdf {
