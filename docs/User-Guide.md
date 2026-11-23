@@ -516,7 +516,7 @@ No `.txt` file is created automatically; shell redirection can create or truncat
 Website counters may differ from these exact byte, Unicode scalar, UTF-16 and whitespace-word counts.
 
 PDF modes use the `pragmatic` style, `letter` paper, `auto` fonts, and a one-page limit unless explicitly overridden.
-The file is `<stem>-letter.pdf` under `--out`, avoiding the usual resume filename.
+The file is `<stem>-letter.pdf` under `--out`, avoiding the usual resume filename. For that reason `build` and `watch` refuse a resume whose name ends in `-letter` (`acme-letter.md`), which would be written over the letter of `acme.md`; the error suggests a name that works, such as `acme-resume.md`. `doctor` and `check` still read such a file, because they write no PDF.
 A configured text limit also checks PDF-only builds.
 All content and page checks finish before replacing a PDF; unlike `build`, a letter that exceeds its page limit is not saved.
 In `both` mode the PDF is committed first, then text is printed; a later stdout failure leaves that PDF in place and reports it.
@@ -1129,7 +1129,7 @@ What `[letter]` can say, each also a flag of [`resume letter`](#resume-letter):
 
 The company and the title come from `[position]`, and nothing else. Neither document reads the other's content: `letter --spec` works when the baseline does not exist yet, and `build --spec` works when the letter does not. A mistake in the shape of the other document's table is still an error for both commands, so a typo is never hidden.
 
-The PDF is named after the spec, with `-letter`: `positions/acme.toml` builds `out/acme-letter.pdf`, beside the resume's `out/acme.pdf`. That name is also the identity written into the PDF, so a viewer sees two documents. With `--drafts` the letter is written as `acme-letter.drafts.pdf`. A spec file whose name ends in `-letter` is refused by both commands, because its resume would be written over the letter of another spec.
+The PDF is named after the spec, with `-letter`: `positions/acme.toml` builds `out/acme-letter.pdf`, beside the resume's `out/acme.pdf`. That name is also the identity written into the PDF, so a viewer sees two documents. With `--drafts` the letter is written as `acme-letter.drafts.pdf`. A spec file whose name ends in `-letter` is refused by both commands, and so is a resume file with that ending, because its PDF would be written over the letter of another file.
 
 Flags beside a spec follow the rule of [Flags beside a spec](#flags-beside-a-spec), and the list is every flag the spec can also say: `--tags`, `--core-only`, `--prefer`, `--style`, `--paper`, `--output-format`, `--max-length`, `--length-unit`, `--links`, `--company`, `--title`, `--recipient`, and `--date`. They are refused unless you add `--allow-overrides`, and the summary lists each with what it replaced and where that was written. The options about your machine, `--drafts`, and `--dry-run` are always allowed. With `--format json` and a PDF, one object with `type` `letter-spec` is written on standard output; it has the keys `file`, `position`, `chain`, `content`, `output`, `links`, `max_length`, `length_unit`, `fields`, `style`, `paper`, `drafts`, `pdf`, `overrides`, `environment`, and `version`. Each setting there is a `value` and where it came from (`from`: `flag`, `default`, or the line that wrote it).
 

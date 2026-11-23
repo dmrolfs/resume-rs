@@ -390,6 +390,32 @@ impl Cli {
     }
 }
 
+/// The suffix the letter of a file or a spec adds to its name: `acme.md` has the letter `acme-letter.pdf`.
+pub(crate) const LETTER_SUFFIX: &str = "-letter";
+
+/// Refuses a resume whose name ends in `-letter`, because its PDF would be named like the letter of another file.
+///
+/// `letter acme.md` and `letter --spec positions/acme.toml` write `acme-letter.pdf`, and `build acme-letter.md`
+/// writes the same name; the writer replaces a file, so one would silently replace the other. Case is ignored: on
+/// macOS and Windows names that differ only in case name the same file. Only `build` and `watch` write this name;
+/// `doctor` and `check` write no PDF and keep working on such a file, so it can be fixed before it is renamed.
+fn refuse_letter_stem(input: &Path) -> Result<(), clap::Error> {
+    let stem = BuildArgs::pdf_stem(input);
+    // The suffix is ASCII, so cutting its length off the end of a stem that ends in it is on a character boundary.
+    let Some(base) = stem
+        .to_ascii_lowercase()
+        .ends_with(LETTER_SUFFIX)
+        .then(|| &stem[..stem.len() - LETTER_SUFFIX.len()])
+    else {
+        return Ok(());
+    };
+    Err(usage_error(format!(
+        "{} would write {stem}.pdf, which is the name of the letter built from {base}.md; rename the resume, \
+         for example to {base}-resume.md",
+        input.display(),
+    )))
+}
+
 /// A usage error in clap's own format, so it exits with code 2 like any other.
 fn usage_error(message: impl std::fmt::Display) -> clap::Error {
     Cli::command().error(ErrorKind::ArgumentConflict, message)
@@ -417,6 +443,7 @@ impl WatchArgs {
                 "--dry-run cannot be used with `watch`, which exists to write the PDF; use `build --dry-run`",
             ));
         }
+        refuse_letter_stem(&self.file)?;
         self.render.validate()
     }
 }
@@ -530,6 +557,7 @@ impl BuildArgs {
     fn validate_outputs(&self) -> Result<(), clap::Error> {
         let mut seen: HashMap<String, &Path> = HashMap::new();
         for input in &self.files {
+            refuse_letter_stem(input)?;
             let name = Self::pdf_name(input);
             if let Some(first) = seen.insert(name.to_lowercase(), input) {
                 return Err(usage_error(format!(
@@ -1390,5 +1418,96 @@ mod tests {
         assert!(choices.max_length.is_none());
         let render = letter_of(&bare).effective_render();
         assert_eq!(render.max_pages.map(|p| p.into_inner()), Some(1));
+    }
+    // ========================================================================
+    // A resume cannot be named like the letter of another file
+    // ========================================================================
+
+    #[test]
+    fn build_and_watch_refuse_a_resume_named_like_the_letter_of_another_file() {
+        for name in [
+            "acme-letter.md",
+            "acme-LETTER.md",
+            "ACME-Letter.md",
+            "./-letter.md",
+            "dir/acme-letter.md",
+        ] {
+            for command in ["build", "watch"] {
+                let err = assert_err!(parse(&[command, name]));
+                assert_eq!(err.kind(), ErrorKind::ArgumentConflict, "{command} {name}");
+                assert_eq!(err.exit_code(), 2);
+                let text = err.to_string();
+                assert!(
+                    text.contains("the name of the letter built from"),
+                    "{command} {name}: {text}"
+                );
+                assert!(text.contains("rename the resume"), "{text}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_refusal_names_the_file_the_pdf_and_a_name_that_works() {
+        let text = assert_err!(parse(&["build", "dir/acme-letter.md"])).to_string();
+        assert!(
+            text.contains("dir/acme-letter.md would write acme-letter.pdf"),
+            "{text}"
+        );
+        assert!(text.contains("the letter built from acme.md"), "{text}");
+        assert!(text.contains("for example to acme-resume.md"), "{text}");
+        // The name it suggests is accepted.
+        assert_ok!(parse(&["build", "acme-resume.md"]));
+    }
+
+    #[test]
+    fn only_a_stem_that_ends_in_the_suffix_is_refused() {
+        for name in [
+            "letter.md",
+            "my-letters.md",
+            "acme-letter-2.md",
+            "acme-letter.v2.md",
+            "acme.md",
+            "Resume.md",
+        ] {
+            assert_ok!(parse(&["build", name]));
+            assert_ok!(parse(&["watch", name]));
+        }
+    }
+
+    #[test]
+    fn the_suffix_is_judged_on_the_stem_so_the_extension_does_not_hide_or_make_it() {
+        assert_err!(parse(&["build", "acme-letter.markdown"]));
+        assert_err!(parse(&["build", "acme-letter"]));
+        assert_ok!(parse(&["build", "acme-letter.md.bak"]));
+    }
+
+    #[test]
+    fn one_such_name_among_several_is_refused_and_the_error_names_it() {
+        let text = assert_err!(parse(&["build", "a.md", "b-letter.md", "c.md"])).to_string();
+        assert!(text.contains("b-letter.md would write b-letter.pdf"), "{text}");
+    }
+
+    #[test]
+    fn doctor_and_check_keep_working_on_such_a_file_because_they_write_no_pdf() {
+        for command in ["doctor", "check"] {
+            assert_ok!(parse(&[command, "acme-letter.md"]));
+        }
+    }
+
+    #[test]
+    fn a_letter_may_be_named_with_the_suffix_because_its_own_pdf_adds_another() {
+        // `cover-letter.md` as a letter writes `cover-letter-letter.pdf`, which no resume can be named.
+        assert_ok!(parse(&["letter", "cover-letter.md"]));
+        assert_ok!(parse(&["letter", "--spec", "positions/acme.toml"]));
+    }
+
+    #[test]
+    fn a_resume_and_the_letter_of_one_name_no_longer_share_a_pdf_name() {
+        // The rule's reason: the two names a resume `X-letter` and a letter `X` would write are one.
+        let letter_of = |stem: &str| format!("{stem}-letter.pdf");
+        let resume_of = |input: &str| BuildArgs::pdf_name(Path::new(input));
+        assert_eq!(letter_of("acme"), resume_of("acme-letter.md"));
+        assert!(parse(&["build", "acme-letter.md"]).is_err(), "so the resume is refused");
+        assert_ne!(letter_of("acme"), resume_of("acme.md"));
     }
 }

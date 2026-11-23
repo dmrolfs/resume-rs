@@ -23,8 +23,7 @@ pub(super) struct PdfStem(String);
 /// The suffix a preview of a spec's drafts adds, so a preview never replaces the PDF built to be sent.
 const DRAFTS_SUFFIX: &str = ".drafts";
 
-/// The suffix the letter of a spec adds to the spec's name, so a letter never replaces the resume built from a spec.
-pub(super) const LETTER_SUFFIX: &str = "-letter";
+use crate::cli::LETTER_SUFFIX;
 
 impl PdfStem {
     /// The stem of an input file.

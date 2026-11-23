@@ -1082,3 +1082,33 @@ fn the_equivalence_sees_tags_links_and_limits_because_the_letter_has_them() {
     let tight = letter_spec(&work, &spec, &work.out(), &["--allow-overrides", "--max-length", "5"]);
     assert_eq!(tight.outcome, Outcome::Failure);
 }
+
+#[test]
+fn a_file_resume_named_like_the_letter_of_a_spec_is_refused_before_it_can_replace_that_letter() {
+    let work = Workspace::new();
+    let staged = stage(&work);
+    let out = work.out();
+    assert_eq!(letter_spec(&work, &staged.spec, &out, &[]).outcome, Outcome::Success);
+    let sent = pdf_in(&out, "acme-letter.pdf");
+    // The resume that would have written `acme-letter.pdf` over it.
+    let resume = work.file("acme-letter.md", &workspace::fixture("full.md"));
+    let args = work.build_args(&[&resume], &[]);
+    let error = claims::assert_err!(resume::cli::Cli::try_parse_validated(
+        std::iter::once("resume".to_string()).chain(args.iter().cloned())
+    ));
+    assert_eq!(error.exit_code(), 2);
+    assert!(
+        error.to_string().contains("the name of the letter built from acme.md"),
+        "{error}"
+    );
+    assert_eq!(
+        pdf_in(&out, "acme-letter.pdf"),
+        sent,
+        "the letter that was sent is untouched"
+    );
+    // The same resume under the name the error suggests builds, and lands beside the letter.
+    let renamed = work.file("acme-resume.md", &workspace::fixture("full.md"));
+    assert_eq!(work.run(&work.build_args(&[&renamed], &[])).outcome, Outcome::Success);
+    assert_eq!(pdf_in(&out, "acme-letter.pdf"), sent);
+    assert!(out.join("acme-resume.pdf").is_file());
+}
