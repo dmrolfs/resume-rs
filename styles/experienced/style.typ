@@ -73,7 +73,8 @@
     columns: (1fr, auto),
     column-gutter: 1em,
     align: (left + bottom, right + bottom),
-    text(size: theme.size.role, strong(lead)),
+    // Keep a textual boundary before the date in the PDF heading title.
+    text(size: theme.size.role, strong(lead) + [ ]),
     text(size: theme.size.period, strong(role.period.text)),
   )
 }

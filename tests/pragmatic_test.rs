@@ -70,6 +70,47 @@ fn footer_shows_name_and_page_of_total() {
 }
 
 #[test]
+fn role_heading_tag_titles_separate_the_lead_from_dates_in_every_builtin_style() {
+    for style in [BuiltinStyle::Pragmatic, BuiltinStyle::Mono, BuiltinStyle::Experienced] {
+        let compiled = compile_with(&assert_ok!(StyleSource::builtin(style)), Paper::Letter);
+        let pdf = assert_ok!(compiled.export_pdf("fixture"));
+        let doc = assert_ok!(Document::load_mem(&pdf));
+        let titles: Vec<_> = doc
+            .objects
+            .values()
+            .filter_map(|object| {
+                let dict = object.as_dict().ok()?;
+                if dict.get(b"S").ok()?.as_name().ok()? != b"H2" {
+                    return None;
+                }
+                let bytes = dict.get(b"T").ok()?.as_str().ok()?;
+                Some(if bytes.starts_with(&[0xfe, 0xff]) {
+                    let (pairs, remainder) = bytes[2..].as_chunks::<2>();
+                    assert!(
+                        remainder.is_empty(),
+                        "UTF-16 heading title must contain complete code units"
+                    );
+                    let units: Vec<_> = pairs.iter().copied().map(u16::from_be_bytes).collect();
+                    assert_ok!(String::from_utf16(&units))
+                } else {
+                    assert_ok!(String::from_utf8(bytes.to_vec()))
+                })
+            })
+            .collect();
+        assert_eq!(titles.len(), 4, "{style:?}");
+        for period in [
+            "Aug 2017 – Present",
+            "Fall 2012 – Sept 2017",
+            "2008 – 2012",
+            "2004 – 2008",
+        ] {
+            let title = assert_some!(titles.iter().find(|title| title.ends_with(period)));
+            assert!(title.ends_with(&format!(" {period}")), "{style:?}: {title}");
+        }
+    }
+}
+
+#[test]
 fn pdf_is_tagged() {
     let pdf = assert_ok!(pragmatic(Paper::Letter).export_pdf("fixture"));
     let doc = assert_ok!(Document::load_mem(&pdf));

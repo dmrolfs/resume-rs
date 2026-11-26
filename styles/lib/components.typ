@@ -193,7 +193,8 @@
 // The layout of a role line: `lead` (title and company) on the left, `period` on the right, at the role size.
 #let role-grid(theme, lead, period) = text(
   size: theme.size.role,
-  grid(columns: (1fr, auto), column-gutter: 1em, lead, align(right, period)),
+  // A textual separator survives PDF heading-title extraction across the grid cells.
+  grid(columns: (1fr, auto), column-gutter: 1em, lead + [ ], align(right, period)),
 )
 
 // Title, company and period of a role, all bold.
