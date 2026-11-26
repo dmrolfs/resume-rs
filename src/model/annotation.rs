@@ -16,6 +16,31 @@ pub enum Priority {
     Extra,
 }
 
+/// What a position spec says an item's own priority becomes: `core`, `extra`, or `none` to clear it.
+///
+/// `none` is not a priority: it removes the item's own `@core` or `@extra`, so the item is judged by its tags alone.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Display, AsRefStr, IntoStaticStr, EnumString, EnumIter,
+)]
+#[strum(serialize_all = "kebab-case")]
+pub enum PriorityEdit {
+    Core,
+    Extra,
+    None,
+}
+
+impl PriorityEdit {
+    /// The priority an item has after this edit.
+    #[must_use]
+    pub fn applied(self) -> Option<Priority> {
+        match self {
+            Self::Core => Some(Priority::Core),
+            Self::Extra => Some(Priority::Extra),
+            Self::None => None,
+        }
+    }
+}
+
 /// Whether an item is ready to send: `@draft` or `@verify`.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Display, AsRefStr, IntoStaticStr, EnumString, EnumIter,

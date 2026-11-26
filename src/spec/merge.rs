@@ -5,9 +5,9 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::hash::Hash;
 
 use super::error::Located;
-use super::layer::{Layer, SelectLayer};
+use super::layer::{ItemOverrideLayer, Layer, SelectLayer};
 use crate::model::options::Paper;
-use crate::model::{GroupName, StyleName, Tag, VariantName};
+use crate::model::{GroupName, ItemId, PriorityEdit, StyleName, Tag, VariantName};
 
 /// The `[select]` choices after merging.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -19,6 +19,17 @@ pub struct SelectChoices {
     pub promote: Vec<Tag>,
     pub pick: BTreeMap<GroupName, VariantName>,
     pub core_only: Option<bool>,
+    /// What the chain says about each named item's own tags and priority, by the item's `&id`.
+    pub overrides: BTreeMap<ItemId, ItemOverride>,
+}
+
+/// What the chain, merged, says about one item. A field no file wrote is `None`: the baseline's value stays.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ItemOverride {
+    /// The item's own tags, replaced as a whole; `Some` of an empty set clears them.
+    pub tags: Option<BTreeSet<Tag>>,
+    /// The item's own priority; `PriorityEdit::None` clears it.
+    pub priority: Option<PriorityEdit>,
 }
 
 /// Every choice a chain makes. `None` means no file said anything, so the command's own default applies.
@@ -39,6 +50,10 @@ pub enum ChoiceKey {
     Style,
     Paper,
     CoreOnly,
+    /// The tags a file replaced an item's own tags with; apart from the priority, which another file may decide.
+    OverrideTags(ItemId),
+    /// The priority a file gave an item.
+    OverridePriority(ItemId),
 }
 
 /// The choices and, for each, the file and place that decided it.
@@ -88,8 +103,32 @@ pub fn merge_select<'a>(
             choices.core_only = Some(flag.value);
             origins.insert(ChoiceKey::CoreOnly, flag.at.clone());
         }
+        merge_overrides(&mut choices.overrides, &mut origins, &select.overrides);
     }
     (choices, origins)
+}
+
+/// Folds one file's overrides over the merged ones, a field at a time.
+///
+/// The more specific file wins each field it writes and leaves the others alone, so a table that names only the
+/// tags does not erase a priority an earlier file gave. Tags are replaced, never unioned: an override says what an
+/// item's own tags are, and a union could not remove one.
+fn merge_overrides(
+    merged: &mut BTreeMap<ItemId, ItemOverride>,
+    origins: &mut BTreeMap<ChoiceKey, Located>,
+    layer: &BTreeMap<ItemId, ItemOverrideLayer>,
+) {
+    for (id, written) in layer {
+        let entry = merged.entry(id.clone()).or_default();
+        if let Some(tags) = &written.tags {
+            entry.tags = Some(tags.value.clone());
+            origins.insert(ChoiceKey::OverrideTags(id.clone()), tags.at.clone());
+        }
+        if let Some(priority) = &written.priority {
+            entry.priority = Some(priority.value);
+            origins.insert(ChoiceKey::OverridePriority(id.clone()), priority.at.clone());
+        }
+    }
 }
 
 /// Merges `layers`, ordered from the least to the most specific.
@@ -122,7 +161,8 @@ pub fn merge<'a>(layers: impl IntoIterator<Item = &'a Layer>) -> Merged {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spec::layer::{Kind, Layer, SelectLayer, Sourced};
+    use crate::model::{ItemId, PriorityEdit};
+    use crate::spec::layer::{ItemOverrideLayer, Kind, Layer, SelectLayer, Sourced};
     use claims::assert_ok;
     use pretty_assertions::assert_eq;
     use proptest::prelude::*;
@@ -186,6 +226,7 @@ mod tests {
                     .map(|(i, (g, v))| (group(g), sourced(file, i, variant(v))))
                     .collect(),
                 core_only: None,
+                overrides: BTreeMap::new(),
             },
         }
     }
@@ -303,6 +344,154 @@ mod tests {
             at: at("b.toml", 1),
         });
         assert_eq!(merge([&a, &b]).choices.select.core_only, Some(false));
+    }
+
+    // ---- per-item overrides: tags and own priority, each merged as its own field --------------------------
+
+    fn item(name: &str) -> ItemId {
+        assert_ok!(ItemId::try_new(name))
+    }
+
+    /// An override layer: the tags and priority a file wrote for `target`, each with its own line.
+    fn overriding(file: &str, target: &str, tags: Option<&[&str]>, priority: Option<PriorityEdit>) -> Layer {
+        let mut l = layer(file, &[], &[], &[], None, None);
+        l.select.overrides.insert(
+            item(target),
+            ItemOverrideLayer {
+                tags: tags.map(|t| Sourced {
+                    value: t.iter().map(|n| tag(n)).collect(),
+                    at: at(file, 10),
+                }),
+                priority: priority.map(|value| Sourced {
+                    value,
+                    at: at(file, 11),
+                }),
+            },
+        );
+        l
+    }
+
+    #[test]
+    fn a_later_tag_override_replaces_the_earlier_one_as_a_whole_and_never_unions() {
+        let a = overriding("a.toml", "gateway", Some(&["ai", "platform"]), None);
+        let b = overriding("b.toml", "gateway", Some(&["data"]), None);
+        let merged = merge([&a, &b]);
+        let got = &merged.choices.select.overrides[&item("gateway")];
+        assert_eq!(got.tags, Some([tag("data")].into()));
+    }
+
+    #[test]
+    fn an_explicit_empty_tag_set_clears_and_is_different_from_not_saying() {
+        let earlier = overriding("a.toml", "gateway", Some(&["ai"]), None);
+        let clears = overriding("b.toml", "gateway", Some(&[]), None);
+        let silent = overriding("c.toml", "gateway", None, Some(PriorityEdit::Core));
+        let cleared = merge([&earlier, &clears]);
+        assert_eq!(
+            cleared.choices.select.overrides[&item("gateway")].tags,
+            Some(BTreeSet::new())
+        );
+        let kept = merge([&earlier, &silent]);
+        assert_eq!(
+            kept.choices.select.overrides[&item("gateway")].tags,
+            Some([tag("ai")].into())
+        );
+    }
+
+    #[test]
+    fn none_clears_the_own_priority_and_is_different_from_not_saying() {
+        let core = overriding("a.toml", "gateway", None, Some(PriorityEdit::Core));
+        let none = overriding("b.toml", "gateway", None, Some(PriorityEdit::None));
+        let quiet = overriding("c.toml", "gateway", Some(&["ai"]), None);
+        let cleared = merge([&core, &none]);
+        assert_eq!(
+            cleared.choices.select.overrides[&item("gateway")].priority,
+            Some(PriorityEdit::None)
+        );
+        let kept = merge([&core, &quiet]);
+        assert_eq!(
+            kept.choices.select.overrides[&item("gateway")].priority,
+            Some(PriorityEdit::Core)
+        );
+    }
+
+    #[test]
+    fn a_table_that_names_only_tags_does_not_erase_an_earlier_priority() {
+        let first = overriding("a.toml", "gateway", None, Some(PriorityEdit::Extra));
+        let second = overriding("b.toml", "gateway", Some(&["ai"]), None);
+        let got = merge([&first, &second]).choices.select.overrides[&item("gateway")].clone();
+        assert_eq!(got.priority, Some(PriorityEdit::Extra));
+        assert_eq!(got.tags, Some([tag("ai")].into()));
+    }
+
+    #[test]
+    fn each_field_remembers_the_file_and_line_that_decided_it() {
+        let first = overriding("a.toml", "gateway", Some(&["ai"]), Some(PriorityEdit::Core));
+        let second = overriding("b.toml", "gateway", Some(&["data"]), None);
+        let merged = merge([&first, &second]);
+        let tags_at = &merged.origins[&ChoiceKey::OverrideTags(item("gateway"))];
+        let priority_at = &merged.origins[&ChoiceKey::OverridePriority(item("gateway"))];
+        assert_eq!(
+            (tags_at.path.display().to_string(), tags_at.line),
+            ("b.toml".to_string(), 10)
+        );
+        assert_eq!(
+            (priority_at.path.display().to_string(), priority_at.line),
+            ("a.toml".to_string(), 11)
+        );
+    }
+
+    #[test]
+    fn different_targets_are_independent() {
+        let a = overriding("a.toml", "gateway", Some(&["ai"]), None);
+        let b = overriding("b.toml", "cache", None, Some(PriorityEdit::Core));
+        let merged = merge([&a, &b]);
+        assert_eq!(merged.choices.select.overrides.len(), 2);
+        assert_eq!(merged.choices.select.overrides[&item("gateway")].priority, None);
+        assert_eq!(merged.choices.select.overrides[&item("cache")].tags, None);
+    }
+
+    #[test]
+    fn the_same_layer_twice_changes_nothing_and_order_is_deterministic() {
+        let a = overriding("a.toml", "gateway", Some(&["ai"]), Some(PriorityEdit::Core));
+        assert_eq!(merge([&a]).choices, merge([&a, &a]).choices);
+        let b = overriding("b.toml", "cache", Some(&[]), Some(PriorityEdit::None));
+        assert_eq!(merge([&a, &b]), merge([&a, &b]));
+        let merged = merge([&b, &a]);
+        let keys: Vec<&ItemId> = merged.choices.select.overrides.keys().collect();
+        assert_eq!(
+            keys,
+            [&item("cache"), &item("gateway")],
+            "sorted by id, not by file order"
+        );
+    }
+
+    #[test]
+    fn grouping_does_not_change_overrides() {
+        let a = overriding("a.toml", "gateway", Some(&["ai"]), Some(PriorityEdit::Core));
+        let b = overriding("b.toml", "gateway", Some(&["data"]), None);
+        let c = overriding("c.toml", "gateway", None, Some(PriorityEdit::None));
+        let as_layer = |m: &Merged| {
+            let mut l = layer("m.toml", &[], &[], &[], None, None);
+            for (id, o) in &m.choices.select.overrides {
+                l.select.overrides.insert(
+                    id.clone(),
+                    ItemOverrideLayer {
+                        tags: o.tags.clone().map(|value| Sourced {
+                            value,
+                            at: at("m.toml", 1),
+                        }),
+                        priority: o.priority.map(|value| Sourced {
+                            value,
+                            at: at("m.toml", 2),
+                        }),
+                    },
+                );
+            }
+            l
+        };
+        let left = merge([&as_layer(&merge([&a, &b])), &c]);
+        let right = merge([&a, &as_layer(&merge([&b, &c]))]);
+        assert_eq!(left.choices, right.choices);
     }
 
     // ---- properties over generated layers ------------------------------------------------------------------

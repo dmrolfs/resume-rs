@@ -218,6 +218,19 @@ struct PrintedSelect<'a> {
     pick: BTreeMap<&'a str, &'a str>,
     #[serde(rename = "core-only", skip_serializing_if = "Option::is_none")]
     core_only: Option<bool>,
+    /// `[select.override.<id>]`, sorted by id. Printed last, so the plain keys above stay in one table.
+    #[serde(rename = "override", skip_serializing_if = "BTreeMap::is_empty")]
+    overrides: BTreeMap<&'a str, PrintedOverride<'a>>,
+}
+
+/// One item's overrides. A field nobody wrote is left out; one that was written is always printed, an empty tag
+/// list and `none` included, because they are choices and not the absence of one.
+#[derive(Serialize)]
+struct PrintedOverride<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tags: Option<Vec<&'a str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    priority: Option<&'static str>,
 }
 
 impl<'a> PrintedSelect<'a> {
@@ -229,12 +242,24 @@ impl<'a> PrintedSelect<'a> {
             promote: select.promote.iter().map(AsRef::as_ref).collect(),
             pick: select.pick.iter().map(|(g, v)| (g.as_ref(), v.as_ref())).collect(),
             core_only: select.core_only,
+            overrides: select
+                .overrides
+                .iter()
+                .map(|(id, o)| {
+                    let printed = PrintedOverride {
+                        tags: o.tags.as_ref().map(|t| t.iter().map(AsRef::as_ref).collect()),
+                        priority: o.priority.map(Into::into),
+                    };
+                    (id.as_ref(), printed)
+                })
+                .collect(),
         };
         let says_something = !printed.tags.is_empty()
             || !printed.prefer.is_empty()
             || !printed.promote.is_empty()
             || !printed.pick.is_empty()
-            || printed.core_only.is_some();
+            || printed.core_only.is_some()
+            || !printed.overrides.is_empty();
         says_something.then_some(printed)
     }
 }
@@ -307,5 +332,163 @@ impl<'a> From<&'a Position> for PrintedPosition<'a> {
                 technical: level(emphasis.technical),
             }),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::path::PathBuf;
+
+    use claims::{assert_ok, assert_some};
+    use pretty_assertions::assert_eq;
+
+    use crate::model::{ItemId, PriorityEdit, Tag};
+    use crate::spec::chain::ProfileSource;
+    use crate::spec::error::{Located, SpecError};
+    use crate::spec::layer::{ItemOverrideLayer, Kind, Layer, SelectLayer, Sourced, SpecLayer};
+    use crate::spec::names::{DeclaredPath, ProfileName};
+    use crate::spec::resolve_with;
+
+    fn at(file: &str, line: usize) -> Located {
+        Located {
+            path: PathBuf::from(file).into(),
+            line,
+            column: 1,
+        }
+    }
+
+    fn item(name: &str) -> ItemId {
+        assert_ok!(ItemId::try_new(name))
+    }
+
+    fn tags(names: &[&str]) -> Option<Sourced<BTreeSet<Tag>>> {
+        Some(Sourced {
+            value: names.iter().map(|n| assert_ok!(Tag::try_new(*n))).collect(),
+            at: at("x.toml", 1),
+        })
+    }
+
+    fn priority(edit: PriorityEdit) -> Option<Sourced<PriorityEdit>> {
+        Some(Sourced {
+            value: edit,
+            at: at("x.toml", 2),
+        })
+    }
+
+    fn layer(kind: Kind, name: Option<&str>, file: &str, overrides: BTreeMap<ItemId, ItemOverrideLayer>) -> Layer {
+        Layer {
+            kind,
+            name: name.map(|n| assert_ok!(ProfileName::try_new(n))),
+            path: PathBuf::from(file),
+            extends: vec![],
+            position: None,
+            content: (kind == Kind::Spec).then(|| Sourced {
+                value: assert_ok!(DeclaredPath::parse("baseline.md")),
+                at: at(file, 1),
+            }),
+            style: None,
+            paper: None,
+            select: SelectLayer {
+                overrides,
+                ..SelectLayer::default()
+            },
+            letter: None,
+            letter_select: SelectLayer::default(),
+        }
+    }
+
+    struct NoProfiles;
+    impl ProfileSource for NoProfiles {
+        fn find(&self, name: &ProfileName, at: &Located) -> Result<Layer, SpecError> {
+            panic!("unexpected profile {name} asked for at {at}")
+        }
+    }
+
+    fn resolved(overrides: BTreeMap<ItemId, ItemOverrideLayer>) -> super::ResolvedSpec {
+        let spec = layer(Kind::Spec, None, "acme.toml", overrides);
+        let spec = assert_ok!(SpecLayer::try_from_layer(spec));
+        assert_ok!(resolve_with(spec, &NoProfiles))
+    }
+
+    fn printed(overrides: BTreeMap<ItemId, ItemOverrideLayer>) -> String {
+        resolved(overrides).to_toml()
+    }
+
+    #[test]
+    fn a_spec_with_no_overrides_prints_no_override_table() {
+        let text = printed(BTreeMap::new());
+        assert!(!text.contains("override"), "{text}");
+    }
+
+    #[test]
+    fn overrides_print_with_their_tags_and_priority_sorted_by_id() {
+        let text = printed(BTreeMap::from([
+            (
+                item("gateway"),
+                ItemOverrideLayer {
+                    tags: tags(&["platform", "ai"]),
+                    priority: priority(PriorityEdit::Core),
+                },
+            ),
+            (
+                item("cache"),
+                ItemOverrideLayer {
+                    tags: None,
+                    priority: priority(PriorityEdit::Extra),
+                },
+            ),
+        ]));
+        let cache = assert_some!(text.find("[select.override.cache]"), "{text}");
+        let gateway = assert_some!(text.find("[select.override.gateway]"), "{text}");
+        assert!(cache < gateway, "sorted by id: {text}");
+        assert!(
+            text.contains("tags = [\"ai\", \"platform\"]"),
+            "tags are sorted: {text}"
+        );
+        assert!(text.contains("priority = \"core\""), "{text}");
+        assert!(text.contains("priority = \"extra\""), "{text}");
+    }
+
+    #[test]
+    fn an_explicit_clear_prints_and_is_not_dropped_as_empty() {
+        let text = printed(BTreeMap::from([(
+            item("gateway"),
+            ItemOverrideLayer {
+                tags: tags(&[]),
+                priority: priority(PriorityEdit::None),
+            },
+        )]));
+        assert!(text.contains("tags = []"), "{text}");
+        assert!(text.contains("priority = \"none\""), "{text}");
+    }
+
+    #[test]
+    fn a_field_nobody_wrote_is_not_printed() {
+        let text = printed(BTreeMap::from([(
+            item("gateway"),
+            ItemOverrideLayer {
+                tags: tags(&["ai"]),
+                priority: None,
+            },
+        )]));
+        assert!(text.contains("tags = [\"ai\"]"), "{text}");
+        assert!(!text.contains("priority"), "{text}");
+    }
+
+    #[test]
+    fn an_override_is_printed_under_select_so_the_spec_resolves_to_the_same_choices_again() {
+        let spec = resolved(BTreeMap::from([(
+            item("gateway"),
+            ItemOverrideLayer {
+                tags: tags(&[]),
+                priority: priority(PriorityEdit::None),
+            },
+        )]));
+        let text = spec.to_toml();
+        let value: toml::Value = assert_ok!(text.parse());
+        let table = &value["select"]["override"]["gateway"];
+        assert_eq!(table["tags"].as_array().map(Vec::len), Some(0));
+        assert_eq!(table["priority"].as_str(), Some("none"));
     }
 }

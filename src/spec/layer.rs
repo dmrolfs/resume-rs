@@ -18,7 +18,7 @@ use super::raw::{RawBuild, RawEmphasis, RawFile, RawPosition, RawSelect, Text};
 use super::read::{Source, parse, read_source, read_source_shown, text_source};
 use crate::diagnostics::has_unsafe_characters;
 use crate::model::options::Paper;
-use crate::model::{Alternate, Company, GroupName, StyleName, Tag, Title, VariantName};
+use crate::model::{Alternate, Company, GroupName, ItemId, PriorityEdit, StyleName, Tag, Title, VariantName};
 
 /// A value and where the file wrote it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +57,17 @@ pub struct Position {
     pub posting: Option<url::Url>,
 }
 
+/// What one file says about one item's own tags and priority: each field is there or it is not.
+///
+/// A field that is absent leaves the less specific file's value in force; a field that is present replaces it, an
+/// empty tag set and `none` included. Each carries the place it was written, so a finding names a line.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ItemOverrideLayer {
+    /// Replaces the item's own tags as a whole; empty clears them.
+    pub tags: Option<Sourced<BTreeSet<Tag>>>,
+    pub priority: Option<Sourced<PriorityEdit>>,
+}
+
 /// The `[select]` table of one file.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SelectLayer {
@@ -65,6 +76,8 @@ pub struct SelectLayer {
     pub promote: Vec<Sourced<Tag>>,
     pub pick: BTreeMap<GroupName, Sourced<VariantName>>,
     pub core_only: Option<Sourced<bool>>,
+    /// `[select.override.<id>]`: changes to one item's own tags or priority, by the item's `&id`.
+    pub overrides: BTreeMap<ItemId, ItemOverrideLayer>,
 }
 
 /// One file of the chain, validated.
@@ -406,6 +419,8 @@ pub(super) fn select(source: &Source, table: &str, raw: Option<RawSelect>) -> Re
         promote,
         pick,
         core_only,
+        // The `override` table is read from TOML once both documents apply it; no file has one until then.
+        overrides: BTreeMap::new(),
     })
 }
 
