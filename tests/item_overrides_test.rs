@@ -319,3 +319,58 @@ fn a_letter_override_naming_nothing_fails_before_any_text_is_printed() {
         run.stderr
     );
 }
+
+// ---- the semantics an override must leave alone -------------------------------------------------------------
+
+#[test]
+fn promote_ranks_by_the_tags_an_override_gave() {
+    // `promote` moves items with a promoted tag up their own list. An override that gives the last bullet the
+    // promoted tag must move it up, so promotion reads the effective tags and not the baseline's.
+    let work = Workspace::new();
+    let staged = stage(
+        &work,
+        "[select]\npromote = [\"leadership\"]\n\n[select.override.cache]\ntags = [\"leadership\"]\n",
+    );
+    let run = build_spec(&work, &staged.spec, &[]);
+    assert_eq!(run.outcome, Outcome::Success, "{}", run.stderr);
+    let text = pdf_text(&work);
+    let at = |needle: &str| text.find(needle).unwrap_or_else(|| panic!("{needle} in {text}"));
+    assert!(
+        at("weekly run") < at("engine gateway"),
+        "the retagged item rose above an unpromoted one: {text}"
+    );
+}
+
+#[test]
+fn a_draft_item_stays_out_after_an_override_makes_it_core() {
+    let work = Workspace::new();
+    let staged = stage(&work, "[select.override.drafted]\npriority = \"core\"\n");
+    fs::write(
+        work.path().join("baseline.md"),
+        format!("{BASELINE}- A claim not ready yet. <!-- &drafted @draft -->\n"),
+    )
+    .expect("baseline");
+    let run = build_spec(&work, &staged.spec, &[]);
+    assert_eq!(run.outcome, Outcome::Success, "{}", run.stderr);
+    assert!(!pdf_text(&work).contains("not ready yet"), "{}", pdf_text(&work));
+}
+
+#[test]
+fn a_tag_on_a_section_still_applies_to_its_items_after_an_item_is_cleared() {
+    // Clearing a child's own tags does not mask the tag its section gives it.
+    let work = Workspace::new();
+    let baseline = "# Ada Lovelace\n\nLondon · ada@example.com\n\n## Skills <!-- #arch -->\n\n- Rust. <!-- &rust #data -->\n- Go.\n\n## Other\n\n- Plain.\n";
+    let staged = stage(
+        &work,
+        "[select]\ntags = [\"data\"]\n\n[select.override.rust]\ntags = []\n",
+    );
+    fs::write(work.path().join("baseline.md"), baseline).expect("baseline");
+    let run = build_spec(&work, &staged.spec, &[]);
+    assert_eq!(run.outcome, Outcome::Success, "{}", run.stderr);
+    let text = pdf_text(&work);
+    assert!(
+        !text.contains("Rust."),
+        "the section's #arch is not `data`, and the child's own tag is cleared: {text}"
+    );
+    assert!(text.contains("Plain."), "an untagged item elsewhere is kept: {text}");
+}
