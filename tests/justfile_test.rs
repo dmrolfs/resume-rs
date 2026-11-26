@@ -221,11 +221,15 @@ fn the_gate_covers_every_workspace_member() {
 
 #[test]
 fn the_minimum_rust_check_reads_both_packages_floors() {
-    let dumped = dump(&crate_path("justfile"));
-    let body = dumped["recipes"]["msrv"]["body"].to_string();
-    assert!(body.contains("check_floor Cargo.toml resume"), "{body}");
+    // `msrv` is a `[unix]` recipe, so `just --dump` leaves it out on Windows and the dump cannot be read there.
+    // The justfile is the same text everywhere, so read that.
+    let text = std::fs::read_to_string(crate_path("justfile")).expect("the justfile is readable");
     assert!(
-        body.contains("check_floor crates/workbench/Cargo.toml workbench"),
-        "{body}"
+        text.contains("check_floor Cargo.toml resume"),
+        "msrv must check resume at its floor"
+    );
+    assert!(
+        text.contains("check_floor crates/workbench/Cargo.toml workbench"),
+        "msrv must check the app at its floor"
     );
 }
