@@ -237,11 +237,11 @@ impl DefinitionProvider for StyleDefinitions {
     }
 }
 
-/// The PDF the spike opens: `SPIKE_PDF` if set, else the one the `resume` CLI wrote into `target/spike-out` for the spike.
+/// The PDF the spike opens: `SPIKE_PDF` if set, else the one `resume build spike-fixtures/sample-resume.md --out target/spike-out` writes.
 fn pdf_path() -> PathBuf {
     std::env::var_os("SPIKE_PDF")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/spike-out/Resume.pdf"))
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/spike-out/sample-resume.pdf"))
 }
 
 /// Two buttons that open the PDF in the system viewer, one through `opener` and one through GPUI, and a line that says
