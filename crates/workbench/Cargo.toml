@@ -1,0 +1,21 @@
+[package]
+name = "workbench"
+version = "0.1.0"
+edition = "2024"
+# gpui-pre 0.3.14 does not build on 1.94 or older (measured in rsm-yjj). The `resume` package keeps its own, lower floor.
+rust-version = "1.95"
+authors = ["Damon Rolfs <drolfs@gmail.com>"]
+description = "Desktop app to view resume content, Typst styles, and position specs, and to build PDFs from them."
+license = "MIT"
+repository = "https://github.com/dmrolfs/resume-rs"
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "resume-workbench"
+path = "src/main.rs"
+
+# Dependencies are added by the task that first uses them; the `unused_dependencies` lint enforces it.
+[dependencies]

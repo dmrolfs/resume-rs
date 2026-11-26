@@ -32,15 +32,15 @@ fmt:
 fmt-fix:
     cargo fmt --all
 
-[doc('Lint all targets; any warning fails')]
+[doc('Lint all targets of every workspace member; any warning fails')]
 [group('gate')]
 clippy:
-    cargo clippy --all-targets -- -D warnings
+    cargo clippy --workspace --all-targets -- -D warnings
 
-[doc('Run all tests, continuing past failures')]
+[doc('Run all tests of every workspace member, continuing past failures')]
 [group('gate')]
 test:
-    cargo test --no-fail-fast
+    cargo test --workspace --no-fail-fast
 
 # Needs cargo-machete (cargo install cargo-machete --locked --version 0.9.2, the version CI pins). Two checks.
 # First, cargo's `unused_dependencies` lint on the library and binary alone: clippy's all-targets run compiles the
@@ -51,7 +51,7 @@ test:
 [doc('Fail on a dependency nothing uses: the lint on the library and binary, then cargo-machete')]
 [group('gate')]
 unused-deps:
-    cargo check --lib --bins
+    cargo check --workspace --lib --bins
     cargo machete --with-metadata
 
 [doc('The quality gate: formatting, lints, unused dependencies, and tests')]
@@ -156,19 +156,24 @@ coverage *args: (_need 'cargo-llvm-cov' 'cargo install cargo-llvm-cov --locked')
 mutants *args: (_need 'cargo-mutants' 'cargo install cargo-mutants --locked')
     cargo mutants {{ args }}
 
-[doc('Check the build with the minimum Rust version in Cargo.toml (needs that toolchain)')]
+[doc('Check each package with its own minimum Rust version: resume (Cargo.toml) and the app (crates/workbench/Cargo.toml)')]
 [group('verify')]
 [unix]
 msrv:
     #!/usr/bin/env bash
     set -euo pipefail
-    msrv=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)
-    [ -n "$msrv" ] || { echo "error: no rust-version in Cargo.toml" >&2; exit 1; }
-    rustup toolchain list | grep -q "^${msrv}" || {
-        echo "error: Rust ${msrv} is not installed; run: rustup toolchain install ${msrv} --profile minimal" >&2
-        exit 1
+    check_floor() {
+        local manifest="$1" package="$2" msrv
+        msrv=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' "$manifest")
+        [ -n "$msrv" ] || { echo "error: no rust-version in $manifest" >&2; exit 1; }
+        rustup toolchain list | grep -q "^${msrv}" || {
+            echo "error: Rust ${msrv} is not installed; run: rustup toolchain install ${msrv} --profile minimal" >&2
+            exit 1
+        }
+        cargo +"${msrv}" check --locked --all-targets --package "$package"
     }
-    cargo +"${msrv}" check --locked --all-targets
+    check_floor Cargo.toml resume
+    check_floor crates/workbench/Cargo.toml workbench
 
 [doc('Everything to run before pushing: CI leg, docs, lint, and both cross-builds (macOS)')]
 [group('verify')]

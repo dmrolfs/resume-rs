@@ -3906,6 +3906,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "workbench"
+version = "0.1.0"
+
+[[package]]
 name = "write-fonts"
 version = "0.48.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

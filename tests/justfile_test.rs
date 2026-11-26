@@ -196,5 +196,36 @@ fn the_unused_dependency_check_is_a_plain_cargo_machete_run() {
     assert!(body.contains("--with-metadata"), "{body}");
     // Clippy's all-targets run builds the test units, so a normal dependency used only by `#[cfg(test)]` code
     // looks used there. Checking the library and binary alone is what shows it is not.
-    assert!(body.contains("cargo check --lib --bins"), "{body}");
+    assert!(body.contains("cargo check --workspace --lib --bins"), "{body}");
+}
+
+#[test]
+fn the_gate_covers_every_workspace_member() {
+    // The desktop app is a workspace member, not the root package, so a plain `cargo test` or `cargo clippy` would
+    // skip it. The gate must name the whole workspace, and `release` must stay the `resume` package alone.
+    let dumped = dump(&crate_path("justfile"));
+    for (recipe, expected) in [
+        ("clippy", "cargo clippy --workspace --all-targets"),
+        ("test", "cargo test --workspace"),
+        ("unused-deps", "cargo check --workspace --lib --bins"),
+    ] {
+        let body = dumped["recipes"][recipe]["body"].to_string();
+        assert!(body.contains(expected), "`{recipe}` must run `{expected}`: {body}");
+    }
+    let release = dumped["recipes"]["release"]["body"].to_string();
+    assert!(
+        !release.contains("--workspace"),
+        "the shipped binary is `resume` alone: {release}"
+    );
+}
+
+#[test]
+fn the_minimum_rust_check_reads_both_packages_floors() {
+    let dumped = dump(&crate_path("justfile"));
+    let body = dumped["recipes"]["msrv"]["body"].to_string();
+    assert!(body.contains("check_floor Cargo.toml resume"), "{body}");
+    assert!(
+        body.contains("check_floor crates/workbench/Cargo.toml workbench"),
+        "{body}"
+    );
 }
