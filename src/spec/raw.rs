@@ -94,7 +94,8 @@ pub(super) struct RawSelect {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub(super) struct RawOverride {
-    pub tags: Option<Vec<Text>>,
+    /// `Spanned` as a whole, so an empty list still has the place `tags =` was written.
+    pub tags: Option<Spanned<Vec<Text>>>,
     pub priority: Option<Text>,
 }
 

@@ -202,7 +202,9 @@ fn a_target_the_document_lacks_is_refused_naming_every_line_that_wrote_it() {
     let base = baseline(BULLETS);
     let (overrides, origins) = change("nope", Some(&["ai"]), Some(PriorityEdit::Core));
     let error = assert_err!(prepare_resume(&base, ItemOverrides::new(&overrides, &origins)));
-    let PrepareError::UnknownTargets { missing } = &error;
+    let PrepareError::UnknownTargets { missing } = &error else {
+        panic!("expected missing targets: {error:?}")
+    };
     assert_eq!(missing.len(), 1);
     assert_eq!(missing[0].id, item("nope"));
     assert_eq!(
@@ -230,7 +232,9 @@ fn every_missing_target_is_reported_together_in_id_order_and_nothing_is_half_app
         origins.insert(ChoiceKey::OverrideTags(item(name)), at("acme.toml", line));
     }
     let error = assert_err!(prepare_resume(&base, ItemOverrides::new(&overrides, &origins)));
-    let PrepareError::UnknownTargets { missing } = error;
+    let PrepareError::UnknownTargets { missing } = error else {
+        panic!("expected missing targets")
+    };
     assert_eq!(
         missing.iter().map(|m| m.id.to_string()).collect::<Vec<_>>(),
         ["alpha", "zeta"]
@@ -321,12 +325,110 @@ fn a_letter_group_changes_every_variant() {
     );
 }
 
+const FRAMED: &str = "# Alex\n\n## Greeting\n\nHi. <!-- =hello.default -->\n\nHello. <!-- =hello.short -->\n\n## Body\n\nOne. <!-- &real -->\n\n## Closing\n\nBye. <!-- =bye.default -->\n\nCheers. <!-- =bye.short -->\n";
+
 #[test]
-fn a_letter_frame_group_is_not_a_target() {
-    let text = "# Alex\n\n## Greeting\n\nHi. <!-- =hello.default -->\n\nHello. <!-- =hello.short -->\n\n## Body\n\nOne.\n\n## Closing\n\nBye.\n";
-    let source = assert_some!(parse_letter("l.md", text).valid()).clone();
+fn a_letter_frame_group_is_a_typed_frame_target_error_not_an_unknown_target() {
+    let source = assert_some!(parse_letter("l.md", FRAMED).valid()).clone();
     let (overrides, origins) = change("hello", Some(&["ai"]), None);
-    assert_err!(prepare_letter(&source, ItemOverrides::new(&overrides, &origins)));
+    let error = assert_err!(prepare_letter(&source, ItemOverrides::new(&overrides, &origins)));
+    let PrepareError::FrameTargets { frames } = &error else {
+        panic!("expected a frame-target error, got {error:?}")
+    };
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0].id, item("hello"));
+    assert_eq!(frames[0].section, "greeting");
+    assert!(error.to_string().contains("greeting"), "{error}");
+    assert!(error.to_string().contains("`hello`"), "{error}");
+    assert!(
+        !error.to_string().contains("no item"),
+        "not claimed to be missing: {error}"
+    );
+}
+
+#[test]
+fn a_closing_frame_group_is_named_as_the_closing() {
+    let source = assert_some!(parse_letter("l.md", FRAMED).valid()).clone();
+    let (overrides, origins) = change("bye", None, Some(PriorityEdit::Core));
+    let PrepareError::FrameTargets { frames } =
+        assert_err!(prepare_letter(&source, ItemOverrides::new(&overrides, &origins)))
+    else {
+        panic!("expected a frame-target error")
+    };
+    assert_eq!(frames[0].section, "closing");
+}
+
+#[test]
+fn frame_targets_and_missing_targets_are_all_reported_none_is_lost() {
+    let source = assert_some!(parse_letter("l.md", FRAMED).valid()).clone();
+    let mut overrides = BTreeMap::new();
+    let mut origins = BTreeMap::new();
+    for (name, line) in [("hello", 3), ("nope", 4), ("bye", 5)] {
+        overrides.insert(
+            item(name),
+            ItemOverride {
+                tags: Some(tags(&["x"])),
+                priority: None,
+            },
+        );
+        origins.insert(ChoiceKey::OverrideTags(item(name)), at("acme.toml", line));
+    }
+    let error = assert_err!(prepare_letter(&source, ItemOverrides::new(&overrides, &origins)));
+    let PrepareError::Targets { frames, missing } = &error else {
+        panic!("expected both kinds: {error:?}")
+    };
+    assert_eq!(
+        frames.iter().map(|f| f.id.to_string()).collect::<Vec<_>>(),
+        ["bye", "hello"]
+    );
+    assert_eq!(missing.iter().map(|m| m.id.to_string()).collect::<Vec<_>>(), ["nope"]);
+    let text = error.to_string();
+    assert!(
+        text.contains("`hello`") && text.contains("`bye`") && text.contains("`&nope`"),
+        "{text}"
+    );
+}
+
+#[test]
+fn the_contributing_lines_are_listed_in_the_order_they_were_written() {
+    // priority on line 4 (a profile), tags on line 9 (the spec): file order is not tags-before-priority.
+    let base = baseline(BULLETS);
+    let id = item("nope");
+    let overrides = BTreeMap::from([(
+        id.clone(),
+        ItemOverride {
+            tags: Some(tags(&["x"])),
+            priority: Some(PriorityEdit::Core),
+        },
+    )]);
+    let origins = BTreeMap::from([
+        (ChoiceKey::OverridePriority(id.clone()), at("a-profile.toml", 4)),
+        (ChoiceKey::OverrideTags(id), at("acme.toml", 9)),
+    ]);
+    let PrepareError::UnknownTargets { missing } =
+        assert_err!(prepare_resume(&base, ItemOverrides::new(&overrides, &origins)))
+    else {
+        panic!("expected missing targets")
+    };
+    let places: Vec<(String, usize)> = missing[0]
+        .at
+        .iter()
+        .map(|l| (l.path.display().to_string(), l.line))
+        .collect();
+    assert_eq!(
+        places,
+        [("a-profile.toml".to_string(), 4), ("acme.toml".to_string(), 9)]
+    );
+    let reversed = BTreeMap::from([
+        (ChoiceKey::OverrideTags(item("nope")), at("acme.toml", 5)),
+        (ChoiceKey::OverridePriority(item("nope")), at("acme.toml", 8)),
+    ]);
+    let PrepareError::UnknownTargets { missing } =
+        assert_err!(prepare_resume(&base, ItemOverrides::new(&overrides, &reversed)))
+    else {
+        panic!("expected missing targets")
+    };
+    assert_eq!(missing[0].at.iter().map(|l| l.line).collect::<Vec<_>>(), [5, 8]);
 }
 
 #[test]
@@ -345,4 +447,82 @@ fn the_letter_greeting_and_closing_are_never_changed() {
     assert_eq!(after.greeting, source.greeting);
     assert_eq!(after.closing, source.closing);
     assert!(matches!(after.body[0], SourceItem::Paragraph(_)));
+}
+
+// ---- the cases the independent test review named ---------------------------------------------------------
+
+#[test]
+fn a_group_override_reaches_a_draft_variant_too_and_keeps_it_a_draft() {
+    let base = baseline("## S\n\n- A. <!-- =g.default @draft -->\n- B. <!-- =g.short @draft -->\n");
+    let mut after = prepared(&base, "g", Some(&["ai"]), Some(PriorityEdit::Core));
+    for slot in after.node_annotations_mut().into_iter().skip(1) {
+        assert_eq!(slot.tags.iter().map(ToString::to_string).collect::<Vec<_>>(), ["ai"]);
+        assert_eq!(slot.priority, Some(crate::model::Priority::Core));
+        assert_eq!(
+            slot.status,
+            Some(crate::model::Status::Draft),
+            "status is never changed"
+        );
+    }
+}
+
+#[test]
+fn a_role_with_no_own_priority_still_lets_its_blurb_fall_back_after_the_blurb_is_cleared() {
+    // The blurb's own priority is cleared by the spec; the role's priority is untouched, so it is what is left.
+    let base =
+        baseline("## S\n\n### Acme · 2015 – 2020 <!-- &role @core -->\n\nBlurb. <!-- &blurb @extra -->\n\n- A.\n");
+    let mut after = prepared(&base, "blurb", None, Some(PriorityEdit::None));
+    let notes = after.node_annotations_mut();
+    assert_eq!(notes[2].priority, None, "the blurb has no own priority now");
+    assert_eq!(
+        notes[1].priority,
+        Some(crate::model::Priority::Core),
+        "the role keeps its own"
+    );
+}
+
+#[test]
+fn clearing_a_roles_priority_leaves_its_blurb_and_bullets_as_they_were() {
+    let base = baseline(
+        "## S\n\n### Acme · 2015 – 2020 <!-- &role @core -->\n\nBlurb. <!-- @extra -->\n\n- A. <!-- @core -->\n",
+    );
+    let mut after = prepared(&base, "role", None, Some(PriorityEdit::None));
+    let priorities: Vec<_> = after.node_annotations_mut().iter().map(|a| a.priority).collect();
+    assert_eq!(
+        priorities,
+        [
+            None,
+            None,
+            Some(crate::model::Priority::Extra),
+            Some(crate::model::Priority::Core)
+        ]
+    );
+}
+
+#[test]
+fn an_era_and_a_role_take_overrides_like_any_container() {
+    let base =
+        baseline("## S\n\n### Acme · 2015 – 2020 <!-- &role -->\n\n**AI · 2016 – 2017** <!-- &era -->\n\n- A.\n");
+    for target in ["role", "era"] {
+        let after = notes(prepared(&base, target, Some(&["x"]), Some(PriorityEdit::Core)));
+        let changed: Vec<_> = after.iter().filter(|n| n.1 == ["x"]).collect();
+        assert_eq!(changed.len(), 1, "{target}: exactly the one node: {after:?}");
+        assert_eq!(changed[0].0.as_deref(), Some(target));
+    }
+}
+
+#[test]
+fn an_id_kept_by_rewording_survives_a_move_into_another_container_and_a_conversion_to_a_group() {
+    let before = baseline("## One\n\n- Item. <!-- &key #ai -->\n\n## Two\n\n- Other.\n");
+    let moved = baseline("## One\n\n- Other.\n\n## Two\n\n- Item reworded. <!-- &key #ai -->\n");
+    let converted = baseline(
+        "## One\n\n- Item. <!-- =key.default #ai -->\n- Item again. <!-- =key.short #ai -->\n\n## Two\n\n- Other.\n",
+    );
+    for (name, base) in [("before", before), ("moved", moved), ("converted", converted)] {
+        let after = notes(prepared(&base, "key", Some(&["platform"]), None));
+        assert!(
+            after.iter().any(|n| n.1 == ["platform"]),
+            "{name}: the same override still finds its item: {after:?}"
+        );
+    }
 }

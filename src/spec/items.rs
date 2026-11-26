@@ -12,8 +12,10 @@ use crate::model::{Annotations, ItemId, Resume, Tag};
 
 /// The item overrides of one document, with where each field was written.
 ///
-/// A resume and a letter each have their own, because `[select]` and `[letter.select]` choose the document; the
-/// private fields mean the two cannot be paired by mistake.
+/// A resume and a letter each have their own, because `[select]` and `[letter.select]` choose the document. The
+/// fields are private, so a view always pairs its overrides with their own origins; which document it belongs to
+/// is the caller's to keep straight: use `ResolvedSpec::item_overrides` for a resume and
+/// `ResolvedSpec::letter_item_overrides` for a letter.
 #[derive(Debug, Clone, Copy)]
 pub struct ItemOverrides<'a> {
     overrides: &'a BTreeMap<ItemId, ItemOverride>,
@@ -28,6 +30,20 @@ impl<'a> ItemOverrides<'a> {
         Self { overrides, origins }
     }
 
+    /// The places that wrote a field of `id`, in the order they were written: a less specific file first, and within
+    /// one file by line. Not tags before priority, which would put a later line first.
+    fn written_at(&self, id: &ItemId) -> Vec<Located> {
+        let mut at: Vec<Located> = [
+            ChoiceKey::OverrideTags(id.clone()),
+            ChoiceKey::OverridePriority(id.clone()),
+        ]
+        .iter()
+        .filter_map(|key| self.origins.get(key).cloned())
+        .collect();
+        at.sort_by(|a, b| (a.path.as_ref(), a.line, a.column).cmp(&(b.path.as_ref(), b.line, b.column)));
+        at
+    }
+
     /// True when the spec changes no item.
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -39,7 +55,18 @@ impl<'a> ItemOverrides<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MissingTarget {
     pub id: ItemId,
-    /// The places that wrote the tags and the priority of this target, in file order then line order.
+    /// The places that wrote the tags and the priority of this target, in the order they were written: the less
+    /// specific file first, and within a file by line.
+    pub at: Vec<Located>,
+}
+
+/// An override that names a letter's greeting or closing wording group, which exists but is not an item a spec can
+/// change.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrameTarget {
+    pub id: ItemId,
+    /// `greeting` or `closing`.
+    pub section: &'static str,
     pub at: Vec<Located>,
 }
 
@@ -49,6 +76,22 @@ pub enum PrepareError {
     /// An override names an `&id` the document does not have. Every such target, in id order.
     #[snafu(display("{} names nothing in the content file:\n  {}", describe(missing), lines(missing)))]
     UnknownTargets { missing: Vec<MissingTarget> },
+
+    /// An override names a wording group of a letter's greeting or closing. Every such target, in id order.
+    #[snafu(display("{}", frame_lines(frames)))]
+    FrameTargets { frames: Vec<FrameTarget> },
+
+    /// Both kinds at once, so a spec with two different mistakes is told about both.
+    #[snafu(display(
+        "{}\n{} names nothing in the content file:\n  {}",
+        frame_lines(frames),
+        describe(missing),
+        lines(missing)
+    ))]
+    Targets {
+        frames: Vec<FrameTarget>,
+        missing: Vec<MissingTarget>,
+    },
 }
 
 fn describe(missing: &[MissingTarget]) -> String {
@@ -58,21 +101,45 @@ fn describe(missing: &[MissingTarget]) -> String {
     }
 }
 
+fn places(at: &[Located]) -> String {
+    at.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
+}
+
 fn lines(missing: &[MissingTarget]) -> String {
     missing
         .iter()
-        .map(|m| {
-            let at: Vec<String> = m.at.iter().map(ToString::to_string).collect();
-            format!("{}: the content has no item `&{}`", at.join(", "), m.id)
-        })
+        .map(|m| format!("{}: the content has no item `&{}`", places(&m.at), m.id))
         .collect::<Vec<_>>()
         .join("\n  ")
+}
+
+fn frame_lines(frames: &[FrameTarget]) -> String {
+    let each: Vec<String> = frames
+        .iter()
+        .map(|f| {
+            format!(
+                "{}: `{}` is a wording group of the letter's {}, which is not an item a spec can change",
+                places(&f.at),
+                f.id,
+                f.section
+            )
+        })
+        .collect();
+    format!(
+        "{}\n  (choose its wording with `pick`; only body paragraphs take overrides)",
+        each.join("\n")
+    )
 }
 
 /// A copy of `baseline` with `overrides` applied, or the targets that are not there.
 ///
 /// Every target is checked before anything is changed, so a missing one is reported even when the item it meant
 /// would have been dropped by the selection.
+///
+/// `baseline` must be a valid parse ([`crate::markdown::Parsed::valid`]), in which ids and group names are unique
+/// in one namespace. Given a best-effort model with a duplicate id, every node of that name changes, and a node
+/// with both an id and a group variant is addressed by its id. [`Session::assess_with`](crate::pipeline::Session)
+/// parses and checks first; a caller that edits the model itself must keep that invariant.
 ///
 /// # Errors
 /// [`PrepareError::UnknownTargets`] listing every override whose `&id` the baseline does not have.
@@ -96,10 +163,36 @@ pub fn prepare_letter(baseline: &LetterSource, overrides: ItemOverrides<'_>) -> 
     if overrides.is_empty() {
         return Ok(prepared);
     }
+    let frames = frame_targets(baseline, overrides);
     let mut slots = prepared.body_annotations_mut();
-    check_targets(slots.iter().map(|a| &**a), overrides)?;
+    let missing = missing_targets(slots.iter().map(|a| &**a), overrides, &frames);
+    if !frames.is_empty() || !missing.is_empty() {
+        return Err(match (frames.is_empty(), missing.is_empty()) {
+            (false, true) => PrepareError::FrameTargets { frames },
+            (true, false) => PrepareError::UnknownTargets { missing },
+            _ => PrepareError::Targets { frames, missing },
+        });
+    }
     apply(&mut slots, overrides);
     Ok(prepared)
+}
+
+/// The overrides that name a greeting or closing group, in id order.
+fn frame_targets(letter: &LetterSource, overrides: ItemOverrides<'_>) -> Vec<FrameTarget> {
+    let mut found: Vec<FrameTarget> = letter
+        .frame_groups()
+        .into_iter()
+        .filter_map(|(section, group)| {
+            let id = ItemId::try_new(group.as_ref().to_string()).ok()?;
+            overrides.overrides.contains_key(&id).then(|| FrameTarget {
+                section,
+                at: overrides.written_at(&id),
+                id,
+            })
+        })
+        .collect();
+    found.sort_by(|a, b| a.id.cmp(&b.id));
+    found
 }
 
 /// The ids an override may name: an explicit `&id`, or the group name of any variant.
@@ -116,27 +209,30 @@ fn check_targets<'a>(
     nodes: impl Iterator<Item = &'a Annotations>,
     overrides: ItemOverrides<'_>,
 ) -> Result<(), PrepareError> {
-    let present: BTreeSet<ItemId> = nodes.filter_map(name_of).collect();
-    let missing: Vec<MissingTarget> = overrides
-        .overrides
-        .keys()
-        .filter(|id| !present.contains(*id))
-        .map(|id| MissingTarget {
-            id: id.clone(),
-            at: [
-                ChoiceKey::OverrideTags(id.clone()),
-                ChoiceKey::OverridePriority(id.clone()),
-            ]
-            .iter()
-            .filter_map(|key| overrides.origins.get(key).cloned())
-            .collect(),
-        })
-        .collect();
+    let missing = missing_targets(nodes, overrides, &[]);
     if missing.is_empty() {
         Ok(())
     } else {
         UnknownTargetsSnafu { missing }.fail()
     }
+}
+
+/// The overrides whose target no node has, leaving out those already known to be frame groups, in id order.
+fn missing_targets<'a>(
+    nodes: impl Iterator<Item = &'a Annotations>,
+    overrides: ItemOverrides<'_>,
+    frames: &[FrameTarget],
+) -> Vec<MissingTarget> {
+    let present: BTreeSet<ItemId> = nodes.filter_map(name_of).collect();
+    overrides
+        .overrides
+        .keys()
+        .filter(|id| !present.contains(*id) && !frames.iter().any(|f| &f.id == *id))
+        .map(|id| MissingTarget {
+            id: id.clone(),
+            at: overrides.written_at(id),
+        })
+        .collect()
 }
 
 /// Writes each override into every node it names: the one node an `&id` marks, or every variant of a group.

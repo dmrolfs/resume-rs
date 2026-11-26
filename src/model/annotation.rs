@@ -136,6 +136,7 @@ mod tests {
             assert_ok!(Tag::try_new(good), "{good}");
             assert_ok!(GroupName::try_new(good), "{good}");
             assert_ok!(VariantName::try_new(good), "{good}");
+            assert_ok!(ItemId::try_new(good), "{good}");
         }
         for bad in [
             "", "AI", "Ai", "2ai", "-ai", "ai-", "ai--ml", "ai_ml", "ai.ml", "ai ml", "café", "#ai",
@@ -143,6 +144,7 @@ mod tests {
             assert_err!(Tag::try_new(bad), "{bad:?}");
             assert_err!(GroupName::try_new(bad), "{bad:?}");
             assert_err!(VariantName::try_new(bad), "{bad:?}");
+            assert_err!(ItemId::try_new(bad), "{bad:?}");
         }
     }
 

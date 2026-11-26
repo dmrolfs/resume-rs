@@ -113,6 +113,23 @@ pub struct LetterSource {
 }
 
 impl LetterSource {
+    /// The group names of the greeting and the closing, each with the frame it is in. A frame is not an item a
+    /// position spec can address, so a spec that names one is told that, not that it is missing.
+    #[must_use]
+    pub fn frame_groups(&self) -> Vec<(&'static str, &crate::model::GroupName)> {
+        [("greeting", &self.greeting), ("closing", &self.closing)]
+            .into_iter()
+            .filter_map(|(frame, item)| match item {
+                SourceItem::Alternates(group) => group
+                    .variants
+                    .first()
+                    .and_then(|v| v.annotations.alternate.as_ref())
+                    .map(|a| (frame, &a.group)),
+                SourceItem::Paragraph(_) => None,
+            })
+            .collect()
+    }
+
     /// The annotation of every body paragraph and every variant of a body group, in document order.
     ///
     /// A greeting or closing is a frame, not an item a position spec can address, so it is not here.

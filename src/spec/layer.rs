@@ -438,8 +438,7 @@ fn overrides(
     let key = format!("{table}.override");
     let mut out = BTreeMap::new();
     for (name, body) in raw.into_iter().flatten() {
-        let table_start = body.span().start;
-        let at = source.at(table_start);
+        let at = source.at(body.span().start);
         let Ok(id) = ItemId::try_new(name.clone()) else {
             return InvalidNameSnafu {
                 at,
@@ -460,16 +459,17 @@ fn overrides(
         }
         let tags = body
             .tags
-            .as_deref()
-            .map(|items| {
+            .as_ref()
+            .map(|written| {
+                let items = written.get_ref().as_slice();
                 let tags = list(source, &format!("{key}.{name}.tags"), NameKind::Tag, Some(items), |s| {
                     Tag::try_new(s).ok()
                 })?;
-                // `tags =` is where the whole list was written; an empty list has no item to point at.
-                let at = source.at(field_offset(&source.text, table_start, "tags"));
+                // The parser's own span of the value, so an inline table, a quoted key or a table with comments is
+                // located exactly; an empty list has no item to point at.
                 Ok::<_, SpecError>(Sourced {
                     value: tags.into_iter().map(|t| t.value).collect(),
-                    at,
+                    at: source.at(written.span().start),
                 })
             })
             .transpose()?;
@@ -481,20 +481,6 @@ fn overrides(
         out.insert(id, ItemOverrideLayer { tags, priority });
     }
     Ok(out)
-}
-
-/// Where the line that starts `field` is, searching from `from`, or `from` itself when no line does.
-fn field_offset(text: &str, from: usize, field: &str) -> usize {
-    let mut at = from;
-    for line in text[from..].split_inclusive('\n') {
-        let indent = line.len() - line.trim_start().len();
-        let rest = line.trim_start();
-        if rest.starts_with(field) && rest[field.len()..].trim_start().starts_with('=') {
-            return at + indent;
-        }
-        at += line.len();
-    }
-    from
 }
 
 fn priority_edit(source: &Source, key: &str, text: &Text) -> Result<Sourced<PriorityEdit>, SpecError> {
@@ -1174,5 +1160,58 @@ mod override_tests {
         ));
         let values = |l: &Layer| l.select.overrides[&id("a")].tags.as_ref().map(|t| t.value.clone());
         assert_eq!(values(&header), values(&inline));
+    }
+}
+
+#[cfg(test)]
+mod origin_tests {
+    use super::*;
+    use claims::{assert_ok, assert_some};
+    use pretty_assertions::assert_eq;
+
+    fn load(text: &str) -> Layer {
+        assert_ok!(Layer::from_source(
+            Kind::Spec,
+            &Source::new(PathBuf::from("f.toml"), text.to_string())
+        ))
+    }
+
+    fn tags_line(layer: &Layer, id: &str) -> usize {
+        let id = assert_ok!(ItemId::try_new(id));
+        assert_some!(layer.select.overrides[&id].tags.as_ref()).at.line
+    }
+
+    #[test]
+    fn an_inline_override_locates_its_tags_on_its_own_line_not_in_a_later_table() {
+        let text = "[build]\ncontent = \"a.md\"\n[select.override]\nmissing = { tags = [] }\n[letter]\ncontent = \"l.md\"\n[letter.select]\ntags = [\"elsewhere\"]\n";
+        assert_eq!(tags_line(&load(text), "missing"), 4);
+    }
+
+    #[test]
+    fn a_quoted_key_still_locates_the_field_it_names() {
+        let text = "[build]\ncontent = \"a.md\"\n[select.override.a]\n\"tags\" = [\"ai\"]\n[letter]\ncontent = \"l.md\"\n[letter.select]\ntags = [\"x\"]\n";
+        assert_eq!(tags_line(&load(text), "a"), 4);
+    }
+
+    #[test]
+    fn each_field_is_on_its_own_line_whichever_order_they_are_written_in() {
+        let text = "[build]\ncontent = \"a.md\"\n[select.override.a]\npriority = \"core\"\ntags = []\n";
+        let layer = load(text);
+        let a = &layer.select.overrides[&assert_ok!(ItemId::try_new("a"))];
+        assert_eq!(assert_some!(a.priority.as_ref()).at.line, 4);
+        assert_eq!(assert_some!(a.tags.as_ref()).at.line, 5);
+    }
+
+    #[test]
+    fn an_empty_tag_list_in_a_table_is_located_at_its_key() {
+        let text = "[build]\ncontent = \"a.md\"\n[select.override.a]\n\n# a note about tags = here\ntags = []\n[letter]\ncontent = \"l.md\"\n[letter.select]\ntags = [\"x\"]\n";
+        assert_eq!(tags_line(&load(text), "a"), 6);
+    }
+
+    #[test]
+    fn two_overrides_with_empty_tags_are_each_located_at_their_own_key() {
+        let text = "[build]\ncontent = \"a.md\"\n[select.override.a]\ntags = []\n[select.override.b]\ntags = []\n";
+        let layer = load(text);
+        assert_eq!((tags_line(&layer, "a"), tags_line(&layer, "b")), (4, 6));
     }
 }

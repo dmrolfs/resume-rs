@@ -374,3 +374,192 @@ fn a_tag_on_a_section_still_applies_to_its_items_after_an_item_is_cleared() {
     );
     assert!(text.contains("Plain."), "an untagged item elsewhere is kept: {text}");
 }
+
+// ---- profiles through the real loader, both documents, and flattening ---------------------------------------
+
+/// What a spec says about one item: its own tags (if said) and its priority (if said), as text.
+type Said = (Option<Vec<String>>, Option<String>);
+
+/// The override tables of a resolved spec, as a comparable map: `(document, id) -> what was said`.
+fn override_choices(spec: &resume::spec::ResolvedSpec) -> std::collections::BTreeMap<(String, String), Said> {
+    let mut out = std::collections::BTreeMap::new();
+    let mut take =
+        |document: &str,
+         overrides: &std::collections::BTreeMap<resume::model::ItemId, resume::spec::merge::ItemOverride>| {
+            for (id, o) in overrides {
+                out.insert(
+                    (document.to_string(), id.to_string()),
+                    (
+                        o.tags.as_ref().map(|t| t.iter().map(ToString::to_string).collect()),
+                        o.priority.map(|p| p.to_string()),
+                    ),
+                );
+            }
+        };
+    take("resume", &spec.choices.select.overrides);
+    if let Some(letter) = &spec.letter {
+        take("letter", &letter.choices.overrides);
+    }
+    out
+}
+
+#[test]
+fn profile_and_spec_overrides_merge_per_field_for_both_documents_and_survive_flattening() {
+    let work = Workspace::new();
+    let staged = stage_with(
+        &work,
+        "extends = [\"base\"]\n\n",
+        &format!(
+            "[select.override.gateway]\ntags = [\"data\"]\n\n[select.override.cache]\npriority = \"none\"\n\n{}",
+            letter_body("[letter.select.override.gateway]\ntags = []\n")
+        ),
+    );
+    fs::write(
+        staged.profiles.join("base.toml"),
+        "[select.override.gateway]\ntags = [\"ai\"]\npriority = \"core\"\n\n[select.override.cache]\ntags = [\"x\"]\npriority = \"core\"\n\n\
+         [letter.select.override.gateway]\ntags = [\"ai\"]\npriority = \"extra\"\n",
+    )
+    .expect("profile");
+    let spec = assert_ok!(resume::spec::resolve(&staged.spec, Some(&staged.profiles)));
+    let got = override_choices(&spec);
+    let key = |d: &str, i: &str| (d.to_string(), i.to_string());
+    // The spec wins the field it writes and leaves the others to the profile, for each target and document.
+    assert_eq!(
+        got[&key("resume", "gateway")],
+        (Some(vec!["data".into()]), Some("core".into()))
+    );
+    assert_eq!(
+        got[&key("resume", "cache")],
+        (Some(vec!["x".into()]), Some("none".into()))
+    );
+    assert_eq!(got[&key("letter", "gateway")], (Some(vec![]), Some("extra".into())));
+    // Each field keeps the file that decided it.
+    let file = |k: resume::spec::ChoiceKey| spec.origin_of(&k).map(|l| l.path.display().to_string());
+    let id = |n: &str| assert_ok!(resume::model::ItemId::try_new(n));
+    assert!(file(resume::spec::ChoiceKey::OverrideTags(id("gateway"))).is_some_and(|f| f.ends_with("acme.toml")));
+    assert!(file(resume::spec::ChoiceKey::OverridePriority(id("gateway"))).is_some_and(|f| f.ends_with("base.toml")));
+    // Flattening and resolving again gives the same choices: nothing was dropped on the way through the printer.
+    let flat = work.path().join("positions/flat.toml");
+    fs::write(&flat, spec.to_toml()).expect("flat");
+    let again = assert_ok!(resume::spec::resolve(&flat, None));
+    assert_eq!(
+        override_choices(&again),
+        got,
+        "the printed spec means what the original meant"
+    );
+}
+
+#[test]
+fn an_inherited_letter_override_is_dropped_by_nothing_between_resolving_and_printing() {
+    let work = Workspace::new();
+    let staged = stage_with(&work, "extends = [\"base\"]\n\n", &letter_body(""));
+    fs::write(
+        staged.profiles.join("base.toml"),
+        "[letter.select.override.opening]\nprio\
+         rity = \"core\"\n",
+    )
+    .expect("profile");
+    let spec = assert_ok!(resume::spec::resolve(&staged.spec, Some(&staged.profiles)));
+    assert!(
+        spec.to_toml().contains("[letter.select.override.opening]"),
+        "{}",
+        spec.to_toml()
+    );
+}
+
+#[test]
+fn a_group_override_with_a_pick_changes_every_variant_and_the_pick_still_chooses_the_wording() {
+    let work = Workspace::new();
+    let baseline = "# Ada Lovelace\n\nLondon · ada@example.com\n\n## S\n\n- Wording default. <!-- =g.default #ai -->\n- Wording short. <!-- =g.short #ai -->\n- Other. <!-- #data -->\n";
+    let staged = stage(
+        &work,
+        "[select]\ntags = [\"data\"]\npick = { g = \"short\" }\n\n[select.override.g]\ntags = [\"data\"]\n",
+    );
+    fs::write(work.path().join("baseline.md"), baseline).expect("baseline");
+    let run = build_spec(&work, &staged.spec, &[]);
+    assert_eq!(run.outcome, Outcome::Success, "{}", run.stderr);
+    let text = pdf_text(&work);
+    assert!(
+        text.contains("Wording short"),
+        "the pick still chooses the wording, now kept by the group's new tag: {text}"
+    );
+    assert!(!text.contains("Wording default"), "{text}");
+}
+
+#[test]
+fn a_picked_draft_wording_is_still_an_error_when_the_group_is_overridden() {
+    let work = Workspace::new();
+    let baseline = "# Ada Lovelace\n\nLondon · ada@example.com\n\n## S\n\n- Wording default. <!-- =g.default -->\n- Wording short. <!-- =g.short @draft -->\n";
+    let staged = stage(
+        &work,
+        "[select]\npick = { g = \"short\" }\n\n[select.override.g]\npriority = \"core\"\n",
+    );
+    fs::write(work.path().join("baseline.md"), baseline).expect("baseline");
+    let run = build_spec(&work, &staged.spec, &[]);
+    assert_eq!(run.outcome, Outcome::Failure, "{}", run.stderr);
+    assert!(run.stderr.contains("draft"), "{}", run.stderr);
+    assert!(!work.out().join("acme.pdf").exists());
+}
+
+#[test]
+fn an_inherited_promotion_tag_follows_an_overridden_container() {
+    // Items inherit the section's `leadership`, so with it a promoted item rises above an unpromoted one in its own
+    // list. Clearing the section's own tags removes what they inherited: nothing rises, and the spec is told that
+    // no node carries the tag any more.
+    let baseline = "# Ada Lovelace\n\nLondon · ada@example.com\n\n## Skills <!-- &skills #leadership -->\n\n- First item.\n- Second item. <!-- #leadership -->\n";
+    let with_tag = Workspace::new();
+    let staged = stage(&with_tag, "[select]\npromote = [\"leadership\"]\n");
+    fs::write(with_tag.path().join("baseline.md"), baseline).expect("baseline");
+    let kept = build_spec(&with_tag, &staged.spec, &[]);
+    assert_eq!(kept.outcome, Outcome::Success, "{}", kept.stderr);
+    assert!(
+        !kept.stderr.contains("unknown-tag"),
+        "the tag is carried: {}",
+        kept.stderr
+    );
+
+    let cleared = Workspace::new();
+    let staged = stage(
+        &cleared,
+        "[select]\npromote = [\"leadership\"]\n\n[select.override.skills]\ntags = []\n\n[select.override.second]\ntags = []\n",
+    );
+    fs::write(
+        cleared.path().join("baseline.md"),
+        baseline.replace("<!-- #leadership -->\n", "<!-- &second #leadership -->\n"),
+    )
+    .expect("baseline");
+    let run = build_spec(&cleared, &staged.spec, &[]);
+    assert_eq!(run.outcome, Outcome::Success, "{}", run.stderr);
+    assert!(
+        run.stderr.contains("unknown-tag") && run.stderr.contains("leadership"),
+        "with every carrier cleared the promote tag is unknown: {}",
+        run.stderr
+    );
+}
+
+#[test]
+fn an_id_only_letter_builds_the_same_text_as_one_with_no_ids_and_a_no_op_override_changes_nothing() {
+    let plain = Workspace::new();
+    let named = Workspace::new();
+    let sp = stage(&plain, &letter_body(""));
+    let sn = stage(
+        &named,
+        &letter_body("[letter.select.override.gateway]\ntags = [\"ai\"]\npriority = \"extra\"\n"),
+    );
+    fs::write(
+        plain.path().join("letter.md"),
+        LETTER
+            .replace("&gateway ", "")
+            .replace("&cache ", "")
+            .replace("&mentoring ", ""),
+    )
+    .expect("plain letter");
+    let a = letter_spec(&plain, &sp.spec, &[]);
+    let b = letter_spec(&named, &sn.spec, &[]);
+    assert_eq!(a.outcome, Outcome::Success, "{}", a.stderr);
+    assert_eq!(b.outcome, Outcome::Success, "{}", b.stderr);
+    assert_eq!(
+        a.stdout, b.stdout,
+        "ids and an override that restates the item add nothing to the letter"
+    );
+}
