@@ -2,8 +2,9 @@
 name = "workbench"
 version = "0.1.0"
 edition = "2024"
-# gpui-pre 0.3.14 does not build on 1.94 or older (measured in rsm-yjj). The `resume` package keeps its own, lower floor.
-rust-version = "1.95"
+# gpui-pre-macos 0.3.14 uses `Option::map_or_default`, stable in 1.98; 1.97.1 fails, 1.98 and 1.99 build (measured in
+# rsm-yjj.1 on macOS, not yet on Windows). The `resume` package keeps its own, lower floor.
+rust-version = "1.98"
 authors = ["Damon Rolfs <drolfs@gmail.com>"]
 description = "Desktop app to view resume content, Typst styles, and position specs, and to build PDFs from them."
 license = "MIT"
@@ -17,5 +18,21 @@ workspace = true
 name = "resume-workbench"
 path = "src/main.rs"
 
+# Throwaway spike for rsm-yjj.1; deleted or replaced by the real shell in rsm-yjj.6.
+[[bin]]
+name = "spike"
+path = "src/bin/spike.rs"
+
 # Dependencies are added by the task that first uses them; the `unused_dependencies` lint enforces it.
 [dependencies]
+resume = { path = "../.." }
+# Pinned exactly: gpui-kit 0.11.0 pins the matching gpui-pre 0.3.14 and re-exports GPUI, base, component and the icons
+# (rsm-yjj decisions D1). It also supplies the platform layer, which gpui-pre alone does not.
+gpui-kit = { version = "=0.11.0", features = ["tree-sitter", "tree-sitter-markdown"] }
+lsp-types = "0.97"
+opener = "0.9"
+typst-ide = "=0.15.1"
+typst-syntax = "=0.15.1"
+anyhow = "1"
+typst = "=0.15.1"
+typst-layout = "=0.15.1"

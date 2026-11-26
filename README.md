@@ -198,7 +198,7 @@ Common recipes (run `just` for the full list):
 | `just audit` | Check dependencies for known vulnerabilities (needs `cargo-audit`) |
 | `just verify` | Everything to run before pushing, including both cross-builds (macOS only) |
 
-The repository is a Cargo workspace. `resume` (this crate, the CLI and library) is the root package, so `cargo build`, `cargo install --path .` and every recipe above still build it alone. The desktop app lives in `crates/workbench` and is built with `cargo build -p workbench`; it needs Rust 1.95 or later, while `resume` keeps 1.92. `just check` covers both, and `just msrv` builds each at its own minimum version.
+The repository is a Cargo workspace. `resume` (this crate, the CLI and library) is the root package, so `cargo build`, `cargo install --path .` and every recipe above still build it alone. The desktop app lives in `crates/workbench` and is built with `cargo build -p workbench`; it needs Rust 1.98 or later, while `resume` keeps 1.92. `just check` covers both, and `just msrv` builds each at its own minimum version.
 
 `just check` needs `cargo-machete` (`cargo install cargo-machete --locked --version 0.9.2`, the version CI pins; without it the gate fails with cargo's "no such command: `machete`"); dependencies are added when first used, and the gate enforces it (see Dependency hygiene in `ref/Resume-RS-Architecture.md`). Recipes that need an optional tool print the `cargo install` command if it is missing. The recipes without a
 platform attribute also run on Windows, where `just` uses PowerShell, so they must stay plain commands:

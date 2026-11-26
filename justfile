@@ -32,15 +32,22 @@ fmt:
 fmt-fix:
     cargo fmt --all
 
-[doc('Lint all targets of every workspace member; any warning fails')]
+# PER-PACKAGE RULE: the gate runs each package on its own, never with `--workspace`. With `--workspace` cargo merges
+# the features of every member, and the app turns on `serde_json/preserve_order` (through GPUI), which changes the
+# key order of the CLI's JSON output and fails a `resume` test that passes in the shipped build. Every package needs
+# its own line in each of these recipes; a test in tests/justfile_test.rs fails when one is missing.
+
+[doc('Lint all targets of each package on its own; any warning fails')]
 [group('gate')]
 clippy:
-    cargo clippy --workspace --all-targets -- -D warnings
+    cargo clippy --package resume --all-targets -- -D warnings
+    cargo clippy --package workbench --all-targets -- -D warnings
 
-[doc('Run all tests of every workspace member, continuing past failures')]
+[doc('Run the tests of each package on its own, continuing past failures within a package')]
 [group('gate')]
 test:
-    cargo test --workspace --no-fail-fast
+    cargo test --package resume --no-fail-fast
+    cargo test --package workbench --no-fail-fast
 
 # Needs cargo-machete (cargo install cargo-machete --locked --version 0.9.2, the version CI pins). Two checks.
 # First, cargo's `unused_dependencies` lint on the library and binary alone: clippy's all-targets run compiles the
@@ -51,7 +58,8 @@ test:
 [doc('Fail on a dependency nothing uses: the lint on the library and binary, then cargo-machete')]
 [group('gate')]
 unused-deps:
-    cargo check --workspace --lib --bins
+    cargo check --package resume --lib --bins
+    cargo check --package workbench --bins
     cargo machete --with-metadata
 
 [doc('The quality gate: formatting, lints, unused dependencies, and tests')]

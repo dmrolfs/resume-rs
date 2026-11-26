@@ -323,7 +323,7 @@ jobs:
             macOS-LF=pdf-cli/macos/out-lf/Application.txt macOS-CRLF=pdf-cli/macos/out-crlf/Application.txt \
             Windows-LF=pdf-cli/windows/out-lf/Application.txt Windows-CRLF=pdf-cli/windows/out-crlf/Application.txt
 
-  # Each package keeps its own minimum Rust version: the CLI at 1.92, the desktop app at 1.95 (gpui-pre needs it).
+  # Each package keeps its own minimum Rust version: the CLI at 1.92, the desktop app at 1.98 (gpui-pre-macos needs it).
   # `just check` runs on the newest stable and cannot see a use of a newer feature, so this builds each at its floor.
   msrv:
     name: minimum Rust versions
@@ -338,7 +338,7 @@ jobs:
       - name: Install the floor toolchains
         run: |
           rustup toolchain install 1.92 --profile minimal
-          rustup toolchain install 1.95 --profile minimal
+          rustup toolchain install 1.98 --profile minimal
           rustup default stable
 
       - name: Cache cargo registry and target

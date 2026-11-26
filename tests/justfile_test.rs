@@ -196,7 +196,7 @@ fn the_unused_dependency_check_is_a_plain_cargo_machete_run() {
     assert!(body.contains("--with-metadata"), "{body}");
     // Clippy's all-targets run builds the test units, so a normal dependency used only by `#[cfg(test)]` code
     // looks used there. Checking the library and binary alone is what shows it is not.
-    assert!(body.contains("cargo check --workspace --lib --bins"), "{body}");
+    assert!(body.contains("cargo check --package resume --lib --bins"), "{body}");
 }
 
 /// The command lines of a recipe, one `Vec` of words each. A recipe body in the JSON dump is a list of lines, each a
@@ -225,29 +225,54 @@ fn has_command(recipe: &Value, words: &[&str]) -> bool {
         .any(|line| words.iter().all(|w| line.iter().any(|x| x == w)))
 }
 
+/// The names of the packages in this workspace, as `cargo metadata` reads them.
+fn workspace_package_names() -> Vec<String> {
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let output = Command::new(cargo)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .args(["metadata", "--no-deps", "--format-version", "1", "--locked"])
+        .output()
+        .expect("cargo runs");
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let metadata: Value = serde_json::from_slice(&output.stdout).expect("cargo metadata prints JSON");
+    let mut names: Vec<String> = metadata["packages"]
+        .as_array()
+        .expect("packages is a list")
+        .iter()
+        .filter_map(|p| p["name"].as_str().map(str::to_string))
+        .collect();
+    names.sort();
+    names
+}
+
 #[test]
-fn the_gate_covers_every_workspace_member() {
-    // The desktop app is a workspace member, not the root package, so a plain `cargo test` or `cargo clippy` would
-    // skip it. Word order does not matter here, and a flag such as `--exclude` would fail the check.
+fn the_gate_runs_each_package_on_its_own() {
+    // `--workspace` merges the features of every member. The app turns on `serde_json/preserve_order` through GPUI,
+    // which reorders the CLI's JSON keys and fails a `resume` test that passes in the shipped build. So each package
+    // is built and tested alone, and a new package fails here until its lines are added.
     let dumped = dump(&crate_path("justfile"));
     for (recipe, words) in [
-        ("clippy", &["cargo", "clippy", "--workspace", "--all-targets"][..]),
-        ("test", &["cargo", "test", "--workspace"][..]),
-        ("unused-deps", &["cargo", "check", "--workspace", "--lib", "--bins"][..]),
+        ("clippy", &["cargo", "clippy", "--all-targets"][..]),
+        ("test", &["cargo", "test"][..]),
+        ("unused-deps", &["cargo", "check"][..]),
     ] {
         let found = &dumped["recipes"][recipe];
+        let lines = command_lines(found);
+        for package in workspace_package_names() {
+            assert!(
+                lines.iter().any(|line| {
+                    words.iter().all(|w| line.iter().any(|x| x == w))
+                        && line.windows(2).any(|pair| pair[0] == "--package" && pair[1] == package)
+                }),
+                "`{recipe}` must run {words:?} with `--package {package}`: {lines:?}"
+            );
+        }
         assert!(
-            has_command(found, words),
-            "`{recipe}` must run {words:?}: {:?}",
-            command_lines(found)
-        );
-        assert!(
-            !command_lines(found)
+            !lines
                 .iter()
                 .flatten()
-                .any(|w| w == "--exclude" || w == "--package" || w == "-p"),
-            "`{recipe}` must cover every member: {:?}",
-            command_lines(found)
+                .any(|w| w == "--workspace" || w == "--all" || w == "--exclude"),
+            "`{recipe}` must not merge the members' features: {lines:?}"
         );
     }
 }

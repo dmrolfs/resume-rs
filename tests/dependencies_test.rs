@@ -143,9 +143,9 @@ fn lists_resume_as_dependent(inverted_tree: &str) -> bool {
     })
 }
 
-/// The gate builds the whole workspace at once, so a feature the app turns on for a shared crate (for example
-/// `typst-kit/system-downloader`, which pulls in `ureq`) reaches `resume` in `just test`. It does not reach the shipped
-/// binary, which `just release` builds alone, but a test run against a different `resume` proves less. Fail on it.
+/// The gate runs each package alone, so this no longer protects `just check`. It still protects `cargo test --workspace`
+/// run by hand or from an editor: a network feature the app switches on for a crate `resume` shares (for example
+/// `typst-kit/system-downloader`, which pulls in `ureq`) would reach `resume` there. Fail on it.
 #[test]
 fn the_app_does_not_switch_on_a_network_crate_inside_resume() {
     let leaks: Vec<&str> = NETWORK_CRATES
@@ -222,9 +222,9 @@ fn the_app_is_a_workspace_member_beside_the_resume_package() {
 
 #[test]
 fn the_cli_keeps_its_lower_rust_floor_than_the_app() {
-    // gpui-pre 0.3.14 needs Rust 1.95 (measured in rsm-yjj); the CLI must not be dragged up with it.
+    // gpui-pre-macos 0.3.14 needs Rust 1.98 (measured in rsm-yjj.1); the CLI must not be dragged up with it.
     assert_eq!(rust_version_of("resume").as_deref(), Some("1.92"));
-    assert_eq!(rust_version_of("workbench").as_deref(), Some("1.95"));
+    assert_eq!(rust_version_of("workbench").as_deref(), Some("1.98"));
 }
 
 #[test]
