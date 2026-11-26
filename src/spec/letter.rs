@@ -202,6 +202,12 @@ impl ResolvedLetter {
         }
     }
 
+    /// The letter's per-item overrides, to apply to the parsed letter before selecting from it.
+    #[must_use]
+    pub fn item_overrides(&self) -> super::items::ItemOverrides<'_> {
+        super::items::ItemOverrides::new(&self.choices.overrides, &self.origins)
+    }
+
     /// The file and place that decided `key` of `letter.select`, if anything did.
     #[must_use]
     pub fn origin_of(&self, key: &ChoiceKey) -> Option<&Located> {

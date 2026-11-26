@@ -92,6 +92,18 @@ impl ResolvedSpec {
         }
     }
 
+    /// The resume's per-item overrides, to apply to the parsed baseline before selecting from it.
+    #[must_use]
+    pub fn item_overrides(&self) -> super::items::ItemOverrides<'_> {
+        super::items::ItemOverrides::new(&self.choices.select.overrides, &self.origins)
+    }
+
+    /// The letter's per-item overrides; `None` for a spec with no `[letter]`.
+    #[must_use]
+    pub fn letter_item_overrides(&self) -> Option<super::items::ItemOverrides<'_>> {
+        self.letter.as_ref().map(ResolvedLetter::item_overrides)
+    }
+
     /// Every choice and the file and place that decided it, in key order.
     pub fn origins(&self) -> impl Iterator<Item = (&ChoiceKey, &Located)> {
         self.origins.iter()

@@ -112,6 +112,22 @@ pub struct LetterSource {
     pub closing: SourceItem,
 }
 
+impl LetterSource {
+    /// The annotation of every body paragraph and every variant of a body group, in document order.
+    ///
+    /// A greeting or closing is a frame, not an item a position spec can address, so it is not here.
+    pub(crate) fn body_annotations_mut(&mut self) -> Vec<&mut Annotations> {
+        self.body
+            .iter_mut()
+            .flat_map(|item| match item {
+                SourceItem::Paragraph(item) => std::slice::from_mut(item).iter_mut(),
+                SourceItem::Alternates(group) => group.variants.iter_mut(),
+            })
+            .map(|item| &mut item.annotations)
+            .collect()
+    }
+}
+
 /// A letter with annotations cannot become a [`SelectedLetter`] until selection has chosen its paragraphs.
 #[derive(Debug, Clone, PartialEq, Eq, Snafu)]
 #[snafu(display("the letter has annotations, so selection must choose its paragraphs first"))]

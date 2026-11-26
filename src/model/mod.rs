@@ -277,8 +277,6 @@ impl Resume {
     ///
     /// A role with no blurb has no blurb node, so it gives no blurb slot: a slot there would shift every address
     /// after it. This is how a position spec's changes reach a copy of the baseline.
-    // Used by preparation in the next step; until then only its tests call it.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn node_annotations_mut(&mut self) -> Vec<&mut Annotations> {
         let mut out = Vec::new();
         for section in &mut self.sections {

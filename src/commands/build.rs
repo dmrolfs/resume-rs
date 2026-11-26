@@ -324,9 +324,10 @@ impl<'a> Job<'a> {
         let text = self.read_content(input)?;
         let no_names = NameOrigins::default();
         let names = self.spec.as_ref().map_or(&no_names, |spec| &spec.names);
+        let overrides = self.spec.as_ref().map(|spec| spec.resolved.item_overrides());
         let assessment = self
             .session
-            .assess_with(file, &text, &self.render, &self.selection, names);
+            .assess_with(file, &text, &self.render, &self.selection, names, overrides);
         let mut sources = out.sources();
         sources.insert(file, &text);
         let parsed = &assessment.parsed;
@@ -447,10 +448,11 @@ impl<'a> Job<'a> {
     fn summarize(&self, assessment: &Assessment) -> (Option<SelectionSummary>, Option<Error>) {
         let mut summary = assessment.selected.as_ref().map(|s| s.summary.clone());
         let mut core_error = None;
-        if let (Some(summary), Some(baseline)) = (summary.as_mut(), assessment.parsed.valid())
+        // The prepared copy, not the parse: the core-only count must see the same effective priorities the build did.
+        if let (Some(summary), Some(prepared)) = (summary.as_mut(), assessment.prepared.as_ref())
             && !summary.is_silent()
         {
-            summary.core = Some(match self.session.core_pages(baseline, &self.selection, &self.render) {
+            summary.core = Some(match self.session.core_pages(prepared, &self.selection, &self.render) {
                 Ok(core) => core,
                 Err(error) => {
                     core_error = Some(error);

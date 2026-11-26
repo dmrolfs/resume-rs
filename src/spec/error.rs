@@ -358,6 +358,10 @@ pub enum SpecError {
     ))]
     UnknownPicks { problems: Vec<PickProblem> },
 
+    /// A per-item override names an `&id` the content does not have.
+    #[snafu(display("{source}"))]
+    PrepareItems { source: Box<super::items::PrepareError> },
+
     #[snafu(display("{at}: `extends` nests more than {MAX_DEPTH} levels deep"))]
     TooDeep { at: Located },
 
@@ -382,6 +386,9 @@ impl SpecError {
             Self::ScopeConflict { .. } => Some("set `core-only = false` in the more specific file, or remove the tags"),
             Self::ProfileNameCase { .. } => Some("a profile name is the file name without `.toml`, in lowercase"),
             Self::UnknownPicks { .. } => Some("fix the name in the profile or spec that wrote the pick"),
+            Self::PrepareItems { .. } => Some(
+                "add `&id` to the item in the content file, or fix the id in the profile or spec that wrote the override",
+            ),
             _ => None,
         }
     }

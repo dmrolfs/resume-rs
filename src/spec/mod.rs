@@ -9,6 +9,7 @@
 mod adapt;
 pub mod chain;
 pub mod error;
+pub mod items;
 pub mod layer;
 pub mod letter;
 pub mod merge;

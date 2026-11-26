@@ -273,6 +273,7 @@ fn prepare(
         out.line("error: no letter printed");
         return Err(CommandFailure::Findings);
     };
+    let source = prepare_items(source, plan, out)?;
     let selected = select_letter(&source, plan, &text, format, out)?;
     let letter = resolve(selected, &plan.text.fields, file).map_err(|findings| {
         out.diagnostics(&sources, &findings.iter().collect::<Vec<_>>());
@@ -300,6 +301,31 @@ fn prepare(
         return Err(CommandFailure::Findings);
     }
     Ok((letter, plain))
+}
+
+/// The letter with a spec's per-item changes applied, which selection, its warnings and every output read. A target
+/// the letter lacks is a mistake in the file that wrote it, found before anything is selected or printed.
+fn prepare_items(
+    source: crate::letter::LetterSource,
+    plan: &LetterPlan,
+    out: &mut Reporter<'_, '_>,
+) -> Result<crate::letter::LetterSource, CommandFailure> {
+    let Some(overrides) = plan
+        .spec
+        .as_ref()
+        .and_then(|spec| spec.resolved.letter_item_overrides())
+    else {
+        return Ok(source);
+    };
+    crate::spec::items::prepare_letter(&source, overrides).map_err(|source| {
+        out.error(&Error::Spec {
+            source: Box::new(crate::spec::SpecError::PrepareItems {
+                source: Box::new(source),
+            }),
+        });
+        out.line("error: no letter printed");
+        CommandFailure::Findings
+    })
 }
 
 /// A pick that names nothing in the letter is a mistake in the spec that wrote it, and only a spec makes picks.
