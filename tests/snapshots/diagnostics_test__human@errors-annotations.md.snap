@@ -108,4 +108,28 @@ error[alternate-group-reused]: a second group is named `reused`
    |
    = help: a position spec picks a wording by group name, so each group needs its own name; rename one
 
-13 errors, 0 warnings
+error[item-id-reused]: the name `named` is already used by an item or a group in this document
+   --> errors-annotations.md:47:16
+   |
+47 | - Named again. <!-- &named -->
+   |                ^^^^^^^^^^^^^^^
+   |
+   = help: ids and group names share one set of names; the first is on line 46, so rename one
+
+error[item-id-on-alternate]: `&worded` is on a variant of a group, which is addressed by its group name
+   --> errors-annotations.md:48:25
+   |
+48 | - A wording with an id. <!-- =worded.default &worded -->
+   |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: remove the `&id`; a position spec addresses the whole group by its group name
+
+error[item-id-reused]: the name `reused` is already used by an item or a group in this document
+   --> errors-annotations.md:50:31
+   |
+50 | - An id that is a group name. <!-- &reused -->
+   |                               ^^^^^^^^^^^^^^^^
+   |
+   = help: ids and group names share one set of names; the first is on line 39, so rename one
+
+16 errors, 0 warnings

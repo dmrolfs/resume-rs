@@ -8,7 +8,7 @@ pub mod text;
 
 use serde::Serialize;
 
-pub use self::annotation::{Alternate, Annotations, GroupName, Priority, Status, Tag, VariantName};
+pub use self::annotation::{Alternate, Annotations, GroupName, ItemId, Priority, Status, Tag, VariantName};
 pub use self::period::{PartialDate, Period, PeriodEnd, Season, Year};
 pub use self::text::{Company, EraName, LinkUrl, Name, SectionTitle, StyleName, Title};
 
@@ -409,6 +409,7 @@ mod tests {
                 group: assert_ok!(GroupName::try_new("gateway")),
                 variant: assert_ok!(VariantName::try_new("short")),
             }),
+            id: Some(Box::new(assert_ok!(ItemId::try_new("gateway")))),
         };
         let plain = annotate_everything(sample(), &Annotations::default());
         let annotated = annotate_everything(sample(), &annotations);

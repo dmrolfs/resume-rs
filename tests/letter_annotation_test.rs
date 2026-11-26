@@ -785,3 +785,82 @@ fn each_hidden_comment_block_is_judged_on_its_own_and_an_empty_comment_hides_not
         }
     }
 }
+
+// ---- `&id` item names in a letter (rsm-yjj.4) ------------------------------------------------------------
+
+fn id_of(item: &SourceItem) -> Option<String> {
+    variants(item)
+        .first()
+        .and_then(|v| v.annotations.id.as_ref().map(ToString::to_string))
+}
+
+#[test]
+fn a_body_paragraph_takes_an_id_trailing_or_above() {
+    let source = valid(&body(
+        "One. <!-- &opening @core -->\n\n<!-- &evidence #ai -->\nTwo.\n\nThree.",
+    ));
+    let ids: Vec<Option<String>> = source.body.iter().map(id_of).collect();
+    assert_eq!(ids, [Some("opening".to_string()), Some("evidence".to_string()), None]);
+}
+
+#[test]
+fn an_id_is_refused_on_the_greeting_and_the_closing() {
+    for (greeting, closing) in [
+        ("Hi. <!-- &hello -->", "Bye."),
+        ("<!-- &hello -->\nHi.", "Bye."),
+        ("Hi.", "Bye. <!-- &bye -->"),
+        ("Hi.", "<!-- &bye -->\nBye."),
+    ] {
+        let input = letter(greeting, "Body.", closing);
+        only_code(&input, "annotation-misplaced");
+    }
+}
+
+#[test]
+fn an_id_may_not_repeat_in_one_letter() {
+    only_code(&body("One. <!-- &same -->\n\nTwo. <!-- &same -->"), "item-id-reused");
+}
+
+#[test]
+fn an_id_may_not_also_be_a_group_name_even_when_the_group_is_a_frame_group() {
+    only_code(
+        &letter(
+            "Hi. <!-- =gateway.default -->\n\nHello. <!-- =gateway.short -->",
+            "Body. <!-- &gateway -->",
+            "Bye.",
+        ),
+        "item-id-reused",
+    );
+}
+
+#[test]
+fn an_id_on_a_body_variant_is_refused() {
+    only_code(
+        &body("One. <!-- =x.default &x -->\n\nTwo. <!-- =x.short -->"),
+        "item-id-on-alternate",
+    );
+}
+
+#[test]
+fn a_letter_and_a_resume_may_use_the_same_id() {
+    // Separate documents, separate namespaces: `[select]` and `[letter.select]` choose the document.
+    valid(&body("One. <!-- &opening -->"));
+    let resume = resume::markdown::parse("r.md", "# Ada\n\nLondon · a@b.co\n\n## S\n\n- A. <!-- &opening -->\n");
+    assert!(resume.valid().is_some());
+}
+
+#[test]
+fn an_id_adds_nothing_to_the_text_beyond_what_any_trailing_annotation_does() {
+    // A trailing comment leaves the space before it in the text, for every annotation kind; the id is no different.
+    let with_tag = valid(&body("One. <!-- #a -->\n\nTwo. <!-- #b -->"));
+    let with_id = valid(&body("One. <!-- &a -->\n\nTwo. <!-- &b -->"));
+    let text = |source: &LetterSource| source.body.iter().flat_map(variants).map(text_of).collect::<Vec<_>>();
+    assert_eq!(text(&with_tag), text(&with_id));
+    let above = valid(&body("<!-- &a -->\nOne.\n\n<!-- &b -->\nTwo."));
+    let plain = valid(&body("One.\n\nTwo."));
+    assert_eq!(
+        text(&plain),
+        text(&above),
+        "an id on the line above leaves the text exactly as it was"
+    );
+}

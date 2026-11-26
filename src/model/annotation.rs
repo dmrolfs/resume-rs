@@ -61,6 +61,16 @@ impl VariantName {
     }
 }
 
+/// The name of one item, the `gateway` of `&gateway`.
+///
+/// A position spec addresses an item by this name to change its tags or priority for one application. It shares the
+/// document's one namespace with group names, so `&gateway` and `=gateway.short` cannot both appear.
+#[nutype(
+    validate(len_char_max = 40, regex = "^[a-z](-?[a-z0-9])*$"),
+    derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Display, AsRef, TryFrom)
+)]
+pub struct ItemId(String);
+
 /// One wording of a group: `=group.variant`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Alternate {
@@ -75,6 +85,9 @@ pub struct Annotations {
     pub status: Option<Status>,
     pub tags: BTreeSet<Tag>,
     pub alternate: Option<Alternate>,
+    /// The name a spec addresses this item by; never part of what a style sees. Boxed: most nodes have none, and a
+    /// name inline would make every node, and so every `Block::Role`, larger.
+    pub id: Option<Box<ItemId>>,
 }
 
 impl Annotations {

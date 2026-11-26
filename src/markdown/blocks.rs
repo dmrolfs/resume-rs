@@ -272,6 +272,7 @@ fn walk_sections(blocks: &[BlockNode], above: &mut [Option<Marked>], src: &Sourc
         sections: Vec::new(),
         outline: Vec::new(),
         items: Items::default(),
+        names: Names::default(),
         ranges: Vec::new(),
     };
     for (index, (block, next)) in blocks.iter().zip(next).enumerate() {
@@ -286,6 +287,7 @@ fn walk_sections(blocks: &[BlockNode], above: &mut [Option<Marked>], src: &Sourc
         walker.block(block, next.map(|index| &blocks[index]), marked, continues, src, sink);
     }
     walker.close_section(sink);
+    annotation::check_names(&walker.names.0, src, sink);
     let groups = annotation::group(&walker.items.0, sink);
     (walker.sections, walker.outline, groups, walker.ranges)
 }
@@ -319,6 +321,34 @@ impl Items {
     }
 }
 
+/// Every annotated node of the document in reading order, for the one-namespace check on ids and group names.
+#[derive(Default)]
+struct Names(Vec<annotation::Named>);
+
+impl Names {
+    /// [`Self::note`] for a node whose annotation, if any, has not been taken apart yet.
+    fn note_marked(&mut self, marked: &Option<Marked>) {
+        if let Some(marked) = marked {
+            self.note(&marked.annotations, &marked.range);
+        }
+    }
+
+    fn append(&mut self, other: Self) {
+        self.0.extend(other.0);
+    }
+
+    /// Records a node's declarations; `range` is its annotation comment. A node with none adds nothing.
+    fn note(&mut self, annotations: &Annotations, range: &Range<usize>) {
+        if annotations.id.is_some() || annotations.alternate.is_some() {
+            self.0.push(annotation::Named {
+                id: annotations.id.as_deref().cloned(),
+                alternate: annotations.alternate.as_ref().map(|a| a.group.clone()),
+                range: range.clone(),
+            });
+        }
+    }
+}
+
 /// For each block, the index of the next block that is not a comment, computed in one backward pass.
 ///
 /// Looking ahead per block would rescan a whole run of comments for every one of them: quadratic in
@@ -340,6 +370,7 @@ struct Walker {
     sections: Vec<Section>,
     outline: Vec<SectionOutline>,
     items: Items,
+    names: Names,
     /// The source range of each node of the kept sections, in model order.
     ranges: Vec<Range<usize>>,
 }
@@ -436,6 +467,7 @@ impl Walker {
     fn close_section(&mut self, sink: &mut Sink<'_>) {
         let Some(mut builder) = self.current.take() else { return };
         self.items.append(std::mem::take(&mut builder.items));
+        self.names.append(std::mem::take(&mut builder.names));
         if let Some((section, outline, ranges)) = builder.finish(sink) {
             self.sections.push(section);
             self.outline.push(outline);
@@ -474,6 +506,7 @@ struct SectionBuilder {
     order: Vec<RoleKey>,
     /// Where the section's heading text is, and what the section holds outside roles, for the outline.
     heading: Range<usize>,
+    names: Names,
     /// The section's heading, then each node of `blocks` in model order.
     ranges: Vec<Range<usize>>,
     prose: Vec<Located>,
@@ -486,6 +519,8 @@ impl SectionBuilder {
         let trailing = annotation::trailing(&heading.content, sink);
         let mut marked = annotation::combine(above, trailing, sink);
         annotation::forbid_alternate(&mut marked, "section heading", sink);
+        let mut names = Names::default();
+        names.note_marked(&marked);
         let text = heading_text(heading, sink);
         let title = match SectionTitle::try_new(text) {
             Ok(title) => Some(title),
@@ -506,6 +541,7 @@ impl SectionBuilder {
             role: None,
             order: Vec::new(),
             heading: role::content_range(heading),
+            names,
             ranges: vec![heading.range.clone()],
             prose: Vec::new(),
             bullets: Vec::new(),
@@ -518,6 +554,7 @@ impl SectionBuilder {
         let trailing = annotation::trailing(&heading.content, sink);
         let mut marked = annotation::combine(above, trailing, sink);
         annotation::forbid_alternate(&mut marked, "role line", sink);
+        self.names.note_marked(&marked);
         let head = role::role_line(heading, src, sink);
         self.role = Some(RoleBuilder {
             line: heading.range.clone(),
@@ -588,9 +625,13 @@ impl SectionBuilder {
         check_heading_marker(paragraph, src, sink);
         let trailing = annotation::trailing(&paragraph.content, sink);
         let mut marked = annotation::combine(above, trailing, sink);
-        match (role::era_line(paragraph, src, sink), self.role.as_mut()) {
+        let era = role::era_line(paragraph, src, sink);
+        if matches!((&era, &self.role), (EraCheck::Era(_), Some(_))) {
+            annotation::forbid_alternate(&mut marked, "era line", sink);
+            self.names.note_marked(&marked);
+        }
+        match (era, self.role.as_mut()) {
             (EraCheck::Era(head), Some(role)) => {
-                annotation::forbid_alternate(&mut marked, "era line", sink);
                 role.start_era(paragraph.range.clone(), head, annotation::annotations_of(marked));
                 self.boundary(paragraph.range.clone());
             }
@@ -620,6 +661,7 @@ impl SectionBuilder {
         let range = marked
             .as_ref()
             .map_or_else(|| paragraph.range.clone(), |m| m.range.clone());
+        self.names.note_marked(&marked);
         let annotations = annotation::annotations_of(marked);
         let located = Located::of(&paragraph.content);
         let container = self.container();
@@ -673,6 +715,7 @@ impl SectionBuilder {
         for (annotations, range, nested_in, text) in records {
             // A nested bullet is in its parent bullet's container, so a parent and its child are never variants.
             let container = nested_in.unwrap_or(container);
+            self.names.note(&annotations, &range);
             self.items.push(&annotations, range, container, ItemKind::Bullet, text);
         }
     }

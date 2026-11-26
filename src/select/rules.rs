@@ -534,6 +534,7 @@ mod tests {
             status,
             tags: tags(&[tag]),
             alternate: None,
+            id: None,
         };
         let variants = [note(None, "platform", None), note(None, "ai", Some(Status::Draft))];
         let facts = GroupFacts::of(&variants);

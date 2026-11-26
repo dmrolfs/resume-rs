@@ -94,6 +94,7 @@ fn an_inline_annotation_marks_its_own_bullet() {
             status: None,
             tags: tags(&["ai"]),
             alternate: alternate("gateway", "default"),
+            id: None,
         }
     );
     assert!(items[1].annotations.is_empty(), "the next bullet is not annotated");

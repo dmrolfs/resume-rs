@@ -11,6 +11,8 @@ mod annotation;
 #[cfg(test)]
 mod annotation_tests;
 mod blocks;
+#[cfg(test)]
+mod id_tests;
 mod letter;
 mod letter_inline;
 mod letter_safety;
@@ -587,6 +589,8 @@ mod tests {
             AlternateGroupReused,
             AlternateVariantRepeated,
             AlternatePriorityConflict,
+            ItemIdReused,
+            ItemIdOnAlternate,
             LetterMissingSection,
             LetterUnknownSection,
             LetterDuplicateSection,

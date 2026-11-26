@@ -356,7 +356,7 @@ Content advice (bullet length, quantification, weak openers, and so on) belongs 
 #### Annotations (`annotation.rs`, `model/annotation.rs`; rsm-141.22.1)
 
 A baseline holds every item and every wording; annotations in Markdown comments say how each item may be tailored, and a position spec (rsm-141.23) chooses tags and wordings for one application.
-A comment is an annotation when the first word of its body is `@`, `#`, or `=` followed by an ASCII letter (`annotation::is_annotation`, the one predicate resumes and letters share). The letter keeps a commented-out `## Section`, a `<!-- ===== -->` banner, and `<!-- #1 ... -->` ordinary, while `#AI` or `@Draft` is still a located typo.
+A comment is an annotation when the first word of its body is `@`, `#`, `=`, or `&` followed by an ASCII letter (`annotation::is_annotation`, the one predicate resumes and letters share). The letter keeps a commented-out `## Section`, a `<!-- ===== -->` banner, and `<!-- #1 ... -->` ordinary, while `#AI` or `@Draft` is still a located typo.
 Any other comment is ordinary and dropped as before.
 
 | Token | Meaning |
@@ -365,6 +365,7 @@ Any other comment is ordinary and dropped as before.
 | `@draft`, `@verify` | Status: at most one. |
 | `#tag` | A topic tag; zero to many, duplicates collapse. |
 | `=group.variant` | One wording of a group; at most one. |
+| `&id` | The name a position spec addresses one item by (rsm-yjj.4); at most one. Ids and group names share one namespace per document; an id is refused on a variant. |
 
 Tag, group, and variant names are lowercase ASCII letters and digits, starting with a letter, with single hyphens, at most 40 characters (`Tag`, `GroupName`, `VariantName`). There is no case folding, so a spec written months earlier still matches.
 

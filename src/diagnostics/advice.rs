@@ -390,9 +390,9 @@ impl DiagnosticCode {
                 example: Some(("- Led the gateway. <!-- @cor -->", "- Led the gateway. <!-- @core -->")),
             },
             AnnotationMalformed => &Advice {
-                summary: "An annotation token is not `@word`, `#tag`, or `=group.variant` with valid names.",
+                summary: "An annotation token is not `@word`, `#tag`, `=group.variant`, or `&id` with valid names.",
                 why: "Project convention: tag, group, and variant names are lowercase ASCII letters and digits, starting with a letter, with single hyphens, at most 40 characters, so a position spec written months later still matches them exactly.",
-                fix: "Fix the name, or, if the comment is a note and not an annotation, start it with a word instead of `@`, `#`, or `=`.",
+                fix: "Fix the name, or, if the comment is a note and not an annotation, start it with a word instead of `@`, `#`, `=`, or `&`.",
                 example: Some((
                     "- Led the gateway. <!-- #AI_Platform -->",
                     "- Led the gateway. <!-- #ai-platform -->",
@@ -473,6 +473,24 @@ impl DiagnosticCode {
                 fix: "Rename one of the variants.",
                 example: Some((
                     "- Led the gateway. <!-- =gateway.default -->\n- Built it. <!-- =gateway.default -->",
+                    "- Led the gateway. <!-- =gateway.default -->\n- Built it. <!-- =gateway.short -->",
+                )),
+            },
+            ItemIdReused => &Advice {
+                summary: "Two items share one `&id`, or an `&id` is also a group name.",
+                why: "Project convention: a position spec addresses an item by its id alone (`[select.override.gateway]`), and a group is addressed by its group name, so each name in a document means one thing.",
+                fix: "Rename one of them.",
+                example: Some((
+                    "- Led the gateway. <!-- &gateway -->\n- Built the cache. <!-- &gateway -->",
+                    "- Led the gateway. <!-- &gateway -->\n- Built the cache. <!-- &cache -->",
+                )),
+            },
+            ItemIdOnAlternate => &Advice {
+                summary: "A variant of a group has an `&id`.",
+                why: "Project convention: the variants of a group are one item worded several ways, and the group name is its address, so a variant has no id of its own.",
+                fix: "Remove the `&id`; address the whole group by its group name, as in `[select.override.gateway]` for `=gateway.default`.",
+                example: Some((
+                    "- Led the gateway. <!-- =gateway.default &gateway -->\n- Built it. <!-- =gateway.short -->",
                     "- Led the gateway. <!-- =gateway.default -->\n- Built it. <!-- =gateway.short -->",
                 )),
             },

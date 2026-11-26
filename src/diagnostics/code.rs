@@ -68,6 +68,8 @@ pub enum DiagnosticCode {
     AlternateGroupReused,
     AlternateVariantRepeated,
     AlternatePriorityConflict,
+    ItemIdReused,
+    ItemIdOnAlternate,
     LetterMissingSection,
     LetterUnknownSection,
     LetterDuplicateSection,
@@ -158,6 +160,8 @@ impl DiagnosticCode {
             | AlternateGroupReused
             | AlternateVariantRepeated
             | AlternatePriorityConflict
+            | ItemIdReused
+            | ItemIdOnAlternate
             | LetterMissingSection
             | LetterUnknownSection
             | LetterDuplicateSection
@@ -225,6 +229,8 @@ impl DiagnosticCode {
             | AlternateGroupReused
             | AlternateVariantRepeated
             | AlternatePriorityConflict
+            | ItemIdReused
+            | ItemIdOnAlternate
             | LetterMissingSection
             | LetterUnknownSection
             | LetterDuplicateSection

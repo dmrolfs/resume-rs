@@ -743,7 +743,7 @@ One baseline resume can hold everything you might say, for every kind of job. An
 
 ### Syntax
 
-An annotation is an HTML comment whose first word starts with `@`, `#`, or `=` followed by a letter. Any other comment is an ordinary comment and is ignored.
+An annotation is an HTML comment whose first word starts with `@`, `#`, `=`, or `&` followed by a letter. Any other comment is an ordinary comment and is ignored.
 
 | Write | Meaning |
 |---|---|
@@ -753,8 +753,9 @@ An annotation is an HTML comment whose first word starts with `@`, `#`, or `=` f
 | `@verify` | Kept, and listed after each build until you remove the mark. |
 | `#tag` | A topic, such as `#ai` or `#platform`. Any number on one line; the same tag twice counts once. |
 | `=group.variant` | One wording of an item. Every group has a `default`. At most one per line. |
+| `&id` | A name for one item, so a position spec can change its tags or priority for one application. At most one per item. |
 
-Tag, group, and wording names are lowercase letters and digits, starting with a letter, with single hyphens between, and at most 40 characters. A misspelled keyword, such as `@cor`, is the error [`annotation-unknown-keyword`](#code-annotation-unknown-keyword):
+Tag, group, wording, and id names are lowercase letters and digits, starting with a letter, with single hyphens between, and at most 40 characters. A misspelled keyword, such as `@cor`, is the error [`annotation-unknown-keyword`](#code-annotation-unknown-keyword):
 
 ```markdown in-section expect=annotation-unknown-keyword
 ### Acme · Engineer · 2015 – 2017
@@ -795,6 +796,35 @@ Several wordings of one item sit next to each other, each marked with the same g
 ```
 
 A group without a `default` is [`alternate-missing-default`](#code-alternate-missing-default). The numbers in the wordings of one group should agree; [`alternate-facts-differ`](#code-alternate-facts-differ) warns when they do not.
+
+### Naming an item
+
+`&id` gives one item a name. A position spec uses the name to change that item's tags or priority for one application, so the baseline stays as it is for every other job. The name does not appear in the PDF and does not change what a build keeps.
+
+```markdown in-section expect=none
+### Acme · Engineer · 2015 – 2017
+
+- Led delivery of the LLM gateway for 20 teams. <!-- &gateway @extra #ai -->
+- Mentored 6 engineers through promotion in 2 years. <!-- #leadership -->
+```
+
+An id is unique in a document, and shares its names with the groups of alternate wordings, so an id cannot also be a group name. Two items with one id are [`item-id-reused`](#code-item-id-reused):
+
+```markdown in-section expect=item-id-reused
+### Acme · Engineer · 2015 – 2017
+
+- Led delivery of the LLM gateway for 20 teams. <!-- &gateway -->
+- Cut the gateway's cache cost by 30% in 2 quarters. <!-- &gateway -->
+```
+
+A wording in a group has no id of its own; the group name is its name. An `&id` on one is [`item-id-on-alternate`](#code-item-id-on-alternate):
+
+```markdown in-section expect=item-id-on-alternate
+### Acme · Engineer · 2015 – 2017
+
+- Led delivery of the LLM gateway for 20 teams. <!-- =gateway.default &gateway -->
+- Built the LLM gateway 20 teams use. <!-- =gateway.short -->
+```
 
 ### What a build keeps
 
@@ -1208,7 +1238,7 @@ How the Markdown is written. Every command that reads a resume reports these.
 | <a id="code-heading-marker-spacing"></a>`heading-marker-spacing` | warning | A line starts with `#` but has no space after it, so it is text, not a heading. |
 | <a id="code-placeholder-unresolved"></a>`placeholder-unresolved` | error | A selected letter placeholder has no application field value. |
 | <a id="code-annotation-unknown-keyword"></a>`annotation-unknown-keyword` | error | An `@` word in an annotation is not one the tool knows. |
-| <a id="code-annotation-malformed"></a>`annotation-malformed` | error | An annotation token is not `@word`, `#tag`, or `=group.variant` with valid names. |
+| <a id="code-annotation-malformed"></a>`annotation-malformed` | error | An annotation token is not `@word`, `#tag`, `=group.variant`, or `&id` with valid names. |
 | <a id="code-annotation-conflict"></a>`annotation-conflict` | error | One annotation gives two priorities, two statuses, or two alternates. |
 | <a id="code-annotation-duplicate"></a>`annotation-duplicate` | error | An item has two annotations. |
 | <a id="code-annotation-without-target"></a>`annotation-without-target` | error | An annotation on its own line has nothing after it to annotate. |
@@ -1220,6 +1250,8 @@ How the Markdown is written. Every command that reads a resume reports these.
 | <a id="code-alternate-group-reused"></a>`alternate-group-reused` | error | Two separate groups of alternates use the same group name. |
 | <a id="code-alternate-variant-repeated"></a>`alternate-variant-repeated` | error | A group has two variants with the same name. |
 | <a id="code-alternate-priority-conflict"></a>`alternate-priority-conflict` | error | The variants of one group give different priorities. |
+| <a id="code-item-id-reused"></a>`item-id-reused` | error | Two items share one `&id`, or an `&id` is also a group name. |
+| <a id="code-item-id-on-alternate"></a>`item-id-on-alternate` | error | A variant of a group has an `&id`. |
 | <a id="code-letter-missing-section"></a>`letter-missing-section` | error | The letter needs Greeting, Body and Closing sections in that order. |
 | <a id="code-letter-unknown-section"></a>`letter-unknown-section` | error | The letter needs Greeting, Body and Closing sections in that order. |
 | <a id="code-letter-duplicate-section"></a>`letter-duplicate-section` | error | The letter needs Greeting, Body and Closing sections in that order. |
