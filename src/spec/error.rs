@@ -45,6 +45,8 @@ pub enum NameKind {
     Group,
     Variant,
     Profile,
+    /// The `&id` an override names.
+    Item,
 }
 
 /// `path` without the `..` that follow a named part (`positions/../profiles` is `profiles`), for showing only.
@@ -263,6 +265,11 @@ pub enum SpecError {
         kind: NameKind,
         value: String,
     },
+
+    #[snafu(display(
+        "{at}: `{table}.override.{id}` changes nothing: give it `tags`, `priority`, or both, or remove it"
+    ))]
+    EmptyOverride { at: Located, table: String, id: String },
 
     #[snafu(display("{at}: `{value}` is not a usable path in `{key}`: {}", rule.explain()))]
     InvalidPath {

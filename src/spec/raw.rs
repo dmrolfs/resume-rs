@@ -85,6 +85,17 @@ pub(super) struct RawSelect {
     /// The group is a plain `String`: a map key wrapped in `Spanned` has no readable path when its value is wrong.
     pub pick: Option<BTreeMap<String, Text>>,
     pub core_only: Option<Spanned<bool>>,
+    /// `[select.override.<id>]`. The id is a plain map key, as `pick`'s group is: a key in `Spanned` has no position.
+    #[serde(rename = "override")]
+    pub overrides: Option<BTreeMap<String, Spanned<RawOverride>>>,
+}
+
+/// One item's override: only its own tags and priority. Nothing else about an item can be changed from a spec.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub(super) struct RawOverride {
+    pub tags: Option<Vec<Text>>,
+    pub priority: Option<Text>,
 }
 
 /// The `[letter]` table. Every key is optional here; which are allowed depends on the kind of file.
@@ -111,6 +122,8 @@ pub(super) struct RawLetterSelect {
     pub prefer: Option<Vec<Text>>,
     pub pick: Option<BTreeMap<String, Text>>,
     pub core_only: Option<Spanned<bool>>,
+    #[serde(rename = "override")]
+    pub overrides: Option<BTreeMap<String, Spanned<RawOverride>>>,
 }
 
 impl From<RawLetterSelect> for RawSelect {
@@ -121,6 +134,7 @@ impl From<RawLetterSelect> for RawSelect {
             promote: None,
             pick: raw.pick,
             core_only: raw.core_only,
+            overrides: raw.overrides,
         }
     }
 }

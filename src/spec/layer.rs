@@ -5,16 +5,20 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use clap::ValueEnum;
+use std::str::FromStr as _;
+
 use snafu::ResultExt;
+use toml::Spanned;
 
 use super::error::{
-    DateProblem, DuplicateEntrySnafu, ForbiddenInProfileSnafu, InvalidDateSnafu, InvalidLevelSnafu, InvalidNameSnafu,
-    InvalidPaperSnafu, InvalidPathSnafu, InvalidStyleSnafu, InvalidUrlSnafu, Located, MissingKeySnafu, NameKind,
-    NotASpecSnafu, RefusedUrlSnafu, SpecError, TextLengthSnafu, UnsafeTextSnafu, UrlProblem, shown,
+    DateProblem, DuplicateEntrySnafu, EmptyOverrideSnafu, ForbiddenInProfileSnafu, InvalidDateSnafu, InvalidLevelSnafu,
+    InvalidNameSnafu, InvalidPaperSnafu, InvalidPathSnafu, InvalidStyleSnafu, InvalidUrlSnafu, Located,
+    MissingKeySnafu, NameKind, NotASpecSnafu, RefusedUrlSnafu, SpecError, TextLengthSnafu, UnsafeTextSnafu, UrlProblem,
+    WrongTypeSnafu, shown,
 };
 use super::letter::{self, LetterSettings};
 use super::names::{DeclaredPath, Level, PositionLabel, ProfileName};
-use super::raw::{RawBuild, RawEmphasis, RawFile, RawPosition, RawSelect, Text};
+use super::raw::{RawBuild, RawEmphasis, RawFile, RawOverride, RawPosition, RawSelect, Text};
 use super::read::{Source, parse, read_source, read_source_shown, text_source};
 use crate::diagnostics::has_unsafe_characters;
 use crate::model::options::Paper;
@@ -419,9 +423,94 @@ pub(super) fn select(source: &Source, table: &str, raw: Option<RawSelect>) -> Re
         promote,
         pick,
         core_only,
-        // The `override` table is read from TOML once both documents apply it; no file has one until then.
-        overrides: BTreeMap::new(),
+        overrides: overrides(source, table, raw.overrides.as_ref())?,
     })
+}
+
+/// `[<table>.override.<id>]`: each item's own tags and priority, every field with the line that wrote it.
+///
+/// An override that writes neither field is an error at its table, because it promises an edit and changes nothing.
+fn overrides(
+    source: &Source,
+    table: &str,
+    raw: Option<&BTreeMap<String, Spanned<RawOverride>>>,
+) -> Result<BTreeMap<ItemId, ItemOverrideLayer>, SpecError> {
+    let key = format!("{table}.override");
+    let mut out = BTreeMap::new();
+    for (name, body) in raw.into_iter().flatten() {
+        let table_start = body.span().start;
+        let at = source.at(table_start);
+        let Ok(id) = ItemId::try_new(name.clone()) else {
+            return InvalidNameSnafu {
+                at,
+                key: key.clone(),
+                kind: NameKind::Item,
+                value: shown(name),
+            }
+            .fail();
+        };
+        let body = body.get_ref();
+        if body.tags.is_none() && body.priority.is_none() {
+            return EmptyOverrideSnafu {
+                at,
+                table: table.to_string(),
+                id: name.clone(),
+            }
+            .fail();
+        }
+        let tags = body
+            .tags
+            .as_deref()
+            .map(|items| {
+                let tags = list(source, &format!("{key}.{name}.tags"), NameKind::Tag, Some(items), |s| {
+                    Tag::try_new(s).ok()
+                })?;
+                // `tags =` is where the whole list was written; an empty list has no item to point at.
+                let at = source.at(field_offset(&source.text, table_start, "tags"));
+                Ok::<_, SpecError>(Sourced {
+                    value: tags.into_iter().map(|t| t.value).collect(),
+                    at,
+                })
+            })
+            .transpose()?;
+        let priority = body
+            .priority
+            .as_ref()
+            .map(|text| priority_edit(source, &format!("{key}.{name}.priority"), text))
+            .transpose()?;
+        out.insert(id, ItemOverrideLayer { tags, priority });
+    }
+    Ok(out)
+}
+
+/// Where the line that starts `field` is, searching from `from`, or `from` itself when no line does.
+fn field_offset(text: &str, from: usize, field: &str) -> usize {
+    let mut at = from;
+    for line in text[from..].split_inclusive('\n') {
+        let indent = line.len() - line.trim_start().len();
+        let rest = line.trim_start();
+        if rest.starts_with(field) && rest[field.len()..].trim_start().starts_with('=') {
+            return at + indent;
+        }
+        at += line.len();
+    }
+    from
+}
+
+fn priority_edit(source: &Source, key: &str, text: &Text) -> Result<Sourced<PriorityEdit>, SpecError> {
+    let at = source.at(text.span().start);
+    match PriorityEdit::from_str(text.get_ref()) {
+        Ok(value) => Ok(Sourced { value, at }),
+        Err(_) => WrongTypeSnafu {
+            at,
+            key,
+            message: format!(
+                "`{}` is not a priority; write `core`, `extra`, or `none`",
+                shown(text.get_ref())
+            ),
+        }
+        .fail(),
+    }
 }
 
 /// Free text of a position: no control or direction characters, then the length rule of its type.
@@ -926,5 +1015,164 @@ mod tests {
             assert_err!(SpecLayer::try_from_layer(profile)),
             SpecError::NotASpec { .. }
         ));
+    }
+}
+
+#[cfg(test)]
+mod override_tests {
+    use super::*;
+    use claims::{assert_err, assert_ok, assert_some};
+    use pretty_assertions::assert_eq;
+
+    fn load(kind: Kind, text: &str) -> Result<Layer, SpecError> {
+        Layer::from_source(kind, &Source::new(PathBuf::from("f.toml"), text.to_string()))
+    }
+
+    fn spec(select: &str) -> String {
+        format!("[build]\ncontent = \"a.md\"\n{select}")
+    }
+
+    fn id(name: &str) -> ItemId {
+        assert_ok!(ItemId::try_new(name))
+    }
+
+    #[test]
+    fn an_override_table_is_read_with_the_line_of_each_field() {
+        let text = spec(
+            "[select.override.gateway]\ntags = [\"ai\", \"platform\"]\npriority = \"core\"\n\n[select.override.cache]\ntags = []\npriority = \"none\"\n",
+        );
+        let layer = assert_ok!(load(Kind::Spec, &text));
+        let gateway = &layer.select.overrides[&id("gateway")];
+        let tags = assert_some!(gateway.tags.as_ref());
+        assert_eq!(
+            tags.value.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            ["ai", "platform"]
+        );
+        assert_eq!(tags.at.line, 4, "the line of `tags`");
+        let priority = assert_some!(gateway.priority.as_ref());
+        assert_eq!((priority.value, priority.at.line), (PriorityEdit::Core, 5));
+        let cache = &layer.select.overrides[&id("cache")];
+        assert_eq!(
+            assert_some!(cache.tags.as_ref()).value.len(),
+            0,
+            "`tags = []` is a choice"
+        );
+        assert_eq!(assert_some!(cache.priority.as_ref()).value, PriorityEdit::None);
+    }
+
+    #[test]
+    fn a_table_with_only_one_field_leaves_the_other_unsaid() {
+        let layer = assert_ok!(load(Kind::Spec, &spec("[select.override.a]\ntags = [\"ai\"]\n")));
+        let a = &layer.select.overrides[&id("a")];
+        assert!(a.tags.is_some() && a.priority.is_none());
+        let layer = assert_ok!(load(Kind::Spec, &spec("[select.override.a]\npriority = \"extra\"\n")));
+        let a = &layer.select.overrides[&id("a")];
+        assert!(a.tags.is_none() && a.priority.is_some());
+    }
+
+    #[test]
+    fn an_empty_override_table_is_an_error_at_its_header() {
+        let error = assert_err!(load(Kind::Spec, &spec("[select.override.a]\n")));
+        match error {
+            SpecError::EmptyOverride { at, id, .. } => assert_eq!((at.line, id.as_str()), (3, "a")),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_override_may_not_change_anything_but_tags_and_priority() {
+        for field in [
+            "status = \"draft\"",
+            "text = \"x\"",
+            "id = \"b\"",
+            "variant = \"short\"",
+            "order = 1",
+        ] {
+            let error = assert_err!(load(
+                Kind::Spec,
+                &spec(&format!("[select.override.a]\ntags = [\"ai\"]\n{field}\n"))
+            ));
+            match error {
+                SpecError::UnknownKey { key, expected, .. } => {
+                    assert!(key.starts_with("select.override.a."), "{key}");
+                    assert_eq!(expected, ["tags", "priority"]);
+                }
+                other => panic!("{field}: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_bad_priority_is_a_located_error_naming_the_choices() {
+        for bad in ["\"high\"", "\"Core\"", "\"@core\"", "1", "true"] {
+            let error = assert_err!(load(
+                Kind::Spec,
+                &spec(&format!("[select.override.a]\npriority = {bad}\n"))
+            ));
+            let text = error.to_string();
+            assert!(text.contains("f.toml:4:"), "{bad}: {text}");
+            assert!(text.contains("priority"), "{bad}: {text}");
+        }
+    }
+
+    #[test]
+    fn an_invalid_id_or_tag_is_a_located_name_error() {
+        match assert_err!(load(Kind::Spec, &spec("[select.override.Bad_Id]\ntags = [\"ai\"]\n"))) {
+            SpecError::InvalidName { at, key, kind, value } => {
+                assert_eq!(
+                    (at.line, key.as_str(), kind, value.as_str()),
+                    (3, "select.override", NameKind::Item, "Bad_Id")
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        match assert_err!(load(Kind::Spec, &spec("[select.override.a]\ntags = [\"Not A Tag\"]\n"))) {
+            SpecError::InvalidName { at, kind, .. } => assert_eq!((at.line, kind), (4, NameKind::Tag)),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_tag_twice_in_one_override_is_a_duplicate() {
+        let error = assert_err!(load(
+            Kind::Spec,
+            &spec("[select.override.a]\ntags = [\"ai\", \"ai\"]\n")
+        ));
+        assert!(matches!(error, SpecError::DuplicateEntry { .. }), "{error:?}");
+    }
+
+    #[test]
+    fn a_profile_may_hold_overrides() {
+        let layer = assert_ok!(load(Kind::Profile, "[select.override.a]\ntags = [\"ai\"]\n"));
+        assert!(layer.select.overrides.contains_key(&id("a")));
+    }
+
+    #[test]
+    fn the_letter_has_its_own_override_table_apart_from_the_resumes() {
+        let text = "[build]\ncontent = \"a.md\"\n[select.override.one]\ntags = [\"ai\"]\n\n[letter]\ncontent = \"l.md\"\n\n[letter.select.override.two]\npriority = \"core\"\n";
+        let layer = assert_ok!(load(Kind::Spec, text));
+        assert!(layer.select.overrides.contains_key(&id("one")));
+        assert!(!layer.select.overrides.contains_key(&id("two")));
+        assert!(layer.letter_select.overrides.contains_key(&id("two")));
+        assert!(!layer.letter_select.overrides.contains_key(&id("one")));
+    }
+
+    #[test]
+    fn the_same_id_in_the_resume_and_the_letter_is_legal() {
+        let text = "[build]\ncontent = \"a.md\"\n[select.override.same]\ntags = [\"ai\"]\n\n[letter]\ncontent = \"l.md\"\n\n[letter.select.override.same]\ntags = [\"data\"]\n";
+        let layer = assert_ok!(load(Kind::Spec, text));
+        assert_eq!(layer.select.overrides.len(), 1);
+        assert_eq!(layer.letter_select.overrides.len(), 1);
+    }
+
+    #[test]
+    fn an_override_table_inline_or_dotted_reads_the_same_as_a_header() {
+        let header = assert_ok!(load(Kind::Spec, &spec("[select.override.a]\ntags = [\"ai\"]\n")));
+        let inline = assert_ok!(load(
+            Kind::Spec,
+            &spec("[select]\noverride = { a = { tags = [\"ai\"] } }\n")
+        ));
+        let values = |l: &Layer| l.select.overrides[&id("a")].tags.as_ref().map(|t| t.value.clone());
+        assert_eq!(values(&header), values(&inline));
     }
 }
