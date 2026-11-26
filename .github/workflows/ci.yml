@@ -89,7 +89,7 @@ jobs:
           echo "::error title=just check failed on ${RUNNER_OS}::${body}"
 
       - name: Build release binary
-        run: cargo build --release --locked
+        run: cargo build --release --locked --package resume
 
       # The shipped Windows binary is built with MSVC, which links the Visual C++ runtime (VCRUNTIME140.dll)
       # dynamically unless crt-static is on; a clean Windows machine may not have it. Fail if the release exe
@@ -418,7 +418,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version="$(cargo metadata --no-deps --format-version 1 --locked | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])')"
+          # By name, not by position: the workspace also holds the desktop app, which is listed first.
+          version="$(cargo metadata --no-deps --format-version 1 --locked | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "resume"))')"
           if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
             echo "::error::the tag ${GITHUB_REF_NAME} is not v${version}, the version in Cargo.toml"; exit 1
           fi

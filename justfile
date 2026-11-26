@@ -97,10 +97,10 @@ clean:
 # CI: what a CI leg runs, so a failure can be reproduced locally
 # ---------------------------------------------------------------------------------------------------
 
-[doc('Locked release build, the same flags the shipped binaries use')]
+[doc('Locked release build of the resume CLI, the same flags the shipped binaries use')]
 [group('ci')]
 release:
-    cargo build --release --locked
+    cargo build --release --locked --package resume
 
 [doc('One CI leg: the quality gate, then a locked release build')]
 [group('ci')]
@@ -194,7 +194,7 @@ build-macos:
     export MACOSX_DEPLOYMENT_TARGET=11.0
     for target in aarch64-apple-darwin x86_64-apple-darwin; do
         rustup target list --installed | grep -qx "$target" || rustup target add "$target"
-        cargo build --release --locked --target "$target"
+        cargo build --release --locked --package resume --target "$target"
     done
     mkdir -p target/universal2
     lipo -create -output target/universal2/resume \
@@ -214,7 +214,7 @@ build-windows:
     set -euo pipefail
     command -v x86_64-w64-mingw32-gcc >/dev/null || { echo "error: mingw-w64 not found (brew install mingw-w64)" >&2; exit 1; }
     rustup target list --installed | grep -qx x86_64-pc-windows-gnu || rustup target add x86_64-pc-windows-gnu
-    cargo build --release --locked --target x86_64-pc-windows-gnu
+    cargo build --release --locked --package resume --target x86_64-pc-windows-gnu
     just check-windows-imports target/x86_64-pc-windows-gnu/release/resume.exe
 
 [doc('Fail if a Windows exe imports a runtime DLL a clean machine may lack (mingw, dynamic std, VC++)')]

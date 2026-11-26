@@ -1063,7 +1063,10 @@ The repository is a Cargo workspace whose root is the `resume` package, so every
 - Rust floors differ: `resume` 1.92, `workbench` 1.95 (gpui-pre 0.3.14 does not build on 1.94 or older, measured). `just msrv` and the `msrv` CI job check each package at its own floor.
 - The app brings network crates (hyper, rustls) into the shared `Cargo.lock`. The "no network" guarantee is therefore about what `resume` links, and `tests/dependencies_test.rs` checks `cargo tree --package resume --edges normal,build --target all`, not the lock file. The Typst and krilla pins are still checked on the lock.
 - `cargo package --package resume --list` holds no `crates/` file, and a test checks it.
-- `just clippy`, `just test` and `just unused-deps` run with `--workspace`; `just release` and the CI release builds stay on `resume` alone.
+- `just clippy`, `just test` and `just unused-deps` run with `--workspace`; `just release`, the cross-builds and the CI release build name `--package resume`, and the release job reads the tag version from the package called `resume`, not the first package.
+- With `--workspace`, cargo combines the features every member asks for. If the app switched on a network feature of a crate that `resume` shares (for example `typst-kit/system-downloader`), the gate would test a `resume` that the release build never produces. A test fails on that (`the_app_does_not_switch_on_a_network_crate_inside_resume`). If the extra build time is acceptable, run the gate once per package instead; this is to be measured in rsm-yjj.1, when the app has real dependencies.
+- `resolver = "3"` makes cargo prefer dependency versions that build on each package's own Rust floor. Today it changes nothing; once the app has dependencies, a shared crate may resolve to a version that builds on 1.92.
+- The network check uses `--all-features`, so a network crate behind an optional feature of `resume` is found.
 
 ## Updates & Evolution
 

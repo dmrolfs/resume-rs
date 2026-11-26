@@ -199,37 +199,113 @@ fn the_unused_dependency_check_is_a_plain_cargo_machete_run() {
     assert!(body.contains("cargo check --workspace --lib --bins"), "{body}");
 }
 
+/// The command lines of a recipe, one `Vec` of words each. A recipe body in the JSON dump is a list of lines, each a
+/// list of text and `{ "variable": .. }` parts; text parts are joined and comment lines are dropped, so a commented-out
+/// command is not counted.
+fn command_lines(recipe: &Value) -> Vec<Vec<String>> {
+    recipe["body"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|line| {
+            line.as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect::<String>()
+        })
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .map(|line| line.split_whitespace().map(str::to_string).collect())
+        .collect()
+}
+
+fn has_command(recipe: &Value, words: &[&str]) -> bool {
+    command_lines(recipe)
+        .iter()
+        .any(|line| words.iter().all(|w| line.iter().any(|x| x == w)))
+}
+
 #[test]
 fn the_gate_covers_every_workspace_member() {
     // The desktop app is a workspace member, not the root package, so a plain `cargo test` or `cargo clippy` would
-    // skip it. The gate must name the whole workspace, and `release` must stay the `resume` package alone.
+    // skip it. Word order does not matter here, and a flag such as `--exclude` would fail the check.
     let dumped = dump(&crate_path("justfile"));
-    for (recipe, expected) in [
-        ("clippy", "cargo clippy --workspace --all-targets"),
-        ("test", "cargo test --workspace"),
-        ("unused-deps", "cargo check --workspace --lib --bins"),
+    for (recipe, words) in [
+        ("clippy", &["cargo", "clippy", "--workspace", "--all-targets"][..]),
+        ("test", &["cargo", "test", "--workspace"][..]),
+        ("unused-deps", &["cargo", "check", "--workspace", "--lib", "--bins"][..]),
     ] {
-        let body = dumped["recipes"][recipe]["body"].to_string();
-        assert!(body.contains(expected), "`{recipe}` must run `{expected}`: {body}");
+        let found = &dumped["recipes"][recipe];
+        assert!(
+            has_command(found, words),
+            "`{recipe}` must run {words:?}: {:?}",
+            command_lines(found)
+        );
+        assert!(
+            !command_lines(found)
+                .iter()
+                .flatten()
+                .any(|w| w == "--exclude" || w == "--package" || w == "-p"),
+            "`{recipe}` must cover every member: {:?}",
+            command_lines(found)
+        );
     }
-    let release = dumped["recipes"]["release"]["body"].to_string();
+}
+
+#[test]
+fn the_release_build_is_the_resume_package_alone() {
+    // `build --release` at the root builds the default member today; naming the package keeps it that way if the app
+    // joins `default-members` or the recipe is run from the workspace.
+    let dumped = dump(&crate_path("justfile"));
+    let release = &dumped["recipes"]["release"];
     assert!(
-        !release.contains("--workspace"),
-        "the shipped binary is `resume` alone: {release}"
+        has_command(
+            release,
+            &["cargo", "build", "--release", "--locked", "--package", "resume"]
+        ),
+        "{:?}",
+        command_lines(release)
+    );
+    assert!(
+        !command_lines(release)
+            .iter()
+            .flatten()
+            .any(|w| w == "--workspace" || w == "--all")
+    );
+    // The cross-builds are script recipes; their cargo lines must name the package too.
+    let text = std::fs::read_to_string(crate_path("justfile")).expect("the justfile is readable");
+    let builds: Vec<&str> = text
+        .lines()
+        .filter(|l| l.trim_start().starts_with("cargo build --release"))
+        .collect();
+    assert_eq!(builds.len(), 3, "release, build-macos and build-windows: {builds:?}");
+    assert!(
+        builds.iter().all(|l| l.contains("--package resume")),
+        "every release build names `resume`: {builds:?}"
     );
 }
 
 #[test]
-fn the_minimum_rust_check_reads_both_packages_floors() {
+fn the_minimum_rust_check_runs_cargo_on_the_package_it_reads_the_floor_of() {
     // `msrv` is a `[unix]` recipe, so `just --dump` leaves it out on Windows and the dump cannot be read there.
-    // The justfile is the same text everywhere, so read that.
+    // The justfile is the same text everywhere, so read that, and ignore comment lines.
     let text = std::fs::read_to_string(crate_path("justfile")).expect("the justfile is readable");
+    let live: Vec<&str> = text.lines().filter(|l| !l.trim_start().starts_with('#')).collect();
+    let has = |needle: &str| live.iter().any(|l| l.trim() == needle);
     assert!(
-        text.contains("check_floor Cargo.toml resume"),
+        has("check_floor Cargo.toml resume"),
         "msrv must check resume at its floor"
     );
     assert!(
-        text.contains("check_floor crates/workbench/Cargo.toml workbench"),
+        has("check_floor crates/workbench/Cargo.toml workbench"),
         "msrv must check the app at its floor"
+    );
+    let cargo_line = live
+        .iter()
+        .find(|l| l.contains("cargo +"))
+        .expect("msrv runs a toolchain-pinned cargo");
+    assert!(
+        cargo_line.contains("--package \"$package\""),
+        "the floor of one package must build that package: {cargo_line}"
     );
 }
