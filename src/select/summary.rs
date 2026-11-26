@@ -124,6 +124,9 @@ impl SelectionSummary {
                 _ => {}
             }
         }
+        for node in &report.excluded_core {
+            out.push(format!("core group excluded by explicit group list: {}", at(node)));
+        }
         for node in &report.verify {
             out.push(format!("to verify: {}", at(node)));
         }
@@ -252,6 +255,7 @@ pub struct SelectionRecord<'a> {
     file: &'a str,
     scope: &'static str,
     tags: Vec<String>,
+    groups: Option<Vec<String>>,
     prefer: Vec<String>,
     /// The tags whose items rise within their own list, most promoted first; empty unless a spec promotes.
     promote: Vec<String>,
@@ -324,6 +328,15 @@ pub(crate) fn selection_line(selection: &Selection) -> String {
                 .join(", ")
         ),
     }];
+    if let Some(groups) = &selection.groups {
+        parts[0] = format!("ungrouped: {}", parts[0]);
+        let names = if groups.is_empty() {
+            "none".to_string()
+        } else {
+            groups.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
+        };
+        parts.insert(0, format!("groups {names}"));
+    }
     if !selection.prefer.is_empty() {
         parts.push(format!(
             "prefer {}",
@@ -373,6 +386,10 @@ impl<'a> SelectionRecord<'a> {
                 Scope::Tags(tags) => tags.as_set().iter().map(ToString::to_string).collect(),
                 Scope::All | Scope::CoreOnly => Vec::new(),
             },
+            groups: selection
+                .groups
+                .as_ref()
+                .map(|groups| groups.iter().map(ToString::to_string).collect()),
             prefer: names(&selection.prefer),
             promote: selection.promote.iter().map(ToString::to_string).collect(),
             picks: selection

@@ -402,7 +402,7 @@ mod tests {
                 suggestion, expected, ..
             } => {
                 assert_eq!(suggestion, None);
-                assert_eq!(expected.len(), 5);
+                assert_eq!(expected.len(), 6);
             }
             other => panic!("{other:?}"),
         }

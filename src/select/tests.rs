@@ -10,13 +10,13 @@ use crate::model::{Alternate, Block, GroupName, Inline, Resume, RoleBlock, Tag, 
 
 const HEAD: &str = "# Ada Lovelace\n\nLondon · a@b.co\n\n";
 
-fn resume(body: &str) -> Resume {
+pub(super) fn resume(body: &str) -> Resume {
     let markdown = format!("{HEAD}{body}");
     let parsed = parse("r.md", &markdown);
     assert_some!(parsed.valid(), "{markdown}\n{:?}", parsed.diagnostics()).clone()
 }
 
-fn tags(names: &[&str]) -> Selection {
+pub(super) fn tags(names: &[&str]) -> Selection {
     let set = names.iter().map(|n| assert_ok!(Tag::try_new(*n))).collect();
     Selection {
         scope: Scope::Tags(assert_some!(SelectedTags::new(set))),
@@ -24,11 +24,11 @@ fn tags(names: &[&str]) -> Selection {
     }
 }
 
-fn variant(n: &str) -> VariantName {
+pub(super) fn variant(n: &str) -> VariantName {
     assert_ok!(VariantName::try_new(n))
 }
 
-fn group(n: &str) -> GroupName {
+pub(super) fn group(n: &str) -> GroupName {
     assert_ok!(GroupName::try_new(n))
 }
 
@@ -43,7 +43,7 @@ fn text(content: &[Inline]) -> String {
 }
 
 /// Every leaf's text, in document order, with a kind prefix.
-fn leaves(resume: &Resume) -> Vec<String> {
+pub(super) fn leaves(resume: &Resume) -> Vec<String> {
     let mut out = Vec::new();
     for section in &resume.sections {
         out.push(format!("## {}", section.title));
@@ -273,7 +273,9 @@ fn drafts_off_picks_of_draft_wordings_are_one_error_naming_every_one() {
         ..Selection::default()
     };
     let error = assert_err!(select(&resume(body), &picks));
-    let SelectError::PickedDraft { picks: named } = &error;
+    let SelectError::PickedDraft { picks: named } = &error else {
+        panic!("expected draft picks: {error}")
+    };
     assert_eq!(named.len(), 2);
     assert!(error.to_string().contains("`z.short`, `a.long`"), "{error}");
     // Even when the tags cut the picked group, the spec still asked for a draft.

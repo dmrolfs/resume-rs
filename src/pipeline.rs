@@ -166,7 +166,7 @@ impl Session {
         selection: &Selection,
         render: &RenderArgs,
     ) -> Result<CorePages, Error> {
-        if selection.scope == Scope::CoreOnly {
+        if selection.scope == Scope::CoreOnly && selection.groups.is_none() {
             return Ok(CorePages::Skipped {
                 reason: CoreSkip::AlreadyCoreOnly,
             });
@@ -182,6 +182,7 @@ impl Session {
         }
         let core_only = Selection {
             scope: Scope::CoreOnly,
+            groups: None,
             ..selection.clone()
         };
         let (resume, _) = select::select(baseline, &core_only).map_err(|source| Error::Select { source })?;
@@ -664,6 +665,33 @@ mod tests {
     #[test]
     fn nothing_unknown_is_nothing_said() {
         assert!(unknown_names_from(Path::new("r.md"), &unknown(&[], &[]), &NameOrigins::default()).is_empty());
+    }
+
+    #[test]
+    fn baseline_core_measurement_drops_the_explicit_list() {
+        let render = render_args();
+        let session = Session::open(&render, None);
+        let mut text = "# Ada\n\nLondon · a@b.co\n\n## Summary\n\nCore. <!-- @core -->\n\n".to_string();
+        for i in 0..90 {
+            text.push_str(&format!("- A substantial non-core achievement numbered {i} with useful context and measured results. <!-- =g{i}.default -->\n"));
+        }
+        let parsed = crate::markdown::parse("r.md", &text);
+        let baseline = assert_some!(parsed.valid());
+        let groups = (0..90)
+            .map(|i| assert_ok!(GroupName::try_new(format!("g{i}"))))
+            .collect();
+        let selection = Selection {
+            scope: Scope::CoreOnly,
+            groups: Some(groups),
+            ..Selection::default()
+        };
+        let core = assert_ok!(session.core_pages(baseline, &selection, &render));
+        assert_eq!(core, CorePages::Measured { pages: 1 });
+        let assessment = session.assess(Path::new("r.md"), &text, &render, &selection);
+        let Rendered::Laid { compiled, .. } = assessment.rendered else {
+            panic!("expected rendered selection")
+        };
+        assert!(compiled.page_count() > 1);
     }
 
     #[test]

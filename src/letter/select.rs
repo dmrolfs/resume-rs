@@ -48,6 +48,8 @@ pub struct LetterReport {
 
 #[derive(Debug, Clone, PartialEq, Eq, Snafu)]
 pub enum LetterSelectError {
+    #[snafu(display("explicit group selection is supported only for resumes"))]
+    GroupsUnsupported,
     #[snafu(display(
         "letter picks name draft wordings: {}; finish them, pick another wording, or enable drafts to preview",
         crate::select::listed(picks)
@@ -68,11 +70,14 @@ pub enum LetterSelectError {
 /// fail with drafts off rather than disappearing or leaking into output.
 ///
 /// # Errors
-/// Draft picks, an unavailable frame, or an empty selected body.
+/// Explicit resume group membership, draft picks, an unavailable frame, or an empty selected body.
 pub fn select(
     source: &LetterSource,
     selection: &Selection,
 ) -> Result<(SelectedLetter, LetterReport), LetterSelectError> {
+    if selection.groups.is_some() {
+        return GroupsUnsupportedSnafu.fail();
+    }
     let items: Vec<_> = std::iter::once((LetterPart::Greeting, &source.greeting))
         .chain(source.body.iter().map(|item| (LetterPart::Body, item)))
         .chain(std::iter::once((LetterPart::Closing, &source.closing)))

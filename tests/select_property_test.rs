@@ -236,6 +236,31 @@ fn resume_strategy() -> impl Strategy<Value = Resume> {
     })
 }
 
+proptest! {
+    #[test]
+    fn explicit_membership_is_exact_in_tree_and_report(input in resume_strategy(), requested_bits in prop::collection::vec(any::<bool>(), 0..40), drafts in any::<bool>()) {
+        let known: BTreeSet<_> = input.nodes().iter().filter_map(|n| n.annotations.alternate.as_ref().map(|a| a.group.clone())).collect();
+        let requested: BTreeSet<_> = known.into_iter().enumerate().filter(|(i, _)| requested_bits.get(*i).copied().unwrap_or(false)).map(|(_, g)| g).collect();
+        let selection = Selection { groups: Some(requested.clone()), drafts, ..Selection::default() };
+        match select(&input, &selection) {
+            Ok((out, report)) => {
+                let actual: Vec<_> = out.nodes().iter().filter_map(|n| n.annotations.alternate.as_ref().map(|a| a.group.clone())).collect();
+                let reported: Vec<_> = report.chosen.iter().map(|c| c.group.clone()).collect();
+                prop_assert_eq!(actual.len(), requested.len());
+                prop_assert_eq!(reported.len(), requested.len());
+                prop_assert_eq!(actual.into_iter().collect::<BTreeSet<_>>(), requested.clone());
+                prop_assert_eq!(reported.into_iter().collect::<BTreeSet<_>>(), requested);
+            }
+            Err(SelectError::UnavailableGroups { groups }) => {
+                prop_assert!(!drafts);
+                prop_assert!(!groups.is_empty());
+                prop_assert!(groups.iter().all(|g| requested.contains(&g.group)));
+            }
+            Err(error) => prop_assert!(false, "unexpected error: {error}"),
+        }
+    }
+}
+
 fn selection_strategy() -> impl Strategy<Value = Selection> {
     let scope = prop_oneof![
         Just(Scope::All),
@@ -253,6 +278,7 @@ fn selection_strategy() -> impl Strategy<Value = Selection> {
         prop::collection::btree_map(1..6usize, variant, 0..=2),
     )
         .prop_map(|(scope, drafts, prefer, picks)| Selection {
+            groups: None,
             scope,
             drafts,
             prefer: prefer
@@ -486,6 +512,7 @@ proptest! {
                 prop_assert!(!picks.is_empty());
             }
             Ok(_) => prop_assert!(!picks_a_draft),
+            Err(error) => prop_assert!(false, "unexpected error: {error}"),
         }
     }
 

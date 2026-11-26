@@ -201,6 +201,14 @@ pub struct Override {
     /// The values typed; none for a switch.
     pub set: Vec<String>,
     pub replaced: Replaced,
+    /// An explicit scope override also clears resume group membership.
+    pub cleared_groups: Option<ClearedGroups>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClearedGroups {
+    pub names: Vec<String>,
+    pub at: Located,
 }
 
 /// A spec with the typed settings applied: what to select and what to render.
@@ -322,7 +330,15 @@ pub(super) fn overlay_select(
             flag: scope.flag(),
             set: scope_values(scope),
             replaced: view.replaced_scope(),
+            cleared_groups: view.select.groups.as_ref().map(|groups| ClearedGroups {
+                names: groups.iter().map(ToString::to_string).collect(),
+                at: view
+                    .origin_of(&ChoiceKey::Groups)
+                    .expect("a merged group list has an origin")
+                    .clone(),
+            }),
         });
+        selection.groups = None;
         selection.scope = match scope {
             ScopeFlag::Tags(tags) => Scope::Tags(tags.clone()),
             ScopeFlag::CoreOnly => Scope::CoreOnly,
@@ -330,6 +346,7 @@ pub(super) fn overlay_select(
     }
     if let Some(prefer) = &explicit.prefer {
         overrides.push(Override {
+            cleared_groups: None,
             flag: OverrideFlag::Prefer,
             set: names(prefer),
             replaced: view.replaced_prefer(),
@@ -352,6 +369,7 @@ pub fn apply(spec: &ResolvedSpec, flags: &Admitted) -> Result<Applied, SpecError
     overlay_select(explicit, &ScopeView::of_resume(spec), &mut selection, &mut overrides);
     if let Some(style) = &explicit.style {
         overrides.push(Override {
+            cleared_groups: None,
             flag: OverrideFlag::Style,
             set: vec![style.to_string()],
             replaced: replaced_one(
@@ -363,6 +381,7 @@ pub fn apply(spec: &ResolvedSpec, flags: &Admitted) -> Result<Applied, SpecError
     }
     if let Some(paper) = explicit.paper {
         overrides.push(Override {
+            cleared_groups: None,
             flag: OverrideFlag::Paper,
             set: vec![paper_name(paper)],
             replaced: replaced_one(spec, Setting::Paper, spec.choices.paper.map(paper_name)),
@@ -628,6 +647,7 @@ pub fn apply_letter(spec: &ResolvedSpec, flags: &Admitted<LetterExplicit>) -> Re
     };
     if let Some(style) = &explicit.base.style {
         overrides.push(Override {
+            cleared_groups: None,
             flag: OverrideFlag::Style,
             set: vec![style.to_string()],
             replaced: style_spec
@@ -641,6 +661,7 @@ pub fn apply_letter(spec: &ResolvedSpec, flags: &Admitted<LetterExplicit>) -> Re
     }
     if let Some(paper) = explicit.base.paper {
         overrides.push(Override {
+            cleared_groups: None,
             flag: OverrideFlag::Paper,
             set: vec![paper_name(paper)],
             replaced: paper_spec
@@ -654,6 +675,7 @@ pub fn apply_letter(spec: &ResolvedSpec, flags: &Admitted<LetterExplicit>) -> Re
     }
     if let Some(output) = explicit.output {
         overrides.push(Override {
+            cleared_groups: None,
             flag: OverrideFlag::OutputFormat,
             set: vec![output.to_string()],
             replaced: replaced_from(Setting::OutputFormat, settings.output_format.as_ref()),
@@ -661,6 +683,7 @@ pub fn apply_letter(spec: &ResolvedSpec, flags: &Admitted<LetterExplicit>) -> Re
     }
     if let Some(max) = explicit.max_length {
         overrides.push(Override {
+            cleared_groups: None,
             flag: OverrideFlag::MaxLength,
             set: vec![max.to_string()],
             replaced: replaced_from(Setting::MaxLength, settings.max_length.as_ref()),
@@ -668,6 +691,7 @@ pub fn apply_letter(spec: &ResolvedSpec, flags: &Admitted<LetterExplicit>) -> Re
     }
     if let Some(unit) = explicit.length_unit {
         overrides.push(Override {
+            cleared_groups: None,
             flag: OverrideFlag::LengthUnit,
             set: vec![unit.to_string()],
             replaced: replaced_from(Setting::LengthUnit, settings.length_unit.as_ref()),
@@ -675,6 +699,7 @@ pub fn apply_letter(spec: &ResolvedSpec, flags: &Admitted<LetterExplicit>) -> Re
     }
     if let Some(links) = explicit.links {
         overrides.push(Override {
+            cleared_groups: None,
             flag: OverrideFlag::Links,
             set: vec![links.to_string()],
             replaced: replaced_from(Setting::Links, settings.links.as_ref()),
@@ -690,6 +715,7 @@ pub fn apply_letter(spec: &ResolvedSpec, flags: &Admitted<LetterExplicit>) -> Re
     };
     if let Some(company) = &explicit.company {
         overrides.push(Override {
+            cleared_groups: None,
             flag: OverrideFlag::Company,
             set: vec![company.to_string()],
             replaced: position(Setting::Company, from_spec.company.as_ref().map(ToString::to_string)),
@@ -697,6 +723,7 @@ pub fn apply_letter(spec: &ResolvedSpec, flags: &Admitted<LetterExplicit>) -> Re
     }
     if let Some(title) = &explicit.title {
         overrides.push(Override {
+            cleared_groups: None,
             flag: OverrideFlag::Title,
             set: vec![title.to_string()],
             replaced: position(Setting::Title, from_spec.title.as_ref().map(ToString::to_string)),
@@ -704,6 +731,7 @@ pub fn apply_letter(spec: &ResolvedSpec, flags: &Admitted<LetterExplicit>) -> Re
     }
     if let Some(recipient) = &explicit.recipient {
         overrides.push(Override {
+            cleared_groups: None,
             flag: OverrideFlag::Recipient,
             set: vec![recipient.to_string()],
             replaced: replaced_from(Setting::Recipient, settings.recipient.as_ref()),
@@ -711,6 +739,7 @@ pub fn apply_letter(spec: &ResolvedSpec, flags: &Admitted<LetterExplicit>) -> Re
     }
     if let Some(date) = explicit.date {
         overrides.push(Override {
+            cleared_groups: None,
             flag: OverrideFlag::Date,
             set: vec![date.to_string()],
             replaced: replaced_from(Setting::Date, settings.date.as_ref()),

@@ -19,6 +19,8 @@ pub enum DropReason {
     CoreOnly,
     /// Its own tags miss the selected tags.
     TagsNotSelected,
+    /// The group is absent from an explicit membership list.
+    NotListed,
     /// It has no tags of its own, and the tags it inherits miss the selected tags.
     InheritedTagsOnly,
     /// It is `@extra` and none of its tags is selected.

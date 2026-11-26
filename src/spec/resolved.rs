@@ -208,6 +208,8 @@ struct PrintedBuild<'a> {
 
 #[derive(Serialize)]
 struct PrintedSelect<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    groups: Option<Vec<&'a str>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tags: Vec<&'a str>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -224,13 +226,18 @@ impl<'a> PrintedSelect<'a> {
     /// The table, or `None` when the choices say nothing, so an empty table is never printed.
     fn of(select: &'a super::merge::SelectChoices) -> Option<Self> {
         let printed = Self {
+            groups: select
+                .groups
+                .as_ref()
+                .map(|names| names.iter().map(AsRef::as_ref).collect()),
             tags: select.tags.iter().map(AsRef::as_ref).collect(),
             prefer: select.prefer.iter().map(AsRef::as_ref).collect(),
             promote: select.promote.iter().map(AsRef::as_ref).collect(),
             pick: select.pick.iter().map(|(g, v)| (g.as_ref(), v.as_ref())).collect(),
             core_only: select.core_only,
         };
-        let says_something = !printed.tags.is_empty()
+        let says_something = printed.groups.is_some()
+            || !printed.tags.is_empty()
             || !printed.prefer.is_empty()
             || !printed.promote.is_empty()
             || !printed.pick.is_empty()

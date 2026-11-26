@@ -68,8 +68,15 @@ struct OverrideFact {
     set: Vec<String>,
     /// What the spec chose that the flag replaced; `null` when the spec chose nothing.
     replaced: Option<ReplacedFact>,
+    cleared_groups: Option<ClearedGroupsFact>,
     /// Where the spec chose it, one place for each file.
     at: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ClearedGroupsFact {
+    names: Vec<String>,
+    at: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -142,6 +149,10 @@ impl OverrideFact {
             flag: item.flag.to_string(),
             set: item.set.clone(),
             replaced,
+            cleared_groups: item.cleared_groups.as_ref().map(|groups| ClearedGroupsFact {
+                names: groups.names.clone(),
+                at: located(cwd, &groups.at),
+            }),
             at,
         }
     }
@@ -300,7 +311,14 @@ impl OverrideFact {
                 }
             }
         };
-        format!("override: {}{set} {replaced}", self.flag)
+        let cleared = self.cleared_groups.as_ref().map_or_else(String::new, |groups| {
+            format!(
+                "; cleared explicit groups [{}] from {}",
+                groups.names.join(", "),
+                groups.at
+            )
+        });
+        format!("override: {}{set} {replaced}{cleared}", self.flag)
     }
 }
 
@@ -548,6 +566,7 @@ mod tests {
     #[test]
     fn an_override_over_nothing_says_so_and_a_switch_shows_no_value() {
         let nothing = OverrideFact {
+            cleared_groups: None,
             flag: "--style".into(),
             set: vec!["mono".into()],
             replaced: None,
@@ -555,6 +574,7 @@ mod tests {
         };
         assert_eq!(nothing.line(), "override: --style mono replaces nothing the spec chose");
         let switch = OverrideFact {
+            cleared_groups: None,
             flag: "--core-only".into(),
             set: vec![],
             replaced: Some(ReplacedFact {

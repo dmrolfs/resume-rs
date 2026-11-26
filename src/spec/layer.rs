@@ -60,6 +60,7 @@ pub struct Position {
 /// The `[select]` table of one file.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SelectLayer {
+    pub groups: Option<Sourced<Vec<Sourced<GroupName>>>>,
     pub tags: Vec<Sourced<Tag>>,
     pub prefer: Vec<Sourced<VariantName>>,
     pub promote: Vec<Sourced<Tag>>,
@@ -332,6 +333,23 @@ pub(super) fn select(source: &Source, table: &str, raw: Option<RawSelect>) -> Re
     let Some(raw) = raw else {
         return Ok(SelectLayer::default());
     };
+    let groups = raw
+        .groups
+        .as_ref()
+        .map(|items| {
+            list(
+                source,
+                &format!("{table}.groups"),
+                NameKind::Group,
+                Some(items.get_ref()),
+                |s| GroupName::try_new(s).ok(),
+            )
+            .map(|value| Sourced {
+                value,
+                at: source.at(items.span().start),
+            })
+        })
+        .transpose()?;
     let tags = list(
         source,
         &format!("{table}.tags"),
@@ -388,6 +406,7 @@ pub(super) fn select(source: &Source, table: &str, raw: Option<RawSelect>) -> Re
         at: source.at(flag.span().start),
     });
     Ok(SelectLayer {
+        groups,
         tags,
         prefer,
         promote,

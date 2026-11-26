@@ -980,10 +980,11 @@ Both kinds of file are TOML and strict: a key the program does not know is an er
 | `[position]` | spec only | What the application is for: `company`, `title`, `level`, `domain`, `audience`, `date` (`2026-11-19`), `posting` (a web address), and `emphasis` with `business`, `org`, and `technical`, each `low`, `medium`, or `high`. Every key is optional. The summary prints them; they never change a build, and they never reach the PDF. |
 | `content` | spec only, under `[build]` | The baseline to build: a relative path, written with forward slashes, from the spec's own directory. It may climb with `..`. |
 | `style`, `paper` | under `[build]` | The style, and the paper (`letter` or `a4`). |
-| `tags` | under `[select]` | The tags to keep, as `--tags` does. |
+| `groups` | under `[select]`, resume only | Exactly the named wording groups; absent uses ordinary selection, `[]` keeps no grouped content. See [Exact group selection](#exact-group-selection). |
+| `tags` | under `[select]` | The tags to keep, as `--tags` does; with `groups`, applies only to ungrouped content. |
 | `prefer` | under `[select]` | The wordings to prefer, most preferred first, as `--prefer` does. |
 | `pick` | under `[select]` | The wording a named group must use: `pick = { gateway = "short" }`. A group or wording the baseline does not have is an error that names the line that wrote it, and no PDF is made. |
-| `core-only` | under `[select]` | `true` keeps only `@core` items. It cannot be combined with `tags` in the files that are merged. |
+| `core-only` | under `[select]` | `true` keeps only `@core` items (ungrouped items when `groups` is present). It cannot be combined with `tags` in the files that are merged. |
 | `promote` | under `[select]` | The tags whose items come first, most promoted first. See [Ordering with promote](#ordering-with-promote). |
 
 `drafts` is never a key. Whether to preview drafts is a choice you make at the command line, so a file can never put unfinished text into a PDF you send.
@@ -996,10 +997,33 @@ The files are applied from the least specific to the most specific: each profile
 - `prefer` and `promote` list the most specific file's names first, then the names of less specific files that are not listed yet.
 - `pick`, `style`, `paper`, and `core-only` are decided by the most specific file that has one. A pick is decided for each group on its own.
 
+### Exact group selection
+
+Set `groups = ["gateway", "summary"]` under `[select]` to keep exactly those wording groups without changing the baseline's tags.
+Use `pick` to choose each wording; the group list does not choose variants or change order.
+An unlisted group is excluded even when marked `@core`; the summary calls out core exclusions.
+Listed groups ignore tag and core eligibility, but not drafts.
+Unknown names and listed groups hidden by drafts or without ready wording are errors, not a successful smaller selection.
+A valid pick for an unlisted group does not include it; invalid picks still fail as before.
+
+Ungrouped content uses the existing selection rules, and empty containers are pruned as before.
+The list therefore specifies exact groups, not every item in the PDF.
+New ungrouped content can still appear; new unlisted groups cannot.
+`groups = []` excludes all grouped content, while omission inherits the list or uses legacy behavior if no file supplied one.
+There is no reset-to-legacy value: stop extending a group-selecting profile to restore ordinary selection.
+`[letter.select]` does not accept this key.
+
+With `--allow-overrides`, `--tags` or `--core-only` clears the group list and replaces scope.
+The override report names the cleared list and its source; other flags do not clear it.
+The `core alone` page count measures baseline core content independently of the group list.
+JSON selection records expose `groups` as null or a sorted array; an empty array is distinct from null.
+Override records expose `cleared_groups` as null or an object with `names` and the source location `at`.
+
 If the files cannot be put in one order, because a spec lists `["b", "base"]` while `b` extends `base`, the build stops and names both. A cycle is an error that prints the way round. The most you can nest is 8 levels and 32 profiles.
 
 Profiles are looked for in the directory given with `--profiles`, and otherwise in `profiles` beside the spec's own directory: `positions/acme.toml` finds `positions/../profiles`. There is no other place, so the result cannot depend on where you run the command. A spec that extends nothing needs no profiles directory. Give a profile's file the lowercase name it is called by: `principal.toml`. Do not make the spec's directory a link, because `..` after a link does not mean the same thing on every system.
 
+- `groups` is replaced as a whole by the most specific file that supplies it, including an empty list; it never unions.
 ### What a spec build prints
 
 With the worked example above and a baseline whose wordings are `acme`, `ai`, `default`, `long`, and `short`, `resume build --spec positions/acme.toml --fonts bundled` prints:

@@ -15,6 +15,8 @@ use super::{SelectError, Selection};
 /// What a selection did, for the build summary.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SelectionReport {
+    /// Core-marked groups deliberately excluded by the explicit group list.
+    pub excluded_core: Vec<NodeRef>,
     /// Every item, section, role, and era left out, with why, in document order.
     pub dropped: Vec<Dropped>,
     /// The wording each kept group renders.
@@ -123,7 +125,7 @@ impl NodeRef {
 /// each, variants adjacent, of one kind, and with one priority.
 ///
 /// # Errors
-/// [`SelectError::PickedDraft`] when picks name draft wordings and drafts are off, listing every one.
+/// Draft picks, unknown requested groups, or requested groups unavailable with the current draft policy.
 pub fn select(resume: &Resume, selection: &Selection) -> Result<(Resume, SelectionReport), SelectError> {
     let mut walker = Walker::new(resume, selection)?;
     let sections = resume
@@ -131,6 +133,12 @@ pub fn select(resume: &Resume, selection: &Selection) -> Result<(Resume, Selecti
         .iter()
         .filter_map(|section| walker.section(section))
         .collect();
+    if !walker.unavailable.is_empty() {
+        return super::UnavailableGroupsSnafu {
+            groups: walker.unavailable,
+        }
+        .fail();
+    }
     let mut tailored = Resume::new(resume.name.clone(), resume.contact.clone(), sections);
     tailored.schema = resume.schema;
     let mut report = walker.report;
@@ -216,12 +224,23 @@ struct Walker<'s> {
     report: SelectionReport,
     /// The index the next node takes, in the order `Resume::nodes` visits them.
     next: usize,
+    unavailable: Vec<super::UnavailableGroup>,
 }
 
 impl<'s> Walker<'s> {
     /// Collects and resolves every group, failing on draft picks before anything is built.
     fn new(resume: &Resume, selection: &'s Selection) -> Result<Self, SelectError> {
         let (mut groups, order) = collect_groups(resume);
+        if let Some(requested) = &selection.groups {
+            let unknown: Vec<_> = requested
+                .iter()
+                .filter(|name| !groups.contains_key(*name))
+                .cloned()
+                .collect();
+            if !unknown.is_empty() {
+                return super::UnknownGroupsSnafu { groups: unknown }.fail();
+            }
+        }
         let mut picked_drafts = Vec::new();
         // In document order, so a list of errors reads top to bottom.
         for name in &order {
@@ -255,6 +274,7 @@ impl<'s> Walker<'s> {
             groups,
             report,
             next: 0,
+            unavailable: Vec::new(),
         })
     }
 
@@ -576,6 +596,12 @@ impl<'s> Walker<'s> {
         let first = group.verdict.is_none();
         let verdict = if gate == Gate::Closed {
             Verdict::Drop(DropReason::UnderDraft)
+        } else if let Some(requested) = &selection.groups {
+            if requested.contains(&alternate.group) {
+                Verdict::Keep
+            } else {
+                Verdict::Drop(DropReason::NotListed)
+            }
         } else {
             rules::judge_group(&group.facts, inherited, fallback, selection)
         };
@@ -609,12 +635,27 @@ impl<'s> Walker<'s> {
                 });
             }
         };
+        let excluded_core =
+            reason == DropReason::NotListed && group.facts.priority.or(fallback) == Some(Priority::Core);
         // Under a draft container the container is counted, not what it holds.
         if reason != DropReason::UnderDraft {
             self.count_draft(annotations);
         }
         // A group is one item: a dropped group is reported once, at its first variant.
         if first {
+            if excluded_core {
+                self.report.excluded_core.push(node());
+            }
+            if selection
+                .groups
+                .as_ref()
+                .is_some_and(|names| names.contains(&alternate.group))
+            {
+                self.unavailable.push(super::UnavailableGroup {
+                    group: alternate.group.clone(),
+                    reason,
+                });
+            }
             self.drop_node(node(), reason);
         }
         None

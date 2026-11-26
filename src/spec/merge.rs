@@ -12,6 +12,7 @@ use crate::model::{GroupName, StyleName, Tag, VariantName};
 /// The `[select]` choices after merging.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SelectChoices {
+    pub groups: Option<BTreeSet<GroupName>>,
     pub tags: BTreeSet<Tag>,
     /// Most preferred first.
     pub prefer: Vec<VariantName>,
@@ -32,6 +33,8 @@ pub struct Choices {
 /// Names one value in [`Choices`], to ask where it came from.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ChoiceKey {
+    Groups,
+    Group(GroupName),
     Tag(Tag),
     Prefer(VariantName),
     Promote(Tag),
@@ -68,6 +71,14 @@ pub fn merge_select<'a>(
     let mut choices = SelectChoices::default();
     let mut origins = BTreeMap::new();
     for select in selects {
+        if let Some(groups) = &select.groups {
+            choices.groups = Some(groups.value.iter().map(|g| g.value.clone()).collect());
+            origins.retain(|key, _| !matches!(key, ChoiceKey::Group(_)));
+            origins.insert(ChoiceKey::Groups, groups.at.clone());
+            for group in &groups.value {
+                origins.insert(ChoiceKey::Group(group.value.clone()), group.at.clone());
+            }
+        }
         for tag in &select.tags {
             choices.tags.insert(tag.value.clone());
             origins.insert(ChoiceKey::Tag(tag.value.clone()), tag.at.clone());
@@ -173,6 +184,7 @@ mod tests {
             letter: None,
             letter_select: SelectLayer::default(),
             select: SelectLayer {
+                groups: None,
                 tags: tags.iter().enumerate().map(|(i, t)| sourced(file, i, tag(t))).collect(),
                 prefer: prefer
                     .iter()
@@ -339,6 +351,32 @@ mod tests {
                 });
                 l
             })
+    }
+
+    #[test]
+    fn explicit_group_replacement_is_associative_including_empty() {
+        let s = |name| Sourced {
+            value: group(name),
+            at: at("a.toml", 1),
+        };
+        let names = [None, Some(Vec::new()), Some(vec![s("a")]), Some(vec![s("b")])];
+        for a in &names {
+            for b in &names {
+                for c in &names {
+                    let layer = |groups: &Option<Vec<Sourced<GroupName>>>| SelectLayer {
+                        groups: groups.clone().map(|value| Sourced {
+                            value,
+                            at: at("a.toml", 1),
+                        }),
+                        ..SelectLayer::default()
+                    };
+                    let (a, b, c) = (layer(a), layer(b), layer(c));
+                    let direct = merge_select([&a, &b, &c]).0.groups;
+                    let prefix = if b.groups.is_some() { b } else { a };
+                    assert_eq!(merge_select([&prefix, &c]).0.groups, direct);
+                }
+            }
+        }
     }
 
     proptest! {

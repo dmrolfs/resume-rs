@@ -211,6 +211,9 @@ impl Error {
             Self::OutputIsDirectory { .. } => Some("remove it or use -o <DIR> to write elsewhere"),
             Self::OutputExists { .. } => Some("use --force to replace it"),
             Self::InputChanged { .. } => Some("the file was edited meanwhile; nothing was changed, run doctor again"),
+            Self::Select {
+                source: crate::select::SelectError::UnknownGroups { .. },
+            } => Some("correct the group names in select.groups to match the baseline"),
             Self::Select { .. } | Self::LetterPicks { .. } => {
                 Some("pick a ready wording, finish the draft, or build with --drafts to preview it")
             }

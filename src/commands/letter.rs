@@ -200,6 +200,7 @@ fn select_letter(
                             .unwrap_or(0..0),
                     )
                 }
+                LetterSelectError::GroupsUnsupported => unreachable!("letter specs and flags cannot set groups"),
                 LetterSelectError::FrameNotReady { range, .. } => (DiagnosticCode::LetterFrameNotReady, range.clone()),
                 // Only a spec makes picks, so the lines that picked the draft are the spec's.
                 LetterSelectError::PickedDraft { picks } => {

@@ -113,10 +113,17 @@ impl SpecRun {
         let Error::Select { source } = error else {
             return None;
         };
-        let crate::select::SelectError::PickedDraft { picks } = source;
-        let at: Vec<Located> = picks
+        use crate::select::SelectError;
+        let keys: Vec<_> = match source {
+            SelectError::PickedDraft { picks } => picks.iter().map(|p| ChoiceKey::Pick(p.group.clone())).collect(),
+            SelectError::UnknownGroups { groups } => groups.iter().cloned().map(ChoiceKey::Group).collect(),
+            SelectError::UnavailableGroups { groups } => {
+                groups.iter().map(|g| ChoiceKey::Group(g.group.clone())).collect()
+            }
+        };
+        let at: Vec<Located> = keys
             .iter()
-            .filter_map(|pick| self.resolved.origin_of(&ChoiceKey::Pick(pick.group.clone())))
+            .filter_map(|key| self.resolved.origin_of(key))
             .cloned()
             .collect();
         (!at.is_empty()).then(|| TracedToChoiceSnafu { at }.into_error(Error::Select { source: source.clone() }))

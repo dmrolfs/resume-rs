@@ -72,4 +72,4 @@ origin Pick(GroupName("summary")) acme.toml:23:20
 origin Style acme.toml:18:9
 origin Paper ai-platform.toml:5:9
 === <fixtures>/unknown-key/positions/acme.toml
-error: <fixtures>/unknown-key/positions/acme.toml:8:1: unknown key `select.tag`; allowed here: tags, prefer, promote, pick, core-only; did you mean `select.tags`?
+error: <fixtures>/unknown-key/positions/acme.toml:8:1: unknown key `select.tag`; allowed here: groups, tags, prefer, promote, pick, core-only; did you mean `select.tags`?

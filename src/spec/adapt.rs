@@ -24,6 +24,7 @@ impl ResolvedSpec {
             (_, None) => Scope::All,
         };
         Ok(Selection {
+            groups: select.groups.clone(),
             scope,
             drafts: false,
             prefer: select.prefer.clone(),

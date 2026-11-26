@@ -311,6 +311,7 @@ impl SelectArgs {
             SelectedTags::new(self.tags.iter().cloned().collect()).map_or(Scope::All, Scope::Tags)
         };
         Selection {
+            groups: None,
             scope,
             drafts: self.drafts,
             prefer: self.prefer.clone(),

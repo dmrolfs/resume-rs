@@ -79,6 +79,7 @@ pub(super) struct RawBuild {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub(super) struct RawSelect {
+    pub groups: Option<Spanned<Vec<Text>>>,
     pub tags: Option<Vec<Text>>,
     pub prefer: Option<Vec<Text>>,
     pub promote: Option<Vec<Text>>,
@@ -116,6 +117,7 @@ pub(super) struct RawLetterSelect {
 impl From<RawLetterSelect> for RawSelect {
     fn from(raw: RawLetterSelect) -> Self {
         Self {
+            groups: None,
             tags: raw.tags,
             prefer: raw.prefer,
             promote: None,

@@ -7,6 +7,8 @@ use snafu::Snafu;
 
 use crate::model::{Alternate, GroupName, Resume, Tag, VariantName};
 
+#[cfg(test)]
+mod group_tests;
 mod inventory;
 mod order;
 mod resume;
@@ -45,6 +47,8 @@ pub(crate) fn unknown_picks(groups: &BTreeMap<GroupName, Vec<VariantName>>, sele
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Selection {
     pub scope: Scope,
+    /// Exact resume wording-group membership; `None` uses ordinary scope rules.
+    pub groups: Option<BTreeSet<GroupName>>,
     /// Put every draft back: a preview of what the document will say once the drafts are ready.
     pub drafts: bool,
     /// Variant names to prefer, most preferred first.
@@ -167,6 +171,17 @@ pub enum SelectError {
         if picks.len() == 1 { "it" } else { "them" }
     ))]
     PickedDraft { picks: Vec<Alternate> },
+    #[snafu(display("unknown requested groups: {}", groups.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")))]
+    UnknownGroups { groups: Vec<GroupName> },
+    #[snafu(display("requested groups cannot render: {}", groups.iter().map(|g| format!("{} ({})", g.group, g.reason)).collect::<Vec<_>>().join(", ")))]
+    UnavailableGroups { groups: Vec<UnavailableGroup> },
+}
+
+/// A known requested group excluded by draft gating or lack of ready wording.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnavailableGroup {
+    pub group: GroupName,
+    pub reason: DropReason,
 }
 
 pub(crate) fn listed(picks: &[Alternate]) -> String {
