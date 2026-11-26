@@ -32,7 +32,8 @@ jobs:
   check:
     name: check (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    # Windows takes about 31 minutes cold: the gate builds each package apart (24) and the release build follows (7).
+    timeout-minutes: 45
     strategy:
       fail-fast: false # a failure on one OS must not hide the result on the other
       matrix:
