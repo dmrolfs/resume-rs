@@ -124,3 +124,79 @@ fn doctor_reports_the_same_findings_with_and_without_ids() {
     let (ra, rb) = (plain.doctor(&[&a], &[]), named.doctor(&[&b], &[]));
     assert_eq!(steady(&plain, &ra.stderr), steady(&named, &rb.stderr));
 }
+
+// ---- `tags` lists the ids a spec can address ----------------------------------------------------------------
+
+const WITH_IDS: &str = "# Ada\n\nLondon\n\n## Summary <!-- &summary -->\n\nProse. <!-- &intro #ai -->\n\n## Experience\n\n\
+### Acme · Engineer · 2015 – 2017\n\n- Led the gateway. <!-- =gateway.default -->\n- Built it. <!-- =gateway.short -->\n\
+- Cut costs 40% in 2 quarters. <!-- &costs @core -->\n- Plain.\n";
+
+#[test]
+fn tags_lists_each_id_with_its_kind_and_line_and_leaves_groups_to_the_groups_section() {
+    let work = Workspace::new();
+    let file = work.file("Resume.md", WITH_IDS);
+    let run = work.run(&["tags".to_string(), path_arg(&file)]);
+    assert_eq!(run.outcome, Outcome::Success, "{}", run.stderr);
+    let out = &run.stdout;
+    assert!(out.contains("ids\n"), "{out}");
+    let line_of = |needle: &str| WITH_IDS.lines().position(|l| l.contains(needle)).map(|i| i + 1);
+    let expect = |name: &str, what: &str, needle: &str| {
+        let line = line_of(needle).expect("the needle is in the text");
+        format!("&{name}  {what}  line {line}")
+    };
+    for (name, what, needle) in [
+        ("summary", "section", "&summary"),
+        ("intro", "paragraph", "&intro"),
+        ("costs", "bullet", "&costs"),
+    ] {
+        // Names are padded to a column, so compare on the words only.
+        let words = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            words(out).contains(&words(&expect(name, what, needle))),
+            "{name}: {out}"
+        );
+    }
+    // A group is changed by its group name and is already listed under `groups`, so it is not repeated as an id.
+    let before_groups = out.split("groups\n").next().unwrap_or("");
+    assert!(!before_groups.contains("&gateway"), "{out}");
+}
+
+#[test]
+fn tags_json_carries_ids_and_a_baseline_without_ids_has_none() {
+    let work = Workspace::new();
+    let file = work.file("Resume.md", WITH_IDS);
+    let run = work.run(&[
+        "--format".to_string(),
+        "json".to_string(),
+        "tags".to_string(),
+        path_arg(&file),
+    ]);
+    let record: serde_json::Value = assert_ok!(serde_json::from_str(run.stdout.trim_end()));
+    let ids = record["ids"].as_array().expect("an ids list");
+    let names: Vec<&str> = ids.iter().filter_map(|i| i["name"].as_str()).collect();
+    assert_eq!(
+        names,
+        ["summary", "intro", "costs"],
+        "document order, explicit ids only"
+    );
+    assert_eq!(ids[0]["kind"], "section");
+
+    let plain = work.file("Plain.md", PLAIN);
+    let run = work.run(&["tags".to_string(), path_arg(&plain)]);
+    assert!(
+        !run.stdout.contains("\nids\n"),
+        "no ids, no section, so existing output is unchanged: {}",
+        run.stdout
+    );
+    let run = work.run(&[
+        "--format".to_string(),
+        "json".to_string(),
+        "tags".to_string(),
+        path_arg(&plain),
+    ]);
+    let record: serde_json::Value = assert_ok!(serde_json::from_str(run.stdout.trim_end()));
+    assert!(
+        record.get("ids").is_none(),
+        "an empty list is left out, so the record is as it was: {record}"
+    );
+}

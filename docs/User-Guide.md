@@ -707,14 +707,14 @@ The preview is a guide to the look and not to the page count: Typst's own tools 
 
 ### resume tags
 
-Lists what one resume's annotations offer: its tags, how often each keyword is used, and its groups of alternate wordings, with the line of each and which wordings are drafts. A position spec, or you at the command line, can only name what this lists. See [Annotations](#annotations).
+Lists what one resume's annotations offer: its tags, how often each keyword is used, the `&id` names a spec can change, and its groups of alternate wordings (a group is changed by its group name), with the line of each and which wordings are drafts. A position spec, or you at the command line, can only name what this lists. See [Annotations](#annotations).
 
 ```sh
 resume tags Resume.md
 resume tags Resume.md --format json
 ```
 
-A tag shows how many items carry it themselves, and how many more carry it because a section, role, or era above them does. With `--format json` it prints one JSON object, with `type` `inventory`, instead. A resume with format errors prints its findings and no list, and exits 1, because a partial list would suggest a name is not used.
+A tag shows how many items carry it themselves, and how many more carry it because a section, role, or era above them does. An `ids` section appears only when the resume has names, and lists each with its kind and line. With `--format json` it prints one JSON object, with `type` `inventory`, instead. A resume with format errors prints its findings and no list, and exits 1, because a partial list would suggest a name is not used.
 
 | Option | Values and default | What it does |
 |---|---|---|
@@ -1025,6 +1025,7 @@ The files are applied from the least specific to the most specific: each profile
 - `tags` are a union of every file's tags.
 - `prefer` and `promote` list the most specific file's names first, then the names of less specific files that are not listed yet.
 - `pick`, `style`, `paper`, and `core-only` are decided by the most specific file that has one. A pick is decided for each group on its own.
+- An item override ([Changing one item for one application](#changing-one-item-for-one-application)) is decided for each item and each field on its own: the most specific file that writes an item's `tags` decides its tags, and the most specific file that writes its `priority` decides its priority. Tags are replaced, never added together.
 
 If the files cannot be put in one order, because a spec lists `["b", "base"]` while `b` extends `base`, the build stops and names both. A cycle is an error that prints the way round. The most you can nest is 8 levels and 32 profiles.
 
@@ -1058,6 +1059,35 @@ The spec lines come before anything else is said, so you see which spec and whic
 The PDF is named after the spec, not the baseline: `positions/acme.toml` builds `acme.pdf`, and that name is also the identity written into the PDF. Two specs over one baseline therefore write two files. Two specs with the same name in different directories would write the same file, and so would two names that differ only in capitals on macOS and Windows, so give each application its own file name.
 
 With `--format json`, a build writes one object with `type` `spec` on standard output, before the `selection` object and the findings. Every key is always there: `file`, `position` (the fields of `[position]`, each `null` when unset; `null` itself when the spec has no `[position]`), `chain` (the `name` and `file` of each link; the spec's `name` is `null`), `content`, `pdf` (the file written or, with `--dry-run`, the file that would be written; `null` when there is none), `style`, `paper`, `drafts`, `overrides`, `environment`, and `version`. Each override has the `flag`, the values it `set` (none for a switch), what it `replaced` (`null` when the spec chose nothing, else the `setting` and its `value` list), and `at`, where the spec chose it, one place for each file. The `selection` object also has `picks`, which is empty for a build of a file.
+
+### Changing one item for one application
+
+Sometimes one application needs one item to count differently, such as a bullet that is `@extra` in the baseline but central to this job. Do not edit the baseline, which every other application also reads. Give the item a name in the baseline with [`&id`](#naming-an-item), then say what changes in the spec or in a profile:
+
+```text
+[select.override.gateway]
+tags = ["ai", "platform"]
+priority = "core"
+
+[select.override.cache]
+tags = []
+priority = "none"
+```
+
+The name after `override.` is the item's `&id`, or the group name of a group of alternate wordings. An override can change only two things:
+
+| Key | What it does |
+|---|---|
+| `tags` | Replaces the item's own tags as a whole. `tags = []` removes them all. It does not change the tags `--tags` selects, and it does not change the tags the item inherits from its section, role, or era. |
+| `priority` | Sets the item's own priority to `core` or `extra`. `none` removes the item's own `@core` or `@extra`, so the item is judged by its tags alone. A role's blurb that has no priority of its own still takes its role's. |
+
+A table must write at least one of them; an empty one is an error. Nothing else about an item can change: not its text, its draft status, its order, or its name. Use `pick` and `prefer` to choose a wording, and `promote` to move items up. A group override applies to every wording of the group, so the wordings still agree.
+
+An item in a container follows the container's rules as before: a tag on a section, role, or era still applies to everything under it, and a priority on a container does not pass down. An item that is a draft stays out of the build whatever its priority.
+
+The cover letter has its own table, `[letter.select.override.<id>]`, for the body paragraphs of the letter. A name used in the resume and in the letter means two different items, one in each document. The greeting and closing are not items a spec can address.
+
+Naming an item that the baseline does not have is an error that names the line that wrote the override, and no PDF is made. The check runs before anything is selected, so a misspelled name is found even when the item it meant would have been left out. `--print-spec` prints the overrides, including `tags = []` and `priority = "none"`, and still does not read the baseline. `resume tags` lists the names a spec can use.
 
 ### Ordering with promote
 

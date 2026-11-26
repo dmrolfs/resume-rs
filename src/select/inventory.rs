@@ -14,6 +14,19 @@ pub struct Inventory {
     /// The four keywords, always all four, in the order `core`, `extra`, `draft`, `verify`.
     pub keywords: Vec<KeywordUse>,
     pub groups: Vec<GroupUse>,
+    /// The `&id` names a position spec can address, in document order. A group is addressed by its group name and is
+    /// already listed under `groups`. Left out of the record when there are none, so a baseline without ids lists
+    /// exactly as it always did.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub ids: Vec<IdUse>,
+}
+
+/// One `&id` a spec can put under `[select.override.<id>]`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct IdUse {
+    pub name: String,
+    pub kind: NodeKind,
+    pub line: usize,
 }
 
 /// One tag: the nodes that carry it themselves, and those that carry it only through a section, role, or era.
@@ -68,6 +81,7 @@ impl Inventory {
             ("verify", Vec::new()),
         ];
         let mut groups: Vec<GroupUse> = Vec::new();
+        let mut ids: Vec<IdUse> = Vec::new();
         // The containers open above the current node, by depth: their tags and whether one is a draft.
         let mut open: Vec<(Vec<String>, bool)> = Vec::new();
         for (index, node) in nodes.iter().enumerate() {
@@ -103,6 +117,13 @@ impl Inventory {
                     at.push(line(index));
                 }
             }
+            if let Some(id) = &annotations.id {
+                ids.push(IdUse {
+                    name: id.to_string(),
+                    kind: node.kind,
+                    line: line(index),
+                });
+            }
             if let Some(alternate) = &annotations.alternate {
                 let variant = VariantUse {
                     name: alternate.variant.to_string(),
@@ -132,6 +153,7 @@ impl Inventory {
                 .map(|(name, lines)| KeywordUse { name, lines })
                 .collect(),
             groups,
+            ids,
         }
     }
 }
