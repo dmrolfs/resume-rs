@@ -1,13 +1,14 @@
 //! ABOUTME: What a spec build tells a person: the position, the profile chain, the content, overrides, environment.
 //! ABOUTME: One value feeds both the human lines and the JSON `spec` record, so the two cannot disagree.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::Serialize;
 
-use crate::cli::{BuildArgs, LetterArgs, RenderArgs};
+use crate::cli::{BuildArgs, LetterArgs};
 use crate::model::options::FontsMode;
-use crate::spec::error::{shown, tidy_path};
+use crate::pipeline::RenderSettings;
+use crate::spec::error::shown;
 use crate::spec::{
     Applied, AppliedLetter, Located, Origin, Override, Position, Replaced, ResolvedLetter, ResolvedSpec, paper_name,
 };
@@ -115,16 +116,7 @@ pub(super) struct SpecFacts {
     fonts_changed: bool,
 }
 
-/// How a path is shown: tidied, and relative to the current directory when it is under it. Never opened.
-pub(super) fn shown_path(cwd: &Path, path: &Path) -> PathBuf {
-    let tidy = tidy_path(path);
-    tidy.strip_prefix(cwd).map_or(tidy.clone(), Path::to_path_buf)
-}
-
-/// `file:line:column` of a place, with the file shown as [`shown_path`] shows it.
-pub(super) fn located(cwd: &Path, at: &Located) -> String {
-    format!("{}:{}:{}", shown_path(cwd, &at.path).display(), at.line, at.column)
-}
+pub(super) use crate::spec::plan::{located, shown_path};
 
 impl OverrideFact {
     fn of(cwd: &Path, item: &Override) -> Self {
@@ -155,7 +147,7 @@ impl SpecFacts {
         resolved: &ResolvedSpec,
         applied: &Applied,
         args: &BuildArgs,
-        render: &RenderArgs,
+        render: &RenderSettings,
     ) -> Self {
         let shown = |path: &Path| shown_path(cwd, path).display().to_string();
         Self {
@@ -176,7 +168,7 @@ impl SpecFacts {
             paper: paper_name(render.paper),
             drafts: args.select.drafts,
             overrides: applied.overrides.iter().map(|o| OverrideFact::of(cwd, o)).collect(),
-            environment: EnvironmentFact::of(&args.render, &args.out),
+            environment: EnvironmentFact::of(&RenderSettings::from(&args.render), &args.out),
             version: env!("CARGO_PKG_VERSION"),
             content_at: resolved.content.at.clone(),
             fonts_changed: args.render.fonts != FontsMode::default(),
@@ -338,7 +330,7 @@ impl SettingFact {
 
 /// The flags about the machine, shared by what the resume and the letter of a spec report.
 impl EnvironmentFact {
-    fn of(render: &RenderArgs, out: &Path) -> Self {
+    fn of(render: &RenderSettings, out: &Path) -> Self {
         Self {
             fonts: render.fonts.to_string(),
             font_path: render.font_path.iter().map(|p| p.display().to_string()).collect(),
@@ -416,9 +408,9 @@ impl LetterFacts {
         );
         field("date", choices.date.as_ref().map(|c| (c.value.to_string(), &c.origin)));
         // The machine flags as typed: a default the command fills in (one page) is not something the user said.
-        let typed = RenderArgs {
+        let typed = RenderSettings {
             max_pages: args.render.max_pages,
-            ..args.render_for(choices)
+            ..RenderSettings::from(&args.render_for(choices))
         };
         Self {
             kind: "letter-spec",

@@ -7,14 +7,14 @@ use typst::diag::{Severity as TypstSeverity, SourceDiagnostic};
 use typst::syntax::DiagSpan;
 
 use crate::diagnostics::{Diagnostic, DiagnosticCode, Severity, SourceKind, Span};
-use crate::typeset::world::ResumeWorld;
+use crate::typeset::world::StyleWorld;
 
 /// Maps Typst diagnostics to ours, keeping Typst's order.
-pub(crate) fn convert(world: &ResumeWorld, diagnostics: impl IntoIterator<Item = SourceDiagnostic>) -> Vec<Diagnostic> {
+pub(crate) fn convert(world: &StyleWorld, diagnostics: impl IntoIterator<Item = SourceDiagnostic>) -> Vec<Diagnostic> {
     diagnostics.into_iter().map(|d| convert_one(world, &d)).collect()
 }
 
-fn convert_one(world: &ResumeWorld, diagnostic: &SourceDiagnostic) -> Diagnostic {
+fn convert_one(world: &StyleWorld, diagnostic: &SourceDiagnostic) -> Diagnostic {
     let (severity, code) = match diagnostic.severity {
         TypstSeverity::Error => (Severity::Error, DiagnosticCode::TypstError),
         TypstSeverity::Warning => (Severity::Warning, DiagnosticCode::TypstWarning),
@@ -47,7 +47,7 @@ fn convert_one(world: &ResumeWorld, diagnostic: &SourceDiagnostic) -> Diagnostic
 }
 
 /// The style file and byte range a span points at, if it points into a style file.
-fn locate(world: &ResumeWorld, span: DiagSpan) -> Option<Span> {
+fn locate(world: &StyleWorld, span: DiagSpan) -> Option<Span> {
     Some(Span {
         file: world.display_path(span.id()?)?,
         kind: SourceKind::Style,
@@ -56,7 +56,7 @@ fn locate(world: &ResumeWorld, span: DiagSpan) -> Option<Span> {
 }
 
 /// `file:line` for a span in a style file, with a 1-based line as Typst counts lines.
-fn describe(world: &ResumeWorld, span: DiagSpan) -> Option<String> {
+fn describe(world: &StyleWorld, span: DiagSpan) -> Option<String> {
     let located = locate(world, span)?;
     let source = world.source(span.id()?).ok()?;
     let line = source.lines().byte_to_line(located.range.start)? + 1;
@@ -78,12 +78,12 @@ mod tests {
     use typst::ecow::EcoVec;
     use typst::syntax::{Span as TypstSpan, Spanned};
 
-    fn world_in(root: &std::path::Path, name: &str) -> ResumeWorld {
+    fn world_in(root: &std::path::Path, name: &str) -> StyleWorld {
         let style = assert_ok!(StyleSource::directory(root, assert_ok!(StyleName::try_new(name))));
-        ResumeWorld::new(style, Arc::new(FontSet::bundled()), b"{}".to_vec(), Paper::Letter)
+        StyleWorld::new(style, Arc::new(FontSet::bundled()), b"{}".to_vec(), Paper::Letter)
     }
 
-    fn fixtures_world() -> ResumeWorld {
+    fn fixtures_world() -> StyleWorld {
         world_in(
             &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/styles"),
             "minimal",

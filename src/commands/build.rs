@@ -17,7 +17,7 @@ use crate::error::{Error, SpecContentSnafu, SpecSnafu, TracedToChoiceSnafu};
 use crate::markdown::Parsed;
 use crate::model::options::OutputFormat;
 use crate::output::{Overwrite, Planned, WriteMode, Writer, Written};
-use crate::pipeline::{Assessment, NameOrigins, Rendered, Selected, Session, Skip};
+use crate::pipeline::{Assessment, NameOrigins, RenderSettings, Rendered, Selected, Session, Skip};
 use crate::select::{CorePages, Selection, SelectionRecord, SelectionSummary};
 use crate::spec::{ChoiceKey, Located, ResolvedSpec};
 
@@ -58,7 +58,7 @@ impl<'a> BuildResult<'a> {
 /// printed.
 pub(super) struct Job<'a> {
     out_dir: &'a Path,
-    render: &'a RenderArgs,
+    render: RenderSettings,
     selection: Selection,
     format: OutputFormat,
     cwd: &'a Path,
@@ -220,7 +220,7 @@ fn run_spec(cli: &Cli, args: &BuildArgs, spec_path: &Path, env: &Env, out: &mut 
         names,
         style_at,
     };
-    let job = match Job::open_with(cli, &args.out, &render, selection, env) {
+    let job = match Job::open_with(cli, &args.out, render, selection, env) {
         Ok(job) => job.with_spec(run),
         Err(error) => {
             out.error(&run.style_error(error));
@@ -260,23 +260,23 @@ impl<'a> Job<'a> {
     pub(super) fn open(
         cli: &Cli,
         out_dir: &'a Path,
-        render: &'a RenderArgs,
+        render: &RenderArgs,
         select: &SelectArgs,
         env: &'a Env,
     ) -> Result<Self, Error> {
-        Self::open_with(cli, out_dir, render, select.selection(), env)
+        Self::open_with(cli, out_dir, RenderSettings::from(render), select.selection(), env)
     }
 
     /// [`Self::open`] for a selection that does not come from `SelectArgs`, such as a spec's.
     fn open_with(
         cli: &Cli,
         out_dir: &'a Path,
-        render: &'a RenderArgs,
+        render: RenderSettings,
         selection: Selection,
         env: &'a Env,
     ) -> Result<Self, Error> {
         // `build` can do nothing without a style or fonts, unlike `doctor`, which reports them.
-        let session = Session::open(render, env.resume_font_path.as_deref()).require_ready()?;
+        let session = Session::open(&render, env.resume_font_path.as_deref()).require_ready()?;
         Ok(Self {
             out_dir,
             render,
@@ -326,7 +326,7 @@ impl<'a> Job<'a> {
         let names = self.spec.as_ref().map_or(&no_names, |spec| &spec.names);
         let assessment = self
             .session
-            .assess_with(file, &text, self.render, &self.selection, names);
+            .assess_with(file, &text, &self.render, &self.selection, names);
         let mut sources = out.sources();
         sources.insert(file, &text);
         let parsed = &assessment.parsed;
@@ -450,7 +450,7 @@ impl<'a> Job<'a> {
         if let (Some(summary), Some(baseline)) = (summary.as_mut(), assessment.parsed.valid())
             && !summary.is_silent()
         {
-            summary.core = Some(match self.session.core_pages(baseline, &self.selection, self.render) {
+            summary.core = Some(match self.session.core_pages(baseline, &self.selection, &self.render) {
                 Ok(core) => core,
                 Err(error) => {
                     core_error = Some(error);
@@ -490,7 +490,7 @@ impl<'a> Job<'a> {
     /// # Errors
     /// The style can no longer be resolved, as it could at the start.
     pub(super) fn refresh_style(&mut self) -> Result<(), Error> {
-        self.session.resolve_style_again(self.render)
+        self.session.resolve_style_again(&self.render)
     }
 
     /// The name of the style in use; the session was checked ready before any file was built.

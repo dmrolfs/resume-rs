@@ -83,6 +83,21 @@ pub(super) fn read_source_shown(open: &Path, path: &Path) -> Result<Source, Spec
     Ok(Source::new(path.to_path_buf(), text))
 }
 
+/// A spec or profile that is already in memory, shown as `path` in every error and location.
+///
+/// The file does not have to exist: the desktop app resolves text that is not saved yet. The size cap is the one a
+/// file read applies, so text a file would be refused for is refused here too.
+pub(super) fn text_source(path: &Path, text: &str) -> Result<Source, SpecError> {
+    if text.len() as u64 > MAX_FILE_BYTES {
+        return TooLargeSnafu {
+            path,
+            len: text.len() as u64,
+        }
+        .fail();
+    }
+    Ok(Source::new(path.to_path_buf(), text.to_string()))
+}
+
 /// The segment `Spanned` adds to a key path; it is not a key.
 const SPANNED_SEGMENT: &str = "$__serde_spanned_private_value";
 

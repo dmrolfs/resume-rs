@@ -2,20 +2,37 @@
 //! ABOUTME: `build` and `doctor` both start here, so what each reports about a resume cannot drift apart.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::cli::RenderArgs;
 use crate::diagnostics::{Diagnostic, DiagnosticCode, Severity};
 use crate::error::Error;
 use crate::layout::LayoutReport;
 use crate::markdown::{Parsed, parse};
 use crate::model::Resume;
-use crate::model::{Priority, Tag, VariantName};
+use crate::model::options::{FontsMode, PageLimit, Paper};
+use crate::model::{Priority, StyleName, Tag, VariantName};
 use crate::select::{self, CorePages, CoreSkip, Scope, Selection, SelectionReport, SelectionSummary, UnknownNames};
 use crate::style::{self, StyleSource};
 use crate::typeset::fonts::{FontSet, FontSetBuilder};
 use crate::typeset::{Compiled, RenderOptions, Typesetter};
+
+/// How a resume or letter is rendered: the style and where to find it, the paper, the page limit, and the fonts.
+///
+/// The plain values a render needs, so a caller that has no command line (the desktop app) asks for a render in
+/// the same terms the command line does. The command line's render options convert into it with `From`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderSettings {
+    pub style: StyleName,
+    /// A directory of styles besides the built-in ones; a style there wins over a built-in of the same name.
+    pub styles_dir: Option<PathBuf>,
+    pub paper: Paper,
+    /// Fail when the document needs more pages than this.
+    pub max_pages: Option<PageLimit>,
+    pub fonts: FontsMode,
+    /// Directories of fonts to use in `FontsMode::Auto`.
+    pub font_path: Vec<PathBuf>,
+}
 
 /// What one run shares across the files it assesses: the style, the fonts, and the typesetter.
 ///
@@ -32,7 +49,7 @@ impl Session {
     ///
     /// `resume_font_path` is the value of `RESUME_FONT_PATH`, passed in so tests do not touch the process.
     #[must_use]
-    pub fn open(render: &RenderArgs, resume_font_path: Option<&std::ffi::OsStr>) -> Self {
+    pub fn open(render: &RenderSettings, resume_font_path: Option<&std::ffi::OsStr>) -> Self {
         let style = style::resolve(&render.style, render.styles_dir.as_deref());
         let builder: FontSetBuilder = render
             .font_path
@@ -71,7 +88,7 @@ impl Session {
     ///
     /// # Errors
     /// The style cannot be resolved now. The previous style is kept, so the next build still has one.
-    pub fn resolve_style_again(&mut self, render: &RenderArgs) -> Result<(), Error> {
+    pub fn resolve_style_again(&mut self, render: &RenderSettings) -> Result<(), Error> {
         self.style = Ok(style::resolve(&render.style, render.styles_dir.as_deref())?);
         Ok(())
     }
@@ -110,7 +127,7 @@ impl Session {
     /// The selection tailors what is compiled; `parsed` stays the whole baseline, so doctor's content lints and
     /// `--fix` read every item whatever the selection leaves out.
     #[must_use]
-    pub fn assess(&self, file: &Path, text: &str, render: &RenderArgs, selection: &Selection) -> Assessment {
+    pub fn assess(&self, file: &Path, text: &str, render: &RenderSettings, selection: &Selection) -> Assessment {
         self.assess_with(file, text, render, selection, &NameOrigins::default())
     }
 
@@ -121,7 +138,7 @@ impl Session {
         &self,
         file: &Path,
         text: &str,
-        render: &RenderArgs,
+        render: &RenderSettings,
         selection: &Selection,
         names: &NameOrigins,
     ) -> Assessment {
@@ -164,7 +181,7 @@ impl Session {
         &self,
         baseline: &Resume,
         selection: &Selection,
-        render: &RenderArgs,
+        render: &RenderSettings,
     ) -> Result<CorePages, Error> {
         if selection.scope == Scope::CoreOnly {
             return Ok(CorePages::Skipped {
@@ -197,7 +214,7 @@ impl Session {
         })
     }
 
-    fn render(&self, resume: &Resume, style: &StyleSource, fonts: &Arc<FontSet>, render: &RenderArgs) -> Rendered {
+    fn render(&self, resume: &Resume, style: &StyleSource, fonts: &Arc<FontSet>, render: &RenderSettings) -> Rendered {
         let typesetter = self
             .typesetter
             .as_ref()
@@ -499,12 +516,12 @@ mod tests {
     use crate::model::{GroupName, VariantName};
     use claims::{assert_none, assert_ok, assert_some};
 
-    fn render_args() -> RenderArgs {
+    fn render_args() -> RenderSettings {
         let cli = assert_ok!(Cli::try_parse_validated([
             "resume", "build", "r.md", "--fonts", "bundled"
         ]));
         match cli.command {
-            Command::Build(build) => build.render,
+            Command::Build(build) => RenderSettings::from(&build.render),
             _ => unreachable!("parsed a build"),
         }
     }
@@ -697,7 +714,7 @@ mod tests {
         let Command::Build(build) = missing.command else {
             unreachable!("parsed a build")
         };
-        let session = Session::open(&build.render, None);
+        let session = Session::open(&RenderSettings::from(&build.render), None);
         let plain = session.assess(Path::new("r.md"), TEXT, &render, &Selection::default());
         assert!(matches!(plain.rendered, Rendered::Skipped(Skip::Setup)));
         assert_some!(plain.selected, "the selection is known without a style");

@@ -14,6 +14,7 @@ pub mod letter;
 pub mod merge;
 pub mod names;
 pub mod overrides;
+pub mod plan;
 mod raw;
 mod read;
 pub mod resolved;

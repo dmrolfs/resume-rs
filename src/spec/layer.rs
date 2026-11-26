@@ -15,7 +15,7 @@ use super::error::{
 use super::letter::{self, LetterSettings};
 use super::names::{DeclaredPath, Level, PositionLabel, ProfileName};
 use super::raw::{RawBuild, RawEmphasis, RawFile, RawPosition, RawSelect, Text};
-use super::read::{Source, parse, read_source, read_source_shown};
+use super::read::{Source, parse, read_source, read_source_shown, text_source};
 use crate::diagnostics::has_unsafe_characters;
 use crate::model::options::Paper;
 use crate::model::{Alternate, Company, GroupName, StyleName, Tag, Title, VariantName};
@@ -105,6 +105,19 @@ impl SpecLayer {
     /// A [`SpecError`] naming the file and, where it can, the line, column, and key.
     pub fn load(path: &Path) -> Result<Self, SpecError> {
         Layer::load(Kind::Spec, path).map(Self)
+    }
+
+    /// Parses and validates `text` as the position spec at `path`, without reading the file.
+    ///
+    /// For text that is being edited and is not saved: `path` names the file in every error and is what a relative
+    /// `content` or profile is resolved against. It gives the same layer, and the same located errors, as
+    /// [`Self::load`] gives for a file holding `text`.
+    ///
+    /// # Errors
+    /// A [`SpecError`] naming `path` and, where it can, the line, column, and key; [`SpecError::TooLarge`] past the
+    /// size a file may be.
+    pub fn from_text(path: &Path, text: &str) -> Result<Self, SpecError> {
+        Layer::from_source(Kind::Spec, &text_source(path, text)?).map(Self)
     }
 
     /// `layer`, if it is a spec.

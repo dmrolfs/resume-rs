@@ -6,7 +6,9 @@ pub mod fonts;
 pub mod geometry;
 pub(crate) mod pdf;
 pub mod probe;
-pub(crate) mod world;
+mod world;
+
+pub use self::world::{DocumentKind, StyleWorld};
 
 use std::any::Any;
 use std::sync::Arc;
@@ -25,7 +27,6 @@ use crate::model::options::Paper;
 use crate::style::StyleSource;
 
 use self::fonts::FontSet;
-use self::world::ResumeWorld;
 
 /// Stack for the thread that compiles and exports.
 ///
@@ -84,7 +85,7 @@ impl Typesetter {
     /// - `Error::Compile` - the style has errors; carries every diagnostic and the style text
     pub fn compile(&self, resume: &Resume, style: &StyleSource, options: RenderOptions) -> Result<Compiled, Error> {
         let json = resume_json(resume, false)?;
-        let world = ResumeWorld::new(style.clone(), Arc::clone(&self.fonts), json, options.paper);
+        let world = StyleWorld::new(style.clone(), Arc::clone(&self.fonts), json, options.paper);
         Self::compile_world(world)
     }
 
@@ -98,9 +99,10 @@ impl Typesetter {
         style: &StyleSource,
         options: RenderOptions,
     ) -> Result<Compiled, Error> {
+        // Checked before the letter is serialized, so a style with no letter entry is named whatever the letter holds.
         style.require_letter()?;
         let json = serde_json::to_vec(letter).context(crate::error::SerializeLetterSnafu)?;
-        let world = ResumeWorld::for_kind(
+        let world = StyleWorld::for_kind(
             world::DocumentKind::Letter,
             style.clone(),
             Arc::clone(&self.fonts),
@@ -110,7 +112,18 @@ impl Typesetter {
         Self::compile_world(world)
     }
 
-    fn compile_world(world: ResumeWorld) -> Result<Compiled, Error> {
+    /// Compiles `world` as the renderer compiles: on a thread with a large stack, a Typst panic becoming an error.
+    ///
+    /// This is the path for a world built with [`StyleWorld::new`] or [`StyleWorld::for_kind`]. A letter world on a
+    /// style with no letter entry gives `Error::StyleMissingLetter`, as [`Self::compile_letter`] does.
+    ///
+    /// # Errors
+    /// `Error::StyleMissingLetter`, `Error::SpawnTypesetThread`, `Error::TypesetPanicked`, or `Error::Compile` with
+    /// every diagnostic.
+    pub fn compile_world(world: StyleWorld) -> Result<Compiled, Error> {
+        if world.kind() == world::DocumentKind::Letter {
+            world.style().require_letter()?;
+        }
         let Warned { output, warnings } = isolated(Stage::Compile, || typst::compile::<PagedDocument>(&world))?;
         let sources = world.served_sources();
         match output {
@@ -154,7 +167,7 @@ pub struct Compiled {
     warnings: Vec<Diagnostic>,
     sources: StyleSources,
     /// Kept so export errors can be located in the style files, like compile errors.
-    world: ResumeWorld,
+    world: StyleWorld,
 }
 
 impl std::fmt::Debug for Compiled {

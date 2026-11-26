@@ -91,8 +91,23 @@ impl Parsed {
     pub fn node_lines(&self, text: &str) -> Vec<usize> {
         let source = Source { text };
         self.outline.as_ref().map_or_else(Vec::new, |outline| {
-            outline.starts.iter().map(|&at| source.line_of(at)).collect()
+            outline.ranges.iter().map(|range| source.line_of(range.start)).collect()
         })
+    }
+
+    /// The source byte range of each node of the model, in [`Resume::nodes`] order; empty without a model.
+    ///
+    /// The model is the best-effort one ([`Parsed::best_effort`]), so ranges exist for a resume that also has
+    /// errors; they describe the nodes it kept.
+    ///
+    /// A range is the node's own text block, for navigation and highlighting, not a span safe to delete: a section,
+    /// role or era is its heading or era line, a paragraph or blurb is its paragraph, and a bullet is its first
+    /// paragraph with any annotation comment written in it (a nested bullet is its own node and is not inside its
+    /// parent's range). Each range is on UTF-8 boundaries of the text this was parsed from. The index is the node's
+    /// place in the parsed baseline, not in a selected or reordered copy.
+    #[must_use]
+    pub fn node_ranges(&self) -> &[std::ops::Range<usize>] {
+        self.outline.as_ref().map_or(&[], |outline| outline.ranges.as_slice())
     }
 
     /// The model, only when there is no error-severity diagnostic.

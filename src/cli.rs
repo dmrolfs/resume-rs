@@ -391,7 +391,7 @@ impl Cli {
 }
 
 /// The suffix the letter of a file or a spec adds to its name: `acme.md` has the letter `acme-letter.pdf`.
-pub(crate) const LETTER_SUFFIX: &str = "-letter";
+pub(crate) use crate::spec::plan::LETTER_SUFFIX;
 
 /// Refuses a resume whose name ends in `-letter`, because its PDF would be named like the letter of another file.
 ///
@@ -419,6 +419,19 @@ fn refuse_letter_stem(input: &Path) -> Result<(), clap::Error> {
 /// A usage error in clap's own format, so it exits with code 2 like any other.
 fn usage_error(message: impl std::fmt::Display) -> clap::Error {
     Cli::command().error(ErrorKind::ArgumentConflict, message)
+}
+
+impl From<&RenderArgs> for crate::pipeline::RenderSettings {
+    fn from(args: &RenderArgs) -> Self {
+        Self {
+            style: args.style.clone(),
+            styles_dir: args.styles_dir.clone(),
+            paper: args.paper,
+            max_pages: args.max_pages,
+            fonts: args.fonts,
+            font_path: args.font_path.clone(),
+        }
+    }
 }
 
 impl RenderArgs {
@@ -479,9 +492,7 @@ impl BuildArgs {
     /// The file stem of `input`, which names the PDF built from it and is the PDF's identity.
     #[must_use]
     pub fn pdf_stem(input: &Path) -> String {
-        input
-            .file_stem()
-            .map_or_else(|| "resume".into(), |stem| stem.to_string_lossy().into_owned())
+        crate::spec::plan::file_stem(input)
     }
 
     /// The name of the PDF built from `input`.

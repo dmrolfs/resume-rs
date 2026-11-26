@@ -49,14 +49,14 @@ pub(crate) fn interpret(doc: &Document, src: &Source<'_>, sink: &mut Sink<'_>) -
     above[..body].iter_mut().for_each(|marked| {
         annotation::unclaimed(marked.take(), "the name and the contact line take no annotation", sink)
     });
-    let (sections, outline, groups, starts) = walk_sections(&rest[consumed..], &mut above[body..], src, sink);
+    let (sections, outline, groups, ranges) = walk_sections(&rest[consumed..], &mut above[body..], src, sink);
     match name {
         Some(name) => (
             Some(Resume::new(name, contact, sections)),
             Some(Outline {
                 sections: outline,
                 groups,
-                starts,
+                ranges,
             }),
         ),
         None => (None, None),
@@ -261,21 +261,18 @@ fn html_block(node: &HtmlNode, src: &Source<'_>, sink: &mut Sink<'_>) -> HtmlCla
 // Sections
 // ---------------------------------------------------------------------------------------------
 
-/// Walks the blocks after the name, building sections; used with or without a valid name.
+/// What walking the sections yields: the sections, their outline, the alternate groups' text, and each node's range.
+type Walked = (Vec<Section>, Vec<SectionOutline>, Vec<Vec<Located>>, Vec<Range<usize>>);
+
 /// Walks the blocks after the header; `above` holds each block's full-line annotation, taken as it is used.
-fn walk_sections(
-    blocks: &[BlockNode],
-    above: &mut [Option<Marked>],
-    src: &Source<'_>,
-    sink: &mut Sink<'_>,
-) -> (Vec<Section>, Vec<SectionOutline>, Vec<Vec<Located>>, Vec<usize>) {
+fn walk_sections(blocks: &[BlockNode], above: &mut [Option<Marked>], src: &Source<'_>, sink: &mut Sink<'_>) -> Walked {
     let next = next_visible(blocks);
     let mut walker = Walker {
         current: None,
         sections: Vec::new(),
         outline: Vec::new(),
         items: Items::default(),
-        starts: Vec::new(),
+        ranges: Vec::new(),
     };
     for (index, (block, next)) in blocks.iter().zip(next).enumerate() {
         let marked = above[index].take();
@@ -290,7 +287,7 @@ fn walk_sections(
     }
     walker.close_section(sink);
     let groups = annotation::group(&walker.items.0, sink);
-    (walker.sections, walker.outline, groups, walker.starts)
+    (walker.sections, walker.outline, groups, walker.ranges)
 }
 
 /// Every item that could be an alternate, in document order, carrying its visible text for the facts lint.
@@ -343,8 +340,8 @@ struct Walker {
     sections: Vec<Section>,
     outline: Vec<SectionOutline>,
     items: Items,
-    /// Where each node of the kept sections starts, in model order.
-    starts: Vec<usize>,
+    /// The source range of each node of the kept sections, in model order.
+    ranges: Vec<Range<usize>>,
 }
 
 impl Walker {
@@ -439,10 +436,10 @@ impl Walker {
     fn close_section(&mut self, sink: &mut Sink<'_>) {
         let Some(mut builder) = self.current.take() else { return };
         self.items.append(std::mem::take(&mut builder.items));
-        if let Some((section, outline, starts)) = builder.finish(sink) {
+        if let Some((section, outline, ranges)) = builder.finish(sink) {
             self.sections.push(section);
             self.outline.push(outline);
-            self.starts.extend(starts);
+            self.ranges.extend(ranges);
         }
     }
 }
@@ -477,8 +474,8 @@ struct SectionBuilder {
     order: Vec<RoleKey>,
     /// Where the section's heading text is, and what the section holds outside roles, for the outline.
     heading: Range<usize>,
-    /// Where the section's heading line starts, then each node of `blocks` in model order.
-    starts: Vec<usize>,
+    /// The section's heading, then each node of `blocks` in model order.
+    ranges: Vec<Range<usize>>,
     prose: Vec<Located>,
     bullets: Vec<BulletOutline>,
     roles: Vec<RoleOutline>,
@@ -509,7 +506,7 @@ impl SectionBuilder {
             role: None,
             order: Vec::new(),
             heading: role::content_range(heading),
-            starts: vec![heading.range.start],
+            ranges: vec![heading.range.clone()],
             prose: Vec::new(),
             bullets: Vec::new(),
             roles: Vec::new(),
@@ -523,8 +520,8 @@ impl SectionBuilder {
         annotation::forbid_alternate(&mut marked, "role line", sink);
         let head = role::role_line(heading, src, sink);
         self.role = Some(RoleBuilder {
-            start: heading.range.start,
-            starts: Vec::new(),
+            line: heading.range.clone(),
+            ranges: Vec::new(),
             head,
             annotations: annotation::annotations_of(marked),
             blurb_annotations: Annotations::default(),
@@ -543,8 +540,8 @@ impl SectionBuilder {
         role.close_era();
         let Some(head) = role.head else { return };
         // The role line, then the blurb's start when it has one, then the body in model order.
-        self.starts.push(role.start);
-        self.starts.extend(role.starts);
+        self.ranges.push(role.line);
+        self.ranges.extend(role.ranges);
         self.order.push(RoleKey {
             end: head.period.end,
             range: head.range.clone(),
@@ -594,7 +591,7 @@ impl SectionBuilder {
         match (role::era_line(paragraph, src, sink), self.role.as_mut()) {
             (EraCheck::Era(head), Some(role)) => {
                 annotation::forbid_alternate(&mut marked, "era line", sink);
-                role.start_era(paragraph.range.start, head, annotation::annotations_of(marked));
+                role.start_era(paragraph.range.clone(), head, annotation::annotations_of(marked));
                 self.boundary(paragraph.range.clone());
             }
             (EraCheck::Era(_), None) => {
@@ -628,13 +625,13 @@ impl SectionBuilder {
         let container = self.container();
         self.items
             .push(&annotations, range, container, ItemKind::Paragraph, located.clone());
-        let start = paragraph.range.start;
+        let block = paragraph.range.clone();
         match self.role.as_mut() {
-            Some(role) => role.paragraph(content, annotations, located, start),
+            Some(role) => role.paragraph(content, annotations, located, block),
             None => {
                 self.prose.push(located);
                 self.blocks.push(Block::Paragraph { content, annotations });
-                self.starts.push(start);
+                self.ranges.push(block);
             }
         }
     }
@@ -660,11 +657,11 @@ impl SectionBuilder {
                 )
             })
             .collect();
-        let starts: Vec<usize> = located.iter().map(|outline| outline.item.start).collect();
+        let ranges: Vec<Range<usize>> = located.iter().map(|outline| outline.item.clone()).collect();
         match self.role.as_mut() {
-            Some(role) => role.bullets(items, located, continues, starts),
+            Some(role) => role.bullets(items, located, continues, ranges),
             None => {
-                self.starts.extend(starts);
+                self.ranges.extend(ranges);
                 self.bullets.extend(located);
                 match self.blocks.last_mut() {
                     Some(Block::Bullets { items: before }) if continues => before.extend(items),
@@ -695,12 +692,12 @@ impl SectionBuilder {
     /// The innermost open container: the era, else the role, else the section, named by where it starts.
     fn container(&self) -> usize {
         match &self.role {
-            Some(role) => role.era.as_ref().map_or(role.start, |era| era.start),
+            Some(role) => role.era.as_ref().map_or(role.line.start, |era| era.start),
             None => self.heading.start,
         }
     }
 
-    fn finish(mut self, sink: &mut Sink<'_>) -> Option<(Section, SectionOutline, Vec<usize>)> {
+    fn finish(mut self, sink: &mut Sink<'_>) -> Option<(Section, SectionOutline, Vec<Range<usize>>)> {
         self.close_role();
         lint::role_order(&self.order, sink);
         let title = self.title?;
@@ -718,17 +715,17 @@ impl SectionBuilder {
                 annotations: self.annotations,
             },
             outline,
-            self.starts,
+            self.ranges,
         ))
     }
 }
 
 /// A role in progress; `head: None` means the role line was unrecoverable, so the body is dropped.
 struct RoleBuilder {
-    /// Where the role line starts, which names the role as a container of alternates.
-    start: usize,
-    /// Where the blurb and each body node start, in model order (an era, then its bullets).
-    starts: Vec<usize>,
+    /// The role line: the role node's own range, and where it starts names the role as a container of alternates.
+    line: Range<usize>,
+    /// The blurb and each body node, in model order (an era, then its bullets).
+    ranges: Vec<Range<usize>>,
     head: Option<RoleHead>,
     annotations: Annotations,
     blurb_annotations: Annotations,
@@ -759,10 +756,11 @@ struct EraBuilder {
 }
 
 impl RoleBuilder {
-    fn start_era(&mut self, start: usize, head: EraHead, annotations: Annotations) {
+    fn start_era(&mut self, line: Range<usize>, head: EraHead, annotations: Annotations) {
         self.close_era();
         self.started = true;
-        self.starts.push(start);
+        let start = line.start;
+        self.ranges.push(line);
         self.outline.eras.push(head.period.clone());
         self.era = Some(EraBuilder {
             start,
@@ -789,8 +787,8 @@ impl RoleBuilder {
         }
     }
 
-    fn paragraph(&mut self, content: Vec<Inline>, annotations: Annotations, located: Located, start: usize) {
-        self.starts.push(start);
+    fn paragraph(&mut self, content: Vec<Inline>, annotations: Annotations, located: Located, block: Range<usize>) {
+        self.ranges.push(block);
         if !self.started {
             self.started = true;
             self.blurb = Some(content);
@@ -803,9 +801,9 @@ impl RoleBuilder {
         self.body.push(RoleBlock::Paragraph { content, annotations });
     }
 
-    fn bullets(&mut self, items: Vec<Bullet>, located: Vec<BulletOutline>, continues: bool, starts: Vec<usize>) {
+    fn bullets(&mut self, items: Vec<Bullet>, located: Vec<BulletOutline>, continues: bool, ranges: Vec<Range<usize>>) {
         self.started = true;
-        self.starts.extend(starts);
+        self.ranges.extend(ranges);
         self.outline.bullets.extend(located);
         match (self.era.as_mut(), self.body.last_mut()) {
             (Some(era), _) => era.items.extend(items),
