@@ -1,0 +1,8 @@
+# Ollama's OpenAI-compatible route; choose an installed local model.
+base_url = "http://127.0.0.1:11434/v1"
+model = "replace-with-installed-model"
+idle_timeout = 120
+total_timeout = 300
+max_tokens = 4096
+# Use json_schema if the server supports it; never silently downgrade.
+response_format = "json_object"

@@ -1,0 +1,13 @@
+# Copy outside the repository and fill in the authorized gateway URL/model.
+base_url = "https://gateway.example.com/v1"
+model = "replace-with-gateway-model"
+allow_remote = true
+api_key_env = "ADVISOR_GATEWAY_TOKEN"
+# Deliberately separate: changing base_url must not forward an old credential.
+credential_base_url = "https://gateway.example.com/v1"
+idle_timeout = 120
+total_timeout = 300
+max_tokens = 4096
+response_format = "json_schema"
+# ca_file = "/absolute/path/to/private-ca.pem"
+# engagement = "explicitly-selected-engagement"
