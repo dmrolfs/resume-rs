@@ -654,7 +654,7 @@ fn a_core_only_compile_that_fails_fails_the_build_and_keeps_the_pdf() {
     // A style that compiles the whole resume but fails when there is only one section.
     work.file(
         "styles/fragile/style.typ",
-        "#let resume = json(\"/resume.json\")\n#assert(resume.sections.len() > 1, message: \"needs two sections\")\n#for s in resume.sections [#s.title]\n",
+        "#let resume = json(\"/resume.json\")\n#set document(title: resume.name)\n#assert(resume.sections.len() > 1, message: \"needs two sections\")\n#for s in resume.sections [#s.title]\n",
     );
     let file = work.file(
         "Resume.md",

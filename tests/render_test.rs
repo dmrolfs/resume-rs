@@ -256,13 +256,23 @@ fn temp_style(bytes: &[u8]) -> (tempfile::TempDir, StyleSource) {
     (tmp, source)
 }
 
+#[test]
+fn pdf_ua_export_refuses_a_custom_style_without_a_document_title() {
+    let (_dir, style) = temp_style(b"#set text(font: \"Libertinus Serif\")\nHello\n");
+    let compiled = assert_ok!(typesetter().compile(&full_resume(), &style, RenderOptions::default()));
+    let error = assert_err!(compiled.export_pdf("fixture"));
+    let Error::ExportPdf { diagnostics, .. } = error else {
+        panic!("expected export error: {error}")
+    };
+    assert!(diagnostics.iter().any(|d| d.message.contains("missing document title")));
+}
+
 fn pdf_with(style: &StyleSource) -> Vec<u8> {
     let compiled = assert_ok!(typesetter().compile(&full_resume(), style, RenderOptions::default()));
     assert_ok!(compiled.export_pdf("fixture"))
 }
 
-const SMALL_STYLE: &str =
-    "#set page(paper: sys.inputs.paper, margin: 1cm)\n#set text(font: \"Libertinus Serif\")\nHello\n";
+const SMALL_STYLE: &str = "#set document(title: \"Fixture\")\n#set page(paper: sys.inputs.paper, margin: 1cm)\n#set text(font: \"Libertinus Serif\")\nHello\n";
 
 #[test]
 fn a_utf8_bom_does_not_change_the_output() {

@@ -114,7 +114,17 @@ fn role_heading_tag_titles_separate_the_lead_from_dates_in_every_builtin_style()
 fn pdf_is_tagged() {
     let pdf = assert_ok!(pragmatic(Paper::Letter).export_pdf("fixture"));
     let doc = assert_ok!(Document::load_mem(&pdf));
-    assert_ok!(assert_ok!(doc.catalog()).get(b"StructTreeRoot"));
+    let catalog = assert_ok!(doc.catalog());
+    assert_ok!(catalog.get(b"StructTreeRoot"));
+    let preferences = assert_ok!(catalog.get(b"ViewerPreferences").and_then(lopdf::Object::as_dict));
+    assert!(assert_ok!(
+        preferences.get(b"DisplayDocTitle").and_then(lopdf::Object::as_bool)
+    ));
+    let metadata = assert_ok!(catalog.get(b"Metadata").and_then(lopdf::Object::as_reference));
+    let stream = assert_ok!(doc.get_object(metadata).and_then(lopdf::Object::as_stream));
+    let xml = assert_ok!(String::from_utf8(assert_ok!(stream.get_plain_content())));
+    assert!(xml.contains("http://www.aiim.org/pdfua/ns/id/"));
+    assert!(xml.contains("<pdfuaid:part>1</pdfuaid:part>"));
 }
 
 #[test]

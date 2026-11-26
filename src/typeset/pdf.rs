@@ -4,7 +4,7 @@
 use typst::diag::SourceResult;
 use typst::foundations::Smart;
 use typst_layout::PagedDocument;
-use typst_pdf::PdfOptions;
+use typst_pdf::{PdfOptions, PdfStandard, PdfStandards};
 
 /// The `/Creator` entry written into every PDF.
 fn creator() -> String {
@@ -18,6 +18,7 @@ pub(crate) fn pdf_options(ident: &str) -> PdfOptions {
         creator: Smart::Custom(Some(creator())),
         timestamp: None,
         tagged: true,
+        standards: PdfStandards::new(&[PdfStandard::Ua_1]).expect("PDF/UA-1 alone is a compatible standard"),
         ..PdfOptions::default()
     }
 }

@@ -64,6 +64,14 @@ What each line does, in order:
 
 Something went wrong? See [troubleshooting](#troubleshooting).
 
+## PDF accessibility
+
+PDF exports use Typst's PDF/UA-1 mode, including tagged content and document-title display metadata.
+Export fails if Typst detects a PDF/UA issue; custom styles may need changes such as meaningful alternative text for images.
+A successful build is not a certification of screen-reader usability or every PDF/UA requirement.
+Validate the actual PDF with a tool such as `verapdf --flavour ua1 file.pdf`, then test reading order, headings, lists and links with a screen reader.
+`--dry-run` checks layout but does not perform PDF export validation.
+
 ## Writing your resume
 
 A resume is a Markdown file with a small number of conventions. The program reads these conventions, not general Markdown: anything it cannot represent is reported, never dropped silently.
@@ -989,14 +997,6 @@ Both kinds of file are TOML and strict: a key the program does not know is an er
 
 `drafts` is never a key. Whether to preview drafts is a choice you make at the command line, so a file can never put unfinished text into a PDF you send.
 
-### How the choices merge
-
-The files are applied from the least specific to the most specific: each profile after the profiles it extends, the profiles in the order `extends` lists them, and the spec last. Later is more specific. A profile that two files extend, such as a shared base, is applied once.
-
-- `tags` are a union of every file's tags.
-- `prefer` and `promote` list the most specific file's names first, then the names of less specific files that are not listed yet.
-- `pick`, `style`, `paper`, and `core-only` are decided by the most specific file that has one. A pick is decided for each group on its own.
-
 ### Exact group selection
 
 Set `groups = ["gateway", "summary"]` under `[select]` to keep exactly those wording groups without changing the baseline's tags.
@@ -1019,11 +1019,19 @@ The `core alone` page count measures baseline core content independently of the 
 JSON selection records expose `groups` as null or a sorted array; an empty array is distinct from null.
 Override records expose `cleared_groups` as null or an object with `names` and the source location `at`.
 
+### How the choices merge
+
+The files are applied from the least specific to the most specific: each profile after the profiles it extends, the profiles in the order `extends` lists them, and the spec last. Later is more specific. A profile that two files extend, such as a shared base, is applied once.
+
+- `groups` is replaced as a whole by the most specific file that supplies it, including an empty list; it never unions.
+- `tags` are a union of every file's tags.
+- `prefer` and `promote` list the most specific file's names first, then the names of less specific files that are not listed yet.
+- `pick`, `style`, `paper`, and `core-only` are decided by the most specific file that has one. A pick is decided for each group on its own.
+
 If the files cannot be put in one order, because a spec lists `["b", "base"]` while `b` extends `base`, the build stops and names both. A cycle is an error that prints the way round. The most you can nest is 8 levels and 32 profiles.
 
 Profiles are looked for in the directory given with `--profiles`, and otherwise in `profiles` beside the spec's own directory: `positions/acme.toml` finds `positions/../profiles`. There is no other place, so the result cannot depend on where you run the command. A spec that extends nothing needs no profiles directory. Give a profile's file the lowercase name it is called by: `principal.toml`. Do not make the spec's directory a link, because `..` after a link does not mean the same thing on every system.
 
-- `groups` is replaced as a whole by the most specific file that supplies it, including an empty list; it never unions.
 ### What a spec build prints
 
 With the worked example above and a baseline whose wordings are `acme`, `ai`, `default`, `long`, and `short`, `resume build --spec positions/acme.toml --fonts bundled` prints:
