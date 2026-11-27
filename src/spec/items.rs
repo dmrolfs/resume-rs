@@ -10,6 +10,37 @@ use super::merge::{ChoiceKey, ItemOverride};
 use crate::letter::LetterSource;
 use crate::model::{Annotations, ItemId, Resume, Tag};
 
+mod letter_assembly;
+pub use letter_assembly::assemble_letter;
+mod resume_assembly;
+pub use resume_assembly::assemble_resume;
+
+/// A declaration or reference that could not bind to the unchanged baseline.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BindingProblem {
+    pub id: ItemId,
+    pub at: Located,
+    pub reason: BindingReason,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, strum::Display)]
+pub enum BindingReason {
+    #[strum(serialize = "placement is incompatible with this baseline item kind")]
+    WrongTargetKind,
+    #[strum(serialize = "the role blurb slot is already occupied")]
+    OccupiedBlurb,
+    #[strum(serialize = "addition id is declared more than once")]
+    DuplicateAddition,
+    #[strum(serialize = "addition id is already used by a baseline item or group")]
+    BaselineCollision,
+    #[strum(serialize = "additions are edited directly and cannot be anchors or override targets")]
+    AdditionTarget,
+    #[strum(serialize = "reference names no baseline item or group")]
+    MissingReference,
+    #[strum(serialize = "letter greeting and closing are not editable by this operation")]
+    FrameTarget,
+}
+
 /// The item overrides of one document, with where each field was written.
 ///
 /// A resume and a letter each have their own, because `[select]` and `[letter.select]` choose the document. The
@@ -73,6 +104,17 @@ pub struct FrameTarget {
 /// Why a spec's item overrides cannot be applied to a document.
 #[derive(Debug, Clone, Snafu, PartialEq, Eq)]
 pub enum PrepareError {
+    #[snafu(display("cannot place additions:\n{}", binding_lines(problems)))]
+    AdditionBinding { problems: Vec<BindingProblem> },
+
+    #[snafu(display("prepared content exceeds the {}-byte input limit (baseline: {baseline_bytes} bytes; additions: {})", crate::markdown::MAX_INPUT_BYTES, added_bytes.map_or_else(|| "byte count overflow".to_owned(), |n| format!("{n} bytes"))))]
+    PreparedContentLimit {
+        baseline_bytes: usize,
+        added_bytes: Option<usize>,
+    },
+
+    #[snafu(display("{} has different loaded texts among addition sources", path.display()))]
+    ConflictingAdditionSources { path: std::path::PathBuf },
     /// An override names an `&id` the document does not have. Every such target, in id order.
     #[snafu(display("{} names nothing in the content file:\n  {}", describe(missing), lines(missing)))]
     UnknownTargets { missing: Vec<MissingTarget> },
@@ -92,6 +134,14 @@ pub enum PrepareError {
         frames: Vec<FrameTarget>,
         missing: Vec<MissingTarget>,
     },
+}
+
+fn binding_lines(problems: &[BindingProblem]) -> String {
+    problems
+        .iter()
+        .map(|p| format!("  {}: `{}`: {}", p.at, p.id, p.reason))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn describe(missing: &[MissingTarget]) -> String {

@@ -252,6 +252,10 @@ impl State {
         });
         self.items[section.index()].push(Item {
             piece: Piece {
+                origin: crate::diagnostics::ItemOrigin::Baseline {
+                    file: sink.path.to_path_buf(),
+                    range: p.range.clone(),
+                },
                 content,
                 range: p.range.clone(),
             },

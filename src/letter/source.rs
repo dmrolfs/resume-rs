@@ -36,7 +36,10 @@ pub enum LetterInline {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Piece {
     pub content: Vec<LetterInline>,
+    /// Parser coordinates: baseline bytes for a baseline piece, decoded Markdown bytes for spec content.
+    /// Use `origin` for diagnostics, never this range without its source owner.
     pub range: Range<usize>,
+    pub origin: crate::diagnostics::ItemOrigin,
 }
 
 /// One authored paragraph with what its annotation comment said, if it had one.
@@ -149,8 +152,8 @@ impl LetterSource {
 #[derive(Debug, Clone, PartialEq, Eq, Snafu)]
 #[snafu(display("the letter has annotations, so selection must choose its paragraphs first"))]
 pub struct SelectionRequired {
-    /// The first annotation comment, or the paragraph it marks when its comment has no location.
-    pub range: Range<usize>,
+    /// The first annotation comment, or its paragraph; spec-owned refusals name the whole content literal.
+    pub span: crate::diagnostics::Span,
 }
 
 /// Paragraphs retained by selection. Only these pieces need application field values.
@@ -181,10 +184,11 @@ impl TryFrom<LetterSource> for SelectedLetter {
         } = source;
         let one = |item: SourceItem| -> Result<Piece, SelectionRequired> {
             let refuse = |item: &Item| SelectionRequired {
-                range: item
-                    .annotation_range
-                    .clone()
-                    .unwrap_or_else(|| item.piece.range.clone()),
+                span: item.piece.origin.inline_span(
+                    item.annotation_range
+                        .clone()
+                        .unwrap_or_else(|| item.piece.range.clone()),
+                ),
             };
             match item {
                 SourceItem::Paragraph(item) if item.annotations.is_empty() && item.annotation_range.is_none() => {
@@ -192,7 +196,7 @@ impl TryFrom<LetterSource> for SelectedLetter {
                 }
                 SourceItem::Paragraph(item) => Err(refuse(&item)),
                 SourceItem::Alternates(group) => {
-                    Err(group.variants.first().map_or(SelectionRequired { range: 0..0 }, refuse))
+                    Err(refuse(group.variants.first().expect("parsed groups are nonempty")))
                 }
             }
         };

@@ -18,6 +18,7 @@ mod letter_inline;
 mod letter_safety;
 pub use letter::{ParsedLetter, parse_letter};
 mod edit_safety;
+pub mod fragment;
 mod inline;
 mod lint;
 mod outline;
@@ -297,33 +298,21 @@ impl Finding {
 /// Collects findings, caps their volume, and sorts them deterministically.
 pub(crate) struct Sink<'a> {
     path: &'a Path,
-    diagnostics: Vec<Diagnostic>,
-    suppressed: usize,
-    suppressed_errors: usize,
-    suppressed_max: Option<Severity>,
+    collector: crate::diagnostics::Collector,
 }
 
 impl<'a> Sink<'a> {
     pub fn new(path: &'a Path) -> Self {
         Self {
             path,
-            diagnostics: Vec::new(),
-            suppressed: 0,
-            suppressed_errors: 0,
-            suppressed_max: None,
+            collector: crate::diagnostics::Collector::new(MAX_DIAGNOSTICS),
         }
     }
 
     /// Records a finding with its code's severity, or counts it once the cap is reached.
     pub fn report(&mut self, finding: Finding) {
         let severity = severity_of(finding.code);
-        if self.diagnostics.len() >= MAX_DIAGNOSTICS {
-            self.suppressed += 1;
-            self.suppressed_errors += usize::from(severity == Severity::Error);
-            self.suppressed_max = self.suppressed_max.max(Some(severity));
-            return;
-        }
-        self.diagnostics.push(Diagnostic {
+        self.collector.push(Diagnostic {
             severity,
             code: finding.code,
             message: finding.message,
@@ -338,30 +327,12 @@ impl<'a> Sink<'a> {
     }
 
     /// Sorts by position, then appends the truncation summary, which takes the worst suppressed severity.
-    pub fn finish(mut self) -> Vec<Diagnostic> {
-        self.diagnostics
-            .sort_by_key(|d| d.span.as_ref().map(|s| (s.range.start, s.range.end)));
-        if let Some(severity) = self.suppressed_max {
-            let message = format!(
-                "{} more findings ({} errors) not shown",
-                self.suppressed, self.suppressed_errors
-            );
-            self.diagnostics.push(Diagnostic {
-                severity,
-                code: DiagnosticCode::InputLimit,
-                message,
-                span: Some(Span {
-                    file: PathBuf::from(self.path),
-                    kind: SourceKind::Markdown,
-                    range: 0..0,
-                }),
-                hints: vec![format!(
-                    "only the first {MAX_DIAGNOSTICS} findings are kept; fix these and rerun"
-                )],
-                fix: None,
-            });
-        }
-        self.diagnostics
+    pub fn finish(self) -> Vec<Diagnostic> {
+        self.collector.finish(Some(Span {
+            file: PathBuf::from(self.path),
+            kind: SourceKind::Markdown,
+            range: 0..0,
+        }))
     }
 }
 
@@ -568,6 +539,7 @@ mod tests {
             InvalidLink,
             UnsupportedLink,
             UnsupportedMarkdown,
+            SpecFragmentShape,
             TextTooLong,
             EmptyHeading,
             InputLimit,

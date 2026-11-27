@@ -5,6 +5,10 @@ use crate::{
 };
 use serde::Serialize;
 
+#[cfg(test)]
+#[path = "letter_report_tests.rs"]
+mod tests;
+
 #[derive(Serialize)]
 pub(super) struct LetterSelectionRecord {
     #[serde(rename = "type")]
@@ -24,7 +28,11 @@ pub(super) struct LetterSelectionRecord {
 }
 #[derive(Serialize)]
 struct Location {
+    #[serde(skip)]
+    same_file: bool,
     part: String,
+    file: String,
+    column: usize,
     line: usize,
 }
 #[derive(Serialize)]
@@ -53,14 +61,24 @@ pub(super) fn is_silent(report: &LetterReport, selection: &Selection) -> bool {
 }
 
 impl LetterSelectionRecord {
-    pub(super) fn new(file: String, text: &str, report: &LetterReport, selection: &Selection) -> Self {
-        // Index once: per-paragraph scans would become quadratic on a large bounded input.
-        let starts: Vec<_> = std::iter::once(0)
-            .chain(text.match_indices('\n').map(|(i, _)| i + 1))
-            .collect();
-        let location = |item: &LetterRef| Location {
-            part: item.part.to_string(),
-            line: starts.partition_point(|start| *start <= item.range.start),
+    pub(super) fn new(
+        file: String,
+        input: &std::path::Path,
+        sources: &crate::diagnostics::Sources<'_>,
+        report: &LetterReport,
+        selection: &Selection,
+    ) -> Self {
+        let location = |item: &LetterRef| {
+            let found = sources
+                .position(&item.origin.span())
+                .expect("selected letter origins have registered sources");
+            Location {
+                same_file: item.origin.span().file == input,
+                part: item.part.to_string(),
+                file: found.file,
+                line: found.line,
+                column: found.column,
+            }
         };
         Self {
             kind: "letter-selection",
@@ -113,17 +131,31 @@ impl LetterSelectionRecord {
         for chosen in &self.chosen {
             lines.push(format!("wording {}.{}: {}", chosen.group, chosen.variant, chosen.by));
         }
+        let at = |item: &Location| {
+            if item.same_file {
+                format!("line {}", item.line)
+            } else {
+                format!(
+                    "{}:{}:{}",
+                    crate::diagnostics::display_text(&item.file, false),
+                    item.line,
+                    item.column
+                )
+            }
+        };
         for item in &self.kept {
-            lines.push(format!("kept: {} at line {}", item.part, item.line));
+            lines.push(format!("kept: {} at {}", item.part, at(item)));
         }
         for item in &self.dropped {
             lines.push(format!(
-                "dropped: {} at line {} ({})",
-                item.location.part, item.location.line, item.reason
+                "dropped: {} at {} ({})",
+                item.location.part,
+                at(&item.location),
+                item.reason
             ));
         }
         for item in &self.verify {
-            lines.push(format!("to verify: {} at line {}", item.part, item.line));
+            lines.push(format!("to verify: {} at {}", item.part, at(item)));
         }
         for name in &self.skipped_drafts {
             lines.push(format!("skipped draft wording: {name}"));

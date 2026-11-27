@@ -56,7 +56,7 @@ fn spec_error(extra: &str) -> SpecError {
 #[test]
 fn the_same_group_gets_a_different_pick_in_each_document() {
     let spec = scopes();
-    let letter = assert_some!(spec.letter.as_ref());
+    let letter = assert_some!(spec.letter());
     assert_eq!(spec.choices.select.pick[&group("summary")].as_ref(), "acme");
     assert_eq!(letter.choices.pick[&group("summary")].as_ref(), "brief");
     assert_eq!(spec.choices.select.pick[&group("gateway")].as_ref(), "long");
@@ -68,7 +68,8 @@ fn the_same_group_gets_a_different_pick_in_each_document() {
 
 #[test]
 fn letter_select_merges_over_the_same_chain_with_the_same_rules() {
-    let letter = assert_some!(scopes().letter);
+    let spec = scopes();
+    let letter = assert_some!(spec.letter());
     assert_eq!(strings(&letter.choices.tags), ["ai", "platform"]);
     assert_eq!(strings(&letter.choices.prefer), ["formal", "short", "warm"]);
     assert_eq!(letter.choices.core_only, None);
@@ -134,7 +135,7 @@ fn each_scope_keeps_its_own_scope_kind() {
 #[test]
 fn letter_choices_remember_their_own_files_apart_from_the_resumes() {
     let spec = scopes();
-    let letter = assert_some!(spec.letter.as_ref());
+    let letter = assert_some!(spec.letter());
     let file = |at: &resume::spec::Located| at.path.file_name().expect("a file").to_string_lossy().into_owned();
     let pick = ChoiceKey::Pick(group("summary"));
     assert_eq!(file(assert_some!(spec.origin_of(&pick))), "acme.toml");
@@ -150,7 +151,7 @@ fn letter_choices_remember_their_own_files_apart_from_the_resumes() {
 #[test]
 fn the_letter_table_gives_typed_settings_and_a_path_beside_the_spec() {
     let spec = scopes();
-    let letter = assert_some!(spec.letter.as_ref());
+    let letter = assert_some!(spec.letter());
     let s = &letter.settings;
     assert_eq!(assert_some!(s.recipient.as_ref()).value, "Hiring Team");
     assert_eq!(assert_some!(s.date.as_ref()).value.to_string(), "2026-11-19");
@@ -168,7 +169,7 @@ fn the_letter_table_gives_typed_settings_and_a_path_beside_the_spec() {
 
 #[test]
 fn letter_fields_come_from_the_position_and_the_letter_table() {
-    let fields = assert_ok!(assert_some!(scopes().letter).fields());
+    let fields = assert_ok!(assert_some!(scopes().letter()).fields());
     assert_eq!(assert_some!(fields.company).to_string(), "Acme");
     assert_eq!(assert_some!(fields.title).to_string(), "Principal Architect");
     assert_eq!(assert_some!(fields.recipient).to_string(), "Hiring Team");
@@ -185,7 +186,7 @@ fn the_printed_spec_keeps_the_letter_and_resolves_to_the_same_choices() {
     assert_ok!(std::fs::write(path, text));
     let again = assert_ok!(resolve(&dir.path().join("positions/spec.toml"), None));
     assert_eq!(again.choices, spec.choices);
-    let (a, b) = (assert_some!(again.letter), assert_some!(spec.letter));
+    let (a, b) = (assert_some!(again.letter()), assert_some!(spec.letter()));
     assert_eq!(a.choices, b.choices);
     assert_eq!(a.content.declared, b.content.declared);
     let values = |l: &resume::spec::ResolvedLetter| {
@@ -201,8 +202,8 @@ fn the_printed_spec_keeps_the_letter_and_resolves_to_the_same_choices() {
             s.links.as_ref().map(|v| v.value),
         )
     };
-    assert_eq!(values(&a), values(&b));
-    assert_eq!(assert_some!(values(&a).5), 2000, "the printed spec kept every setting");
+    assert_eq!(values(a), values(b));
+    assert_eq!(assert_some!(values(a).5), 2000, "the printed spec kept every setting");
 }
 
 // ---- resume-only specs are unchanged ------------------------------------------------------------------------
@@ -215,7 +216,7 @@ fn a_resume_only_spec_has_no_letter_and_prints_no_letter_table() {
             _ => fixtures().join(case).join("positions/acme.toml"),
         };
         let spec = assert_ok!(resolve(&path, None));
-        assert_none!(spec.letter.as_ref(), "{case}");
+        assert_none!(spec.letter(), "{case}");
         assert!(!spec.to_toml().contains("letter"), "{case}");
     }
 }
@@ -226,7 +227,7 @@ fn a_resume_only_spec_has_no_letter_and_prints_no_letter_table() {
 fn neither_content_file_is_opened_by_resolving() {
     let (_dir, result) = resolve_files(&[("spec.toml", &spec_text("[letter]\ncontent = \"missing-letter.md\"\n"))]);
     let resolved = assert_ok!(result);
-    assert!(!resolved.content.path.exists() && !assert_some!(resolved.letter).content.path.exists());
+    assert!(!resolved.content.path.exists() && !assert_some!(resolved.letter()).content.path.exists());
 }
 
 #[test]
@@ -238,7 +239,7 @@ fn a_bad_recipient_stops_a_letter_build_but_not_the_resume_choices() {
         )]);
         let resolved = assert_ok!(result);
         assert_ok!(resolved.to_selection());
-        match assert_err!(assert_some!(resolved.letter).fields()) {
+        match assert_err!(assert_some!(resolved.letter()).fields()) {
             SpecError::UnsafeText { key, .. } => assert_eq!(key, "letter.recipient"),
             other => panic!("{other:?}"),
         }
@@ -249,7 +250,7 @@ fn a_bad_recipient_stops_a_letter_build_but_not_the_resume_choices() {
         &spec_text(&format!("[letter]\ncontent = \"l.md\"\nrecipient = \"{long}\"\n")),
     )]);
     assert!(matches!(
-        assert_err!(assert_some!(assert_ok!(result).letter).fields()),
+        assert_err!(assert_some!(assert_ok!(result).letter()).fields()),
         SpecError::TextLength { max: 120, .. }
     ));
 }
@@ -268,7 +269,7 @@ proptest! {
         ));
         let (_dir, result) = resolve_files(&[("spec.toml", &text)]);
         let resolved = result.map_err(|e| TestCaseError::fail(e.to_string()))?;
-        prop_assert!(assert_some!(resolved.letter).fields().is_ok());
+        prop_assert!(assert_some!(resolved.letter()).fields().is_ok());
     }
 }
 
@@ -451,7 +452,7 @@ fn a_profile_with_only_letter_select_loads() {
         "extends = [\"base\"]\n[build]\ncontent = \"a.md\"\n[letter]\ncontent = \"l.md\"\n",
     ));
     let spec = assert_ok!(resolve(&dir.path().join("positions/spec.toml"), None));
-    assert_eq!(strings(&assert_some!(spec.letter).choices.tags), ["ai"]);
+    assert_eq!(strings(&assert_some!(spec.letter()).choices.tags), ["ai"]);
 }
 
 #[test]
@@ -468,7 +469,7 @@ fn the_spec_beats_a_profile_in_the_letter_scope_and_the_resume_scope_is_untouche
         "extends = [\"base\"]\n[build]\ncontent = \"a.md\"\n[letter]\ncontent = \"l.md\"\n[letter.select]\npick = { summary = \"long\" }\ncore-only = false\n",
     ));
     let spec = assert_ok!(resolve(&dir.path().join("positions/spec.toml"), None));
-    let letter = assert_some!(spec.letter.as_ref());
+    let letter = assert_some!(spec.letter());
     assert_eq!(letter.choices.pick[&group("summary")].as_ref(), "long");
     assert_eq!(letter.choices.core_only, Some(false));
     assert_eq!(spec.choices.select.pick[&group("summary")].as_ref(), "ai");
@@ -491,7 +492,7 @@ fn a_profile_letter_select_without_a_spec_letter_table_resolves_no_letter() {
         dir.path().join("positions/spec.toml"),
         "extends = [\"base\"]\n[build]\ncontent = \"a.md\"\n",
     ));
-    assert_none!(assert_ok!(resolve(&dir.path().join("positions/spec.toml"), None)).letter);
+    assert_none!(assert_ok!(resolve(&dir.path().join("positions/spec.toml"), None)).letter());
 }
 
 #[test]
@@ -633,7 +634,7 @@ fn a_letter_path_is_joined_onto_the_spec_directory_not_the_working_directory() {
     drop(result);
     let spec_path = dir.path().join("positions/2026/spec.toml");
     let resolved = assert_ok!(resolve(&spec_path, None));
-    let letter = assert_some!(resolved.letter);
+    let letter = assert_some!(resolved.letter());
     let base = dir.path().join("positions/2026");
     assert_eq!(
         letter.content.path,
@@ -703,7 +704,7 @@ proptest! {
     #[test]
     fn letter_select_merges_exactly_as_select_does_on_the_same_chain(bodies in proptest::collection::vec(body(), 0..4)) {
         let spec = resolve_chain(&bodies, true, false);
-        let letter = assert_some!(spec.letter.as_ref());
+        let letter = assert_some!(spec.letter());
         prop_assert_eq!(&letter.choices, &spec.choices.select);
         let origins: Vec<_> = spec.origins().map(|(k, at)| (k.clone(), at.line, at.path.clone())).collect();
         let letter_origins: Vec<_> = letter.origins().map(|(k, at)| (k.clone(), at.line, at.path.clone())).collect();
@@ -737,7 +738,7 @@ proptest! {
         let resume_alone = resolve_chain(a, false, false);
         let letter_alone = resolve_chain(b, false, true);
         prop_assert_eq!(&mixed.choices.select, &resume_alone.choices.select);
-        prop_assert_eq!(&assert_some!(mixed.letter.as_ref()).choices, &assert_some!(letter_alone.letter.as_ref()).choices);
+        prop_assert_eq!(&assert_some!(mixed.letter()).choices, &assert_some!(letter_alone.letter()).choices);
     }
 }
 
@@ -766,7 +767,8 @@ fn a_circle_of_profiles_is_refused_whatever_table_the_profiles_fill() {
 
 #[test]
 fn the_variant_and_tag_names_of_a_letter_pick_are_the_same_types_the_resume_uses() {
-    let letter = assert_some!(scopes().letter);
+    let spec = scopes();
+    let letter = assert_some!(spec.letter());
     assert!(letter.choices.tags.contains(&assert_ok!(Tag::try_new("platform"))));
     assert_eq!(
         letter.choices.pick[&group("opening")],
@@ -780,7 +782,7 @@ fn a_blank_recipient_is_a_length_problem_and_a_letter_date_error_names_its_key()
         "spec.toml",
         &spec_text("[letter]\ncontent = \"l.md\"\nrecipient = \"   \"\n"),
     )]);
-    match assert_err!(assert_some!(assert_ok!(result).letter).fields()) {
+    match assert_err!(assert_some!(assert_ok!(result).letter()).fields()) {
         SpecError::TextLength { key, max, .. } => assert_eq!((key.as_str(), max), ("letter.recipient", 120)),
         other => panic!("{other:?}"),
     }
@@ -802,7 +804,7 @@ fn a_blank_recipient_is_a_length_problem() {
         "spec.toml",
         &spec_text("[letter]\ncontent = \"l.md\"\nrecipient = \"   \"\n"),
     )]);
-    match assert_err!(assert_some!(assert_ok!(result).letter).fields()) {
+    match assert_err!(assert_some!(assert_ok!(result).letter()).fields()) {
         SpecError::TextLength { key, max, .. } => assert_eq!((key.as_str(), max), ("letter.recipient", 120)),
         other => panic!("{other:?}"),
     }

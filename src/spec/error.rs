@@ -185,6 +185,20 @@ fn pick_lines(problems: &[PickProblem]) -> String {
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum SpecError {
+    #[snafu(display("addition validation failed: {}", errors.iter().map(ToString::to_string).collect::<Vec<_>>().join("; ")))]
+    AdditionValidation {
+        snapshot: crate::diagnostics::SourceText,
+        diagnostics: Vec<crate::diagnostics::Diagnostic>,
+        errors: Vec<SpecError>,
+    },
+    #[snafu(display(
+        "{at}: incompatible addition placement; use before/after, a resume parent with start/end, a blurb parent with blurb, or a letter body start/end"
+    ))]
+    AdditionPlace { at: Located },
+    #[snafu(display("{source}"))]
+    AdditionContent { source: Box<super::content::ContentError> },
+    #[snafu(display("{} has different loaded texts in the same spec/profile chain", path.display()))]
+    ConflictingSources { path: PathBuf },
     #[snafu(display("cannot read {}: {source}", path.display()))]
     Read { path: PathBuf, source: std::io::Error },
 
@@ -377,10 +391,26 @@ pub enum SpecError {
 }
 
 impl SpecError {
+    /// Source-owned content findings, when this failure is a Markdown validation error.
+    #[must_use]
+    pub fn content_findings(&self) -> Option<(&crate::diagnostics::SourceText, &[crate::diagnostics::Diagnostic])> {
+        match self {
+            Self::AdditionValidation {
+                snapshot, diagnostics, ..
+            } => Some((snapshot, diagnostics)),
+            Self::AdditionContent { source } => source.findings(),
+            _ => None,
+        }
+    }
+
     /// What the user can do about this error, when there is something specific.
     #[must_use]
     pub fn hint(&self) -> Option<&'static str> {
         match self {
+            Self::AdditionContent { source } if source.findings().is_some() => {
+                Some("fix the Markdown in the spec string named by each finding")
+            }
+            Self::ConflictingSources { .. } => Some("use separate paths for the edited spec and its profiles"),
             Self::TooLarge { .. } => Some("a spec or profile is a short list of choices, not a resume"),
             Self::MissingProfile { .. } | Self::ProfilesDirectoryMissing { .. } => {
                 Some("profiles live in a `profiles` directory beside `positions`; use --profiles DIR for another place")
@@ -393,9 +423,20 @@ impl SpecError {
             Self::ScopeConflict { .. } => Some("set `core-only = false` in the more specific file, or remove the tags"),
             Self::ProfileNameCase { .. } => Some("a profile name is the file name without `.toml`, in lowercase"),
             Self::UnknownPicks { .. } => Some("fix the name in the profile or spec that wrote the pick"),
-            Self::PrepareItems { .. } => Some(
-                "add `&id` to the item in the content file, or fix the id in the profile or spec that wrote the override",
-            ),
+            Self::PrepareItems { source } => match source.as_ref() {
+                super::items::PrepareError::AdditionBinding { .. } => {
+                    Some("fix the addition ids and places; references name baseline items only")
+                }
+                super::items::PrepareError::PreparedContentLimit { .. } => {
+                    Some("shorten the baseline or added content; drafts also count toward the input limit")
+                }
+                super::items::PrepareError::ConflictingAdditionSources { .. } => {
+                    Some("use one retained source snapshot for all additions from the same file")
+                }
+                _ => Some(
+                    "add `&id` to the item in the content file, or fix the id in the profile or spec that wrote the override",
+                ),
+            },
             _ => None,
         }
     }

@@ -44,6 +44,10 @@ LetterSource {
                     ),
                 ],
                 range: 82..101,
+                origin: Baseline {
+                    file: "valid.md",
+                    range: 82..101,
+                },
             },
             annotations: Annotations {
                 priority: None,
@@ -83,6 +87,10 @@ LetterSource {
                         ),
                     ],
                     range: 112..179,
+                    origin: Baseline {
+                        file: "valid.md",
+                        range: 112..179,
+                    },
                 },
                 annotations: Annotations {
                     priority: None,
@@ -136,6 +144,10 @@ LetterSource {
                         ),
                     ],
                     range: 181..253,
+                    origin: Baseline {
+                        file: "valid.md",
+                        range: 181..253,
+                    },
                 },
                 annotations: Annotations {
                     priority: None,
@@ -157,6 +169,10 @@ LetterSource {
                     ),
                 ],
                 range: 267..277,
+                origin: Baseline {
+                    file: "valid.md",
+                    range: 267..277,
+                },
             },
             annotations: Annotations {
                 priority: None,

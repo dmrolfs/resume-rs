@@ -21,7 +21,7 @@ mod tests;
 pub use self::inventory::{GroupUse, Inventory, KeywordUse, TagUse, VariantUse};
 pub use self::resume::{Chosen, Dropped, MovedUp, NodeRef, Reordered, SelectionReport, UnknownPick, select};
 pub use self::rules::{ChosenBy, DropReason};
-pub use self::summary::{CorePages, CoreSkip, KindCount, SelectionRecord, SelectionSummary};
+pub use self::summary::{CorePages, CoreSkip, KindCount, ReportLocation, SelectionRecord, SelectionSummary};
 pub use crate::model::NodeKind;
 
 /// Shared unknown-pick policy; each document supplies its own group inventory.

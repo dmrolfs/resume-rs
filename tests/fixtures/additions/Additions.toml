@@ -1,0 +1,45 @@
+[position]
+company = 'Acme'
+title = 'Architect'
+date = 2028-02-29
+
+[build]
+content = 'Resume.md'
+
+[select]
+promote = ['platform']
+
+[select.override.delivery]
+priority = 'core'
+
+[letter]
+content = 'Letter.md'
+recipient = 'Team'
+output-format = 'both'
+
+[[add]]
+id = 'application-blurb'
+kind = 'blurb'
+place = { parent = 'role', at = 'blurb' }
+content = 'Built platforms for teams across Europe.'
+
+[[add]]
+id = 'application-result'
+kind = 'bullet'
+place = { after = 'cost' }
+content = '**Delivery:** Migrated 12 teams with no downtime.'
+tags = ['platform']
+priority = 'core'
+
+[[add]]
+id = 'application-draft'
+kind = 'bullet'
+place = { before = 'cost' }
+content = 'This draft must never render.'
+priority = 'core'
+status = 'draft'
+
+[[letter.add]]
+id = 'application-fit'
+place = { after = 'opening' }
+content = 'My work fits the {{title}} role at {{company}}.'

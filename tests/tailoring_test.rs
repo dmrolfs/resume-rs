@@ -516,13 +516,13 @@ fn the_json_record_and_the_human_lines_report_the_same_facts() {
     assert_eq!(
         record["dropped"],
         serde_json::json!([
-            {"kind": "bullet", "line": 11, "label": "Rust and Go in 3 systems.", "reason": "inherited-tags-only"},
-            {"kind": "section", "line": 9, "label": "Skills", "reason": "empty"},
+            {"kind": "bullet", "file": "Resume.md", "column": 3, "line": 11, "label": "Rust and Go in 3 systems.", "reason": "inherited-tags-only"},
+            {"kind": "section", "file": "Resume.md", "column": 1, "line": 9, "label": "Skills", "reason": "empty"},
         ])
     );
     assert_eq!(
         record["verify"],
-        serde_json::json!([{"kind": "bullet", "line": 24, "label": "Check this 40 percent."}])
+        serde_json::json!([{"kind": "bullet", "file": "Resume.md", "column": 3, "line": 24, "label": "Check this 40 percent."}])
     );
     assert_eq!(record["drafts_left_out"], 1);
     assert_eq!(record["drafts_included"], 0);

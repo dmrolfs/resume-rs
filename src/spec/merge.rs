@@ -204,7 +204,9 @@ mod tests {
         Layer {
             kind: Kind::Profile,
             name: None,
-            path: PathBuf::from(file),
+            source: crate::diagnostics::SourceText::new(file.into(), crate::diagnostics::SourceKind::Spec, ""),
+            additions: Vec::new(),
+            content_warnings: Vec::new(),
             extends: vec![],
             position: None,
             content: None,
@@ -689,7 +691,9 @@ mod tests {
         fn the_choices_do_not_depend_on_what_the_files_were_called(layers in proptest::collection::vec(arbitrary_layer(), 0..5)) {
             let mut moved = layers.clone();
             for (i, l) in moved.iter_mut().enumerate() {
-                l.path = PathBuf::from(format!("elsewhere/x{i}.toml"));
+                l.source = crate::diagnostics::SourceText::new(
+                    format!("elsewhere/x{i}.toml").into(), l.source.kind(), l.source.text(),
+                );
             }
             prop_assert_eq!(merge(&layers).choices, merge(&moved).choices);
         }

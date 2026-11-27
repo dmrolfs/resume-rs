@@ -51,6 +51,11 @@ pub enum Stage {
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
+    #[snafu(display("{source}"))]
+    ReportSource { source: crate::diagnostics::SourceConflict },
+
+    #[snafu(display("output {} would replace input {}", target.display(), input.display()))]
+    OutputInputCollision { target: PathBuf, input: PathBuf },
     #[snafu(display(
         "unknown style `{name}`: no directory `{name}` in {}{}",
         searched.display(),
@@ -202,6 +207,31 @@ pub enum Error {
 }
 
 impl Error {
+    /// Finds source-owned spec content diagnostics through choice and content context wrappers.
+    #[must_use]
+    pub fn content_findings(&self) -> Option<(&crate::diagnostics::SourceText, &[Diagnostic])> {
+        let mut error = self;
+        loop {
+            match error {
+                Self::Spec { source } => return source.content_findings(),
+                Self::SpecContent { source, .. } | Self::TracedToChoice { source, .. } => error = source,
+                _ => return None,
+            }
+        }
+    }
+
+    /// Typed validation failures accompanying retained Markdown diagnostics.
+    pub fn addition_errors(&self) -> &[crate::spec::SpecError] {
+        match self {
+            Self::Spec { source } => match source.as_ref() {
+                crate::spec::SpecError::AdditionValidation { errors, .. } => errors,
+                _ => &[],
+            },
+            Self::SpecContent { source, .. } | Self::TracedToChoice { source, .. } => source.addition_errors(),
+            _ => &[],
+        }
+    }
+
     /// What the user can do about this error, when there is something specific.
     #[must_use]
     pub fn hint(&self) -> Option<&'static str> {

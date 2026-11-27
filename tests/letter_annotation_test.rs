@@ -551,14 +551,14 @@ fn an_annotated_source_is_refused_by_the_unannotated_bridge_and_names_the_commen
     ] {
         let input = body(text);
         let refused = assert_err!(SelectedLetter::try_from(valid(&input)));
-        assert_eq!(&input[refused.range], comment, "{text}");
+        assert_eq!(&input[refused.span.range], comment, "{text}");
     }
     for input in [
         letter("Hi. <!-- =g.default -->", "A.", "Bye."),
         letter("Hi.", "A.", "Bye. <!-- =g.default -->"),
     ] {
         let refused = assert_err!(SelectedLetter::try_from(valid(&input)));
-        assert_eq!(&input[refused.range], "<!-- =g.default -->");
+        assert_eq!(&input[refused.span.range], "<!-- =g.default -->");
     }
     // A group names its first wording's comment, and the earliest annotated section is the one named.
     let input = letter(
@@ -567,12 +567,12 @@ fn an_annotated_source_is_refused_by_the_unannotated_bridge_and_names_the_commen
         "Bye.",
     );
     assert_eq!(
-        &input[assert_err!(SelectedLetter::try_from(valid(&input))).range],
+        &input[assert_err!(SelectedLetter::try_from(valid(&input))).span.range],
         "<!-- =g.default -->"
     );
     let input = body("A. <!-- =b.default -->\n\nB. <!-- =b.two -->");
     assert_eq!(
-        &input[assert_err!(SelectedLetter::try_from(valid(&input))).range],
+        &input[assert_err!(SelectedLetter::try_from(valid(&input))).span.range],
         "<!-- =b.default -->"
     );
 }

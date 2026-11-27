@@ -176,6 +176,12 @@ impl DiagnosticCode {
                 fix: "Rewrite it as a paragraph, a `- ` bullet, a `**Label:**` lead-in, or an era line.",
                 example: Some(("1. Led the team", "- Led the team")),
             },
+            SpecFragmentShape => &Advice {
+                summary: "Spec content must be one Markdown leaf.",
+                why: "Project convention: a spec addition supplies one bullet, paragraph or blurb; unsupported structure must not be silently discarded.",
+                fix: "Write one nonempty paragraph without a list marker, headings, images, raw HTML, reference definitions or unsafe characters. Put selection metadata in the addition's fields, not in its content.",
+                example: None,
+            },
             HardBreak => &Advice {
                 summary: "A hard line break is rendered as a space.",
                 why: "Project convention: paragraphs and bullets flow as one block; trailing spaces or a backslash at a line end are usually accidental.",

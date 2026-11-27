@@ -13,6 +13,10 @@ use crate::typeset::fonts::FontResolution;
 use super::Io;
 use super::report::{BuildLine, FontsLine};
 
+#[cfg(test)]
+#[path = "emit_tests.rs"]
+mod test_support;
+
 /// Everything a command says, in the format and to the stream the user asked for.
 pub(super) struct Reporter<'a, 'io> {
     format: OutputFormat,
@@ -155,9 +159,34 @@ impl<'a, 'io> Reporter<'a, 'io> {
         let _ = write!(self.io.stderr, "{text}");
     }
 
+    /// Spec warnings go to stderr even when stdout is a TOML or letter-text product.
+    pub(super) fn spec_warnings(&mut self, spec: &crate::spec::ResolvedSpec, product: bool) {
+        let mut sources = self.sources();
+        for source in spec.sources() {
+            sources.insert_text(source);
+        }
+        if !product {
+            self.diagnostics(&sources, &spec.content_warnings().collect::<Vec<_>>());
+        } else if let Err(error) = emit_human(&mut *self.io.stderr, &sources, spec.content_warnings()) {
+            self.render_failed(&error);
+        }
+    }
+
     /// An operational error. A compile or export failure carries findings, which are shown with the style
     /// files they point into; any other error is one line, with its hint.
     pub(super) fn error(&mut self, error: &Error) {
+        if let Some((snapshot, findings)) = error.content_findings() {
+            let mut known = self.sources();
+            known.insert_text(snapshot);
+            self.diagnostics(&known, &findings.iter().collect::<Vec<_>>());
+            for failure in error.addition_errors() {
+                let _ = writeln!(self.io.stderr, "error: {failure}");
+                if let Some(hint) = failure.hint() {
+                    let _ = writeln!(self.io.stderr, "  = help: {hint}");
+                }
+            }
+            return;
+        }
         match error {
             Error::Compile { diagnostics, sources } | Error::ExportPdf { diagnostics, sources } => {
                 let mut known = self.sources();

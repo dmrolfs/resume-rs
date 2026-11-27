@@ -434,8 +434,15 @@ fn summary(body: &str, selection: &Selection) -> super::SelectionSummary {
 }
 
 /// Line numbers equal to node index plus 100, so a test can tell which node a line names.
-fn line_of(index: usize) -> Option<usize> {
-    Some(index + 100)
+fn line_of(index: usize) -> Option<super::ReportLocation> {
+    Some(super::ReportLocation {
+        position: crate::diagnostics::SourcePosition {
+            file: "r.md".into(),
+            line: index + 100,
+            column: 1,
+        },
+        same_input: true,
+    })
 }
 
 #[test]
@@ -471,6 +478,86 @@ fn a_promote_list_that_moved_nothing_says_so_and_is_not_silent() {
 }
 
 #[test]
+fn mixed_source_summary_and_json_locate_each_promoted_node_independently() {
+    let sum = summary(
+        "## S\n\n- a\n- b <!-- #lead @verify -->\n- c <!-- #lead -->\n",
+        &promoting(&["lead"]),
+    );
+    let location = |index| {
+        let mut location = line_of(index)?;
+        if index == 2 {
+            location.same_input = false;
+            location.position = crate::diagnostics::SourcePosition {
+                file: "position.toml".into(),
+                line: 7,
+                column: 12,
+            };
+        }
+        Some(location)
+    };
+    let lines = sum.lines(&location);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "to verify: bullet at position.toml:7:12 \"b\"")
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("(position.toml:7:12, line 103)")),
+        "{lines:?}"
+    );
+    let record = assert_ok!(serde_json::to_value(super::SelectionRecord::new(
+        &sum, "r.md", &location
+    )));
+    assert_eq!(record["verify"][0]["file"], "position.toml");
+    assert_eq!(record["verify"][0]["column"], 12);
+    assert_eq!(record["reordered"][0]["container"]["file"], "r.md");
+    assert_eq!(record["reordered"][0]["moved_up"][0]["file"], "position.toml");
+    assert_eq!(record["reordered"][0]["moved_up"][1]["file"], "r.md");
+}
+
+#[test]
+fn dropped_spec_items_and_emptied_baseline_containers_use_input_locations() {
+    let selection = Selection {
+        scope: Scope::Tags(assert_some!(SelectedTags::new(
+            tag_list(&["lead"]).into_iter().collect()
+        ))),
+        ..Default::default()
+    };
+    let sum = summary("## S <!-- #other -->\n\n- a\n", &selection);
+    let location = |index| {
+        let mut at = line_of(index)?;
+        if index == 1 {
+            at.same_input = false;
+            at.position.file = "position.toml".into();
+            at.position.line = 7;
+            at.position.column = 12;
+        }
+        Some(at)
+    };
+    let lines = sum.lines(&location);
+    assert!(
+        lines.contains(&"dropped by an inherited tag: bullet at position.toml:7:12 \"a\"".to_owned()),
+        "{lines:?}"
+    );
+    assert!(
+        lines.contains(&"dropped as emptied: section at line 100 \"S\"".to_owned()),
+        "{lines:?}"
+    );
+    let json = assert_ok!(serde_json::to_value(super::SelectionRecord::new(
+        &sum, "r.md", &location
+    )));
+    assert_eq!(json["dropped"][0]["file"], "position.toml");
+    assert_eq!(json["dropped"][0]["reason"], "inherited-tags-only");
+    assert_eq!(json["dropped"][1]["file"], "r.md");
+    let unknown = assert_ok!(serde_json::to_value(super::SelectionRecord::new(&sum, "r.md", &|_| {
+        None
+    })));
+    assert!(unknown["dropped"][0]["file"].is_null());
+    assert!(unknown["dropped"][0]["line"].is_null());
+    assert!(unknown["dropped"][0]["column"].is_null());
+}
+
+#[test]
 fn the_json_record_carries_promote_and_what_rose() {
     let sum = summary("## S\n\n- a\n- b <!-- #lead -->\n", &promoting(&["lead"]));
     let record = assert_ok!(serde_json::to_value(super::SelectionRecord::new(
@@ -480,10 +567,10 @@ fn the_json_record_carries_promote_and_what_rose() {
     assert_eq!(
         record["reordered"],
         serde_json::json!([{
-            "container": {"kind": "section", "line": 100, "label": "S"},
+            "container": {"kind": "section", "line": 100, "label": "S", "file": "r.md", "column": 1},
             "kind": "bullet",
             "kept": 2,
-            "moved_up": [{"kind": "bullet", "line": 102, "label": "b", "from": 2, "to": 1}],
+            "moved_up": [{"kind": "bullet", "line": 102, "label": "b", "file": "r.md", "column": 1, "from": 2, "to": 1}],
         }])
     );
     let plain = summary("## S\n\n- a <!-- @draft -->\n", &Selection::default());

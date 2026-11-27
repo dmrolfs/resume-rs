@@ -17,21 +17,13 @@ fn only_selected_wordings_require_application_fields_and_keep_original_spans() {
     let parsed = parse_letter("letter.md", &text);
     let model = assert_some!(parsed.into_parts().0);
     let (selected, _) = assert_ok!(letter::select(&model, &Selection::default()));
-    assert_ok!(letter::resolve(
-        selected,
-        &LetterFields::default(),
-        std::path::Path::new("letter.md")
-    ));
+    assert_ok!(letter::resolve(selected, &LetterFields::default()));
     let selection = Selection {
         prefer: vec![assert_ok!(resume::model::VariantName::try_new("personal"))],
         ..Selection::default()
     };
     let (selected, _) = assert_ok!(letter::select(&model, &selection));
-    let findings = assert_err!(letter::resolve(
-        selected,
-        &LetterFields::default(),
-        std::path::Path::new("letter.md")
-    ));
+    let findings = assert_err!(letter::resolve(selected, &LetterFields::default()));
     let range = assert_some!(&findings[0].span).range.clone();
     assert_eq!(&text[range], "{{recipient}}");
 }

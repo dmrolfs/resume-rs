@@ -58,6 +58,15 @@ fn attempt(
         return Err(None);
     }
     let target = plan.out_dir.join(plan.pdf.file_name());
+    crate::output::protect_inputs(
+        &target,
+        std::iter::once(plan.content.as_path()).chain(
+            plan.spec
+                .iter()
+                .flat_map(|s| s.resolved.sources().iter().map(|s| s.path())),
+        ),
+    )
+    .map_err(Some)?;
     let pdf = compiled.export_pdf(plan.pdf.ident()).map_err(Some)?;
     Writer::new(if cli.dry_run {
         WriteMode::DryRun

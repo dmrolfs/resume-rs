@@ -97,6 +97,7 @@ fn planned(cli: &Cli, args: &LetterArgs, env: &Env, out: &mut Reporter<'_, '_>) 
         return Ok(Some(letter_plan::plan_file(args, file)));
     };
     let resolved = letter_plan::resolve(args, spec_path).map_err(|error| out.error(&error))?;
+    out.spec_warnings(&resolved, args.spec.print_spec);
     if args.spec.print_spec {
         out.product(&resolved.to_toml());
         return Ok(None);
@@ -138,7 +139,7 @@ enum CommandFailure {
 fn select_letter(
     source: &crate::letter::LetterSource,
     plan: &LetterPlan,
-    text: &str,
+    sources: &crate::diagnostics::Sources<'_>,
     format: crate::model::options::OutputFormat,
     out: &mut Reporter<'_, '_>,
 ) -> Result<SelectedLetter, CommandFailure> {
@@ -154,16 +155,15 @@ fn select_letter(
         })
         .map(|item| &item.annotations);
     let unknown = crate::select::UnknownNames::from_annotations(annotations, &selection);
-    let mut sources = out.sources();
-    sources.insert(file, text);
     let origins = plan.spec.as_ref().map(|spec| &spec.names);
     let findings = crate::pipeline::unknown_letter_names_from(file, &unknown, origins);
-    out.diagnostics(&sources, &findings.iter().collect::<Vec<_>>());
+    out.diagnostics(sources, &findings.iter().collect::<Vec<_>>());
     let mut report = |report: &crate::letter::LetterReport| {
         if !super::letter_report::is_silent(report, &selection) {
             let record = super::letter_report::LetterSelectionRecord::new(
                 out.shown(file).display().to_string(),
-                text,
+                file,
+                sources,
                 report,
                 &selection,
             );
@@ -183,24 +183,22 @@ fn select_letter(
             Ok(selected)
         }
         Err(error) => {
-            let (code, range) = match &error {
+            let (code, span) = match &error {
                 LetterSelectError::EmptyBody { report: explanation } => {
                     report(explanation);
                     // A misspelled pick is the likelier cause of an empty body, and it names a line of the spec.
                     check_picks(plan, explanation, out)?;
                     (
                         DiagnosticCode::LetterBodyEmpty,
-                        source
-                            .body
-                            .first()
-                            .map(|item| match item {
-                                SourceItem::Paragraph(item) => item.piece.range.clone(),
-                                SourceItem::Alternates(group) => group.variants()[0].piece.range.clone(),
-                            })
-                            .unwrap_or(0..0),
+                        source.body.first().map(|item| match item {
+                            SourceItem::Paragraph(item) => item.piece.origin.span(),
+                            SourceItem::Alternates(group) => group.variants()[0].piece.origin.span(),
+                        }),
                     )
                 }
-                LetterSelectError::FrameNotReady { range, .. } => (DiagnosticCode::LetterFrameNotReady, range.clone()),
+                LetterSelectError::FrameNotReady { origin, .. } => {
+                    (DiagnosticCode::LetterFrameNotReady, Some(origin.span()))
+                }
                 // Only a spec makes picks, so the lines that picked the draft are the spec's.
                 LetterSelectError::PickedDraft { picks } => {
                     out.error(&plan.picked_draft(picks, &error));
@@ -211,15 +209,11 @@ fn select_letter(
                 severity: Severity::Error,
                 code,
                 message: error.to_string(),
-                span: Some(Span {
-                    file: file.clone(),
-                    kind: SourceKind::Markdown,
-                    range,
-                }),
+                span,
                 hints: vec![code.advice().fix.to_owned()],
                 fix: None,
             };
-            out.diagnostics(&sources, &[&finding]);
+            out.diagnostics(sources, &[&finding]);
             out.line("error: no letter printed");
             Err(CommandFailure::Findings)
         }
@@ -266,6 +260,14 @@ fn prepare(
         .map_err(CommandFailure::Read)?;
     let mut sources = out.sources();
     sources.insert(file, &text);
+    if let Some(spec) = &plan.spec {
+        for snapshot in spec.resolved.sources() {
+            sources
+                .insert_checked(snapshot.path(), snapshot.text())
+                .context(crate::error::ReportSourceSnafu)
+                .map_err(CommandFailure::Read)?;
+        }
+    }
     let parsed = parse_letter(file, &text);
     out.diagnostics(&sources, &parsed.diagnostics().iter().collect::<Vec<_>>());
     let (source, _) = parsed.into_parts();
@@ -273,9 +275,10 @@ fn prepare(
         out.line("error: no letter printed");
         return Err(CommandFailure::Findings);
     };
-    let source = prepare_items(source, plan, out)?;
-    let selected = select_letter(&source, plan, &text, format, out)?;
-    let letter = resolve(selected, &plan.text.fields, file).map_err(|findings| {
+    let source = prepare_items(source, text.len(), plan, out)?;
+    let selected = select_letter(&source, plan, &sources, format, out)?;
+    let selected_origins: Vec<_> = selected.body.iter().map(|piece| piece.origin.span()).collect();
+    let letter = resolve(selected, &plan.text.fields).map_err(|findings| {
         out.diagnostics(&sources, &findings.iter().collect::<Vec<_>>());
         out.line("error: no letter printed");
         CommandFailure::Findings
@@ -288,12 +291,24 @@ fn prepare(
             severity: Severity::Error,
             code: DiagnosticCode::TextLimitExceeded,
             message: error.to_string(),
-            span: Some(Span {
-                file: file.clone(),
-                kind: SourceKind::Markdown,
-                range: 0..0,
-            }),
-            hints: vec!["shorten or select different wording; text is never truncated".into()],
+            span: None,
+            hints: {
+                let mut hints = vec!["shorten or select different wording; text is never truncated".into()];
+                if let Some(setting) = plan
+                    .spec
+                    .as_ref()
+                    .and_then(|s| s.resolved.letter.as_ref())
+                    .and_then(|l| l.settings.max_length.as_ref())
+                {
+                    hints.push(format!("spec length limit written at {}", setting.at));
+                }
+                for span in selected_origins.iter().take(8) {
+                    if let Some(at) = sources.position(span) {
+                        hints.push(format!("selected body content: {}:{}:{}", at.file, at.line, at.column));
+                    }
+                }
+                hints
+            },
             fix: None,
         };
         out.diagnostics(&sources, &[&finding]);
@@ -307,17 +322,20 @@ fn prepare(
 /// the letter lacks is a mistake in the file that wrote it, found before anything is selected or printed.
 fn prepare_items(
     source: crate::letter::LetterSource,
+    baseline_bytes: usize,
     plan: &LetterPlan,
     out: &mut Reporter<'_, '_>,
 ) -> Result<crate::letter::LetterSource, CommandFailure> {
-    let Some(overrides) = plan
-        .spec
-        .as_ref()
-        .and_then(|spec| spec.resolved.letter_item_overrides())
-    else {
+    let Some(letter) = plan.spec.as_ref().and_then(|spec| spec.resolved.letter.as_ref()) else {
         return Ok(source);
     };
-    crate::spec::items::prepare_letter(&source, overrides).map_err(|source| {
+    crate::spec::items::assemble_letter(
+        &source,
+        baseline_bytes,
+        &letter.additions,
+        Some(letter.item_overrides()),
+    )
+    .map_err(|source| {
         out.error(&Error::Spec {
             source: Box::new(crate::spec::SpecError::PrepareItems {
                 source: Box::new(source),

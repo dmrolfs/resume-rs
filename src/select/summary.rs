@@ -9,9 +9,32 @@ use crate::model::{NodeKind, Resume};
 
 use super::{ChosenBy, DropReason, Scope, Selection, SelectionReport};
 
-/// How many nodes of one kind the baseline had, and how many the selection kept.
+/// A prepared node's report position, with source identity compared before display formatting.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReportLocation {
+    pub position: crate::diagnostics::SourcePosition,
+    pub same_input: bool,
+}
+
+impl ReportLocation {
+    fn human(&self) -> String {
+        if self.same_input {
+            format!("line {}", self.position.line)
+        } else {
+            format!(
+                "{}:{}:{}",
+                crate::diagnostics::display_text(&self.position.file, false),
+                self.position.line,
+                self.position.column
+            )
+        }
+    }
+}
+
+/// How many nodes of one kind the prepared input had, and how many the selection kept.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct KindCount {
+    /// Selection input count, including spec additions; the wire key remains `baseline`.
     pub baseline: usize,
     pub kept: usize,
 }
@@ -90,10 +113,10 @@ impl SelectionSummary {
 
     /// The lines a person reads under the build line, without indentation; empty when [`Self::is_silent`].
     ///
-    /// Routine events are counted; those that can surprise are listed one by one. `line_of` names a node's
-    /// source line from its index in the baseline's nodes.
+    /// Routine events are counted; surprises are listed individually. The callback resolves prepared-input
+    /// node indexes, never selected-output indexes or the original baseline's line vector.
     #[must_use]
-    pub fn lines(&self, line_of: &dyn Fn(usize) -> Option<usize>) -> Vec<String> {
+    pub fn lines(&self, location_of: &dyn Fn(usize) -> Option<ReportLocation>) -> Vec<String> {
         if self.is_silent() {
             return Vec::new();
         }
@@ -103,7 +126,7 @@ impl SelectionSummary {
         }
         let report = &self.report;
         let at = |node: &super::NodeRef| {
-            let line = line_of(node.index).map_or_else(String::new, |l| format!(" at line {l}"));
+            let line = location_of(node.index).map_or_else(String::new, |l| format!(" at {}", l.human()));
             format!("{}{line} \"{}\"", node.kind, node.label)
         };
         for chosen in report.chosen.iter().filter(|c| c.by == ChosenBy::FirstReady) {
@@ -127,7 +150,7 @@ impl SelectionSummary {
         for node in &report.verify {
             out.push(format!("to verify: {}", at(node)));
         }
-        out.extend(self.moved_up_lines(line_of, &at));
+        out.extend(self.moved_up_lines(location_of, &at));
         if let Some(line) = self.drafts_line() {
             out.push(line);
         }
@@ -195,7 +218,7 @@ impl SelectionSummary {
     /// saying nothing moved when a promote list is set, so a typo or an already-first list is not taken for a bug.
     fn moved_up_lines(
         &self,
-        line_of: &dyn Fn(usize) -> Option<usize>,
+        location_of: &dyn Fn(usize) -> Option<ReportLocation>,
         at: &dyn Fn(&super::NodeRef) -> String,
     ) -> Vec<String> {
         if self.selection.promote.is_empty() {
@@ -208,13 +231,26 @@ impl SelectionSummary {
             .reordered
             .iter()
             .map(|r| {
-                let lines: Option<Vec<String>> = r
-                    .moved_up
-                    .iter()
-                    .map(|m| line_of(m.node.index).map(|l| l.to_string()))
-                    .collect();
-                let lines = lines.map_or_else(String::new, |l| {
-                    format!(" ({} {})", if l.len() == 1 { "line" } else { "lines" }, l.join(", "))
+                let locations: Option<Vec<ReportLocation>> =
+                    r.moved_up.iter().map(|m| location_of(m.node.index)).collect();
+                let lines = locations.map_or_else(String::new, |locations| {
+                    if locations.iter().all(|l| l.same_input) {
+                        let lines: Vec<_> = locations.iter().map(|l| l.position.line.to_string()).collect();
+                        format!(
+                            " ({} {})",
+                            if lines.len() == 1 { "line" } else { "lines" },
+                            lines.join(", ")
+                        )
+                    } else {
+                        format!(
+                            " ({})",
+                            locations
+                                .iter()
+                                .map(ReportLocation::human)
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    }
                 });
                 let what = if r.kept == 1 {
                     r.kind.to_string()
@@ -275,6 +311,8 @@ struct NodeRecord {
     kind: NodeKind,
     /// The 1-based source line where the node starts; `null` when it is not known.
     line: Option<usize>,
+    file: Option<String>,
+    column: Option<usize>,
     label: String,
 }
 
@@ -350,15 +388,24 @@ pub(crate) fn selection_line(selection: &Selection) -> String {
 }
 
 impl<'a> SelectionRecord<'a> {
-    /// The record of `summary` for the input shown as `file`; `line_of` maps a node index to its source line.
+    /// The record of `summary` for `file`; the callback resolves prepared-input node origins.
     #[must_use]
-    pub fn new(summary: &SelectionSummary, file: &'a str, line_of: &dyn Fn(usize) -> Option<usize>) -> Self {
+    pub fn new(
+        summary: &SelectionSummary,
+        file: &'a str,
+        location_of: &dyn Fn(usize) -> Option<ReportLocation>,
+    ) -> Self {
         let selection = &summary.selection;
         let report = &summary.report;
-        let node = |n: &super::NodeRef| NodeRecord {
-            kind: n.kind,
-            line: line_of(n.index),
-            label: n.label.clone(),
+        let node = |n: &super::NodeRef| {
+            let location = location_of(n.index);
+            NodeRecord {
+                kind: n.kind,
+                line: location.as_ref().map(|l| l.position.line),
+                file: location.as_ref().map(|l| l.position.file.clone()),
+                column: location.as_ref().map(|l| l.position.column),
+                label: n.label.clone(),
+            }
         };
         let names = |v: &[crate::model::VariantName]| v.iter().map(ToString::to_string).collect();
         Self {

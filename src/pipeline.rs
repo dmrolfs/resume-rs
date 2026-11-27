@@ -14,7 +14,7 @@ use crate::model::options::{FontsMode, PageLimit, Paper};
 use crate::model::{Priority, StyleName, Tag, VariantName};
 use crate::select::{self, CorePages, CoreSkip, Scope, Selection, SelectionReport, SelectionSummary, UnknownNames};
 use crate::spec::SpecError;
-use crate::spec::items::{ItemOverrides, PrepareError, prepare_resume};
+use crate::spec::items::{ItemOverrides, PrepareError, assemble_resume};
 use crate::style::{self, StyleSource};
 use crate::typeset::fonts::{FontSet, FontSetBuilder};
 use crate::typeset::{Compiled, RenderOptions, Typesetter};
@@ -158,10 +158,41 @@ impl Session {
         names: &NameOrigins,
         overrides: Option<ItemOverrides<'_>>,
     ) -> Assessment {
+        self.assess_edits(
+            file,
+            text,
+            render,
+            selection,
+            names,
+            ResumeEdits {
+                overrides,
+                additions: &[],
+            },
+        )
+    }
+
+    /// Assesses a spec's complete edits before selection, preserving the parsed baseline for doctor.
+    #[must_use]
+    pub fn assess_edits(
+        &self,
+        file: &Path,
+        text: &str,
+        render: &RenderSettings,
+        selection: &Selection,
+        names: &NameOrigins,
+        edits: ResumeEdits<'_>,
+    ) -> Assessment {
         let parsed = parse(file, text);
-        let prepared = parsed.valid().map(|baseline| match overrides {
-            Some(overrides) => prepare_resume(baseline, overrides).map_err(spec_error),
-            None => Ok(baseline.clone()),
+        let prepared = parsed.valid().map(|baseline| {
+            let origins: Vec<_> = parsed
+                .node_ranges()
+                .iter()
+                .map(|range| crate::diagnostics::ItemOrigin::Baseline {
+                    file: file.to_path_buf(),
+                    range: range.clone(),
+                })
+                .collect();
+            assemble_resume(baseline, &origins, text.len(), edits.additions, edits.overrides).map_err(spec_error)
         });
         let (prepared, refused) = match prepared {
             Some(Ok(prepared)) => (Some(prepared), None),
@@ -170,10 +201,12 @@ impl Session {
         };
         // Selection needs no fonts or style, so its result and its errors are known even when setup failed.
         let tailored = refused.map(Err).or_else(|| {
-            prepared.as_ref().map(|baseline| {
+            prepared.as_ref().map(|prepared| {
+                let baseline = &prepared.resume;
                 let findings = unknown_names_from(file, &UnknownNames::of(baseline, selection), names);
                 select::select(baseline, selection)
                     .map(|(resume, report)| Selected {
+                        origins: Arc::clone(&prepared.origins),
                         summary: SelectionSummary::new(baseline, &resume, selection, &report),
                         resume,
                         report,
@@ -266,13 +299,49 @@ impl Session {
     }
 }
 
+/// A spec's edits applied together before selection.
+#[derive(Clone, Copy)]
+pub struct ResumeEdits<'a> {
+    pub overrides: Option<ItemOverrides<'a>>,
+    pub additions: &'a [crate::spec::additions::ResumeAddition],
+}
+
+/// The model used for selection and core measurement, paired with input-indexed source ownership.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedResume {
+    resume: Resume,
+    /// Exactly one origin per input node in preorder, including nodes selection later drops.
+    origins: Arc<[crate::diagnostics::ItemOrigin]>,
+}
+
+impl PreparedResume {
+    pub(crate) fn new(resume: Resume, origins: Arc<[crate::diagnostics::ItemOrigin]>) -> Self {
+        assert_eq!(
+            resume.nodes().len(),
+            origins.len(),
+            "prepared node origins follow input preorder"
+        );
+        Self { resume, origins }
+    }
+
+    #[must_use]
+    pub fn resume(&self) -> &Resume {
+        &self.resume
+    }
+
+    #[must_use]
+    pub fn origins(&self) -> &Arc<[crate::diagnostics::ItemOrigin]> {
+        &self.origins
+    }
+}
+
 /// What assessing one file found: the parse, the selection from it, and what came of rendering it.
 pub struct Assessment {
     /// The whole baseline as parsed, whatever the selection.
     pub parsed: Parsed,
     /// The baseline with the spec's per-item changes applied, which selection and the core-only count read; the
     /// same as the baseline when there are none. `None` when the parse had errors or an override named nothing.
-    pub prepared: Option<Resume>,
+    pub prepared: Option<PreparedResume>,
     /// The tailored resume and what the selection did; `None` when there was nothing to select from, or the
     /// selection failed (then `rendered` is `Failed`).
     pub selected: Option<Selected>,
@@ -282,6 +351,8 @@ pub struct Assessment {
 /// The resume that was compiled, and the report of how it was selected from the baseline.
 #[derive(Debug)]
 pub struct Selected {
+    /// Indexed by the prepared selection input, not by this selected output's nodes.
+    pub origins: Arc<[crate::diagnostics::ItemOrigin]>,
     pub resume: Resume,
     pub report: SelectionReport,
     /// What the summary lines and the JSON `selection` record say; `core` is filled by the caller that wants it.
@@ -841,6 +912,34 @@ mod tests {
             )
         }
 
+        #[test]
+        fn selected_origins_keep_input_indexes_and_share_prepared_storage() {
+            let assessment = run(&tags_selection(&["data"]), None);
+            let prepared = assert_some!(assessment.prepared.as_ref());
+            let selected = assert_some!(assessment.selected.as_ref());
+            assert!(Arc::ptr_eq(&prepared.origins, &selected.origins));
+            assert_eq!(selected.origins.len(), prepared.resume.nodes().len());
+            assert!(selected.origins.len() > selected.resume.nodes().len());
+            for (origin, range) in selected.origins.iter().zip(assessment.parsed.node_ranges()) {
+                let span = origin.span();
+                assert_eq!(span.file, Path::new("r.md"));
+                assert_eq!(&span.range, range);
+                assert!(BASE.get(span.range).is_some());
+            }
+        }
+
+        #[test]
+        fn real_override_changes_selection_but_keeps_the_dropped_nodes_baseline_origin() {
+            let written = overriding("cache", Some(&["ai"]), None);
+            let assessment = run(&tags_selection(&["data"]), Some(&written));
+            let selected = assert_some!(assessment.selected.as_ref());
+            let dropped = assert_some!(selected.report.dropped.iter().find(|d| d.node.label.contains("Cache")));
+            let span = selected.origins[dropped.node.index].span();
+            assert_eq!(span.file, Path::new("r.md"));
+            assert_eq!(span.range, assessment.parsed.node_ranges()[dropped.node.index]);
+            assert!(BASE[span.range].contains("Cache work."));
+        }
+
         fn tags_selection(names: &[&str]) -> Selection {
             Selection {
                 scope: Scope::Tags(assert_some!(SelectedTags::new(names.iter().map(|n| tag(n)).collect()))),
@@ -899,7 +998,7 @@ mod tests {
             let written = overriding("gateway", Some(&["data"]), Some(PriorityEdit::Core));
             let assessment = run(&Selection::default(), Some(&written));
             let mut parsed = assert_some!(assessment.parsed.valid()).clone();
-            let mut prepared = assert_some!(assessment.prepared.clone());
+            let mut prepared = assert_some!(assessment.prepared.clone()).resume;
             let gateway = |r: &mut Resume| {
                 let note = &r.node_annotations_mut()[1];
                 (

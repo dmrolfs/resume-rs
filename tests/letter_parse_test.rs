@@ -7,7 +7,6 @@ use resume::letter::{
     LetterFields, LetterInline, LetterSource, Piece, Placeholder, SelectedLetter, SourceItem, resolve,
 };
 use resume::markdown::parse_letter;
-use std::path::Path;
 
 const LETTER: &str =
     "# Alex Example\n\n## Greeting\n\nDear Hiring Team,\n\n## Body\n\nBODY\n\n## Closing\n\nSincerely,\n";
@@ -46,7 +45,6 @@ fn minimal_letter_and_optional_contact() {
         let letter = assert_ok!(resolve(
             assert_ok!(SelectedLetter::try_from(model.clone())),
             &LetterFields::default(),
-            Path::new("letter.md")
         ));
         assert_eq!(letter.name.as_ref(), "Alex Example");
         assert_eq!(model.contact.is_empty(), contact.is_empty());

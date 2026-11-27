@@ -871,7 +871,9 @@ ok out/Resume.pdf  pragmatic  2 pages  0 errors, 0 warnings  built in 90ms
 
 Routine choices are counted; what can surprise you is listed with its line. `core alone` is the page count of the `@core` content by itself, with the same style, paper, fonts, and wordings: it is what a `--core-only` build would print. A build of a file without annotations, with no options, prints none of these lines.
 
-With `--format json`, the same facts are one JSON object on standard output, with `type` `selection`, before the build's findings. Each item it names has its `line`.
+With `--format json`, the same facts are one JSON object on standard output, with `type` `selection`, before the build's findings.
+Each item it names has its source `file`, `line`, and `column`, including dropped, verify, and reordered items.
+The count field `baseline` means the prepared input to selection, before anything is dropped or reordered.
 
 To see what a file's annotations offer, use [`resume tags`](#resume-tags).
 
@@ -1205,6 +1207,55 @@ Nothing from `[position]`, the profiles' names, or the tags reaches the PDF: the
 
 A spec can name any file you can read as its `content`, and the summary prints the resolved path before anything is read from it. Build only specs you wrote or have read.
 
+### Adding content for one application
+
+A final position spec can add content without changing either baseline file.
+Use `[[add]]` for a resume bullet, paragraph, or role blurb; use `[[letter.add]]` for a letter body paragraph.
+Profiles cannot contain either array, even an empty one.
+
+```toml additions
+[[add]]
+id = "application-result"
+kind = "bullet"
+place = { after = "gateway" }
+content = '**Delivery:** Shipped the migration to 12 teams.'
+tags = ["platform"]
+priority = "core"
+
+[[letter.add]]
+id = "application-fit"
+place = { at = "end" }
+content = 'My platform experience fits the {{title}} role at {{company}}.'
+```
+
+Every addition needs an `id` that is unique within its document, including baseline item and wording-group names.
+References always name the unchanged baseline, never another addition.
+An override cannot target an addition; edit its declaration directly.
+Before/after a wording group means before/after the whole group, even if selection later drops it.
+Additions at the same original gap keep their declaration order.
+
+Resume placement forms:
+
+- A bullet may go before/after a bullet or bullet group, or at the start/end of a section, role body, or era.
+- A paragraph may go before/after a paragraph or paragraph group, after a role blurb/group, or at the start/end of a section or role body.
+- A blurb uses `place = { parent = "role-id", at = "blurb" }` and requires an empty blurb slot.
+- Container boundaries use `place = { parent = "container-id", at = "start" }` or `at = "end"`.
+
+Letter placement accepts `before` or `after` a body item/group, or `at = "start"` / `at = "end"` of the body.
+Greeting and closing cannot be insertion targets.
+
+Content must be one nonempty Markdown leaf, without a list marker for bullets.
+The usual leading bold bullet label is supported.
+Headings, lists, images, raw HTML, reference definitions, and annotation comments are rejected.
+Put `tags`, `priority` (`core` or `extra`), and `status` (`draft` or `verify`) in the declaration instead.
+Omitted metadata follows normal selection rules; a draft addition stays excluded even when marked core.
+All fragments are checked when loading the spec, including drafts and the document not being built.
+
+The baseline plus decoded additions may total at most 1 MiB per document, with drafts included.
+The spec itself retains its existing 64 KiB limit.
+Diagnostics for additions point at their content literal in the spec; decoded Markdown positions appear as context, not automatic edits.
+`--print-spec` preserves authored content and array order without reading either baseline.
+
 ### Names a profile uses that the baseline does not
 
 A tag or wording written in the spec itself that the baseline does not use is a warning that names the line, as for the options: it is probably a misspelling. A profile is shared by baselines that use different tags and wordings, and a `prefer` list means "where a group has it", so a name only a profile writes is a note, not a warning. The note names the profile and the line. The two codes are [`unknown-tag`](#code-unknown-tag) and [`unknown-wording`](#code-unknown-wording).
@@ -1261,6 +1312,7 @@ How the Markdown is written. Every command that reads a resume reports these.
 | <a id="code-missing-contact"></a>`missing-contact` | warning | The name has no contact line. |
 | <a id="code-period-present-spelling"></a>`period-present-spelling` | warning | Write `Present` for an ongoing role. |
 | <a id="code-unsupported-markdown"></a>`unsupported-markdown` | error | This Markdown construct can't be represented. |
+| <a id="code-spec-fragment-shape"></a>`spec-fragment-shape` | error | Spec content must be one Markdown leaf. |
 | <a id="code-hard-break"></a>`hard-break` | warning | A hard line break is rendered as a space. |
 | <a id="code-text-too-long"></a>`text-too-long` | error | A heading or role part is too long. |
 | <a id="code-empty-heading"></a>`empty-heading` | error | A heading has no text. |

@@ -397,7 +397,7 @@ fn override_choices(spec: &resume::spec::ResolvedSpec) -> std::collections::BTre
             }
         };
     take("resume", &spec.choices.select.overrides);
-    if let Some(letter) = &spec.letter {
+    if let Some(letter) = spec.letter() {
         take("letter", &letter.choices.overrides);
     }
     out

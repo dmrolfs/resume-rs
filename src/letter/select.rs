@@ -1,6 +1,7 @@
 //! Selects a flat authored letter with the same keep and alternate rules as resumes.
 //! Frames are mandatory; scope filters body paragraphs, never greeting or closing.
 use super::{Item, LetterSource, Piece, SelectedLetter, SourceItem};
+use crate::diagnostics::ItemOrigin;
 use crate::{
     model::{Alternate, Status},
     select::{
@@ -9,7 +10,7 @@ use crate::{
     },
 };
 use snafu::Snafu;
-use std::{collections::BTreeSet, ops::Range};
+use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, strum::Display)]
 #[strum(serialize_all = "kebab-case")]
@@ -23,7 +24,7 @@ pub enum LetterPart {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LetterRef {
     pub part: LetterPart,
-    pub range: Range<usize>,
+    pub origin: ItemOrigin,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,7 +55,7 @@ pub enum LetterSelectError {
     ))]
     PickedDraft { picks: Vec<Alternate> },
     #[snafu(display("the letter {part} has no ready wording"))]
-    FrameNotReady { part: LetterPart, range: Range<usize> },
+    FrameNotReady { part: LetterPart, origin: ItemOrigin },
     #[snafu(display("selection leaves the letter body empty"))]
     EmptyBody { report: Box<LetterReport> },
 }
@@ -201,11 +202,11 @@ fn choose(
     let first = items.first().expect("parsed groups are nonempty");
     let location = |item: &Item| LetterRef {
         part,
-        range: item.piece.range.clone(),
+        origin: item.piece.origin.clone(),
     };
     let unavailable = || LetterSelectError::FrameNotReady {
         part,
-        range: first.piece.range.clone(),
+        origin: first.piece.origin.clone(),
     };
     if part == LetterPart::Body {
         if let Verdict::Drop(reason) = verdict {

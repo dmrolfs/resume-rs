@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 
+use super::raw_additions::{RawLetterAddition, RawResumeAddition};
 use serde::Deserialize;
 use toml::Spanned;
 use toml::value::Datetime;
@@ -18,6 +19,7 @@ pub(super) struct RawFile {
     pub build: Option<RawBuild>,
     pub select: Option<RawSelect>,
     pub letter: Option<RawLetter>,
+    pub add: Option<Spanned<Vec<RawResumeAddition>>>,
 }
 
 /// The `[position]` table. It is not wrapped in `Spanned`: a table written as `[position.emphasis]` or as
@@ -113,6 +115,7 @@ pub(super) struct RawLetter {
     pub length_unit: Option<Text>,
     pub links: Option<Text>,
     pub select: Option<RawLetterSelect>,
+    pub add: Option<Spanned<Vec<RawLetterAddition>>>,
 }
 
 /// `[letter.select]`: the resume's `[select]` without `promote`, because a letter keeps its written order.

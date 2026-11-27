@@ -14,11 +14,7 @@ fn letter_blocks_are_left_aligned_body_sized_and_visibly_separated() {
         date: Some(assert_ok!("2028-02-29".parse())),
         ..LetterFields::default()
     };
-    let letter = assert_ok!(crate::letter::resolve(
-        selected,
-        &fields,
-        std::path::Path::new("letter.md")
-    ));
+    let letter = assert_ok!(crate::letter::resolve(selected, &fields));
     let style = assert_ok!(StyleSource::builtin(BuiltinStyle::Pragmatic));
     let compiled = assert_ok!(Typesetter::new(Arc::new(FontSet::bundled())).compile_letter(
         &letter,

@@ -2,7 +2,9 @@
 //! ABOUTME: Raw TOML becomes typed names, paths, and position data here, and the rules for each kind of file apply.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 
 use clap::ValueEnum;
 use std::str::FromStr as _;
@@ -90,8 +92,8 @@ pub struct Layer {
     pub kind: Kind,
     /// The profile name this file was found under; `None` for a spec.
     pub name: Option<ProfileName>,
-    /// The file as found, never canonicalized, so it prints the way the user knows it.
-    pub path: PathBuf,
+    /// Immutable text accepted by the loader, retained for later diagnostics.
+    pub(super) source: crate::diagnostics::SourceText,
     pub extends: Vec<Sourced<ProfileName>>,
     pub position: Option<Position>,
     pub content: Option<Sourced<DeclaredPath>>,
@@ -99,9 +101,11 @@ pub struct Layer {
     pub paper: Option<Sourced<Paper>>,
     pub select: SelectLayer,
     /// The `[letter]` settings of a spec that has the table. A profile never has them.
-    pub letter: Option<LetterTable>,
+    pub(super) letter: Option<LetterTable>,
     /// The `[letter.select]` table of any file; it merges apart from `select`.
     pub letter_select: SelectLayer,
+    pub(crate) additions: Vec<super::additions::ResumeAddition>,
+    pub(super) content_warnings: Vec<crate::diagnostics::Diagnostic>,
 }
 
 /// The `[letter]` table of a spec: the letter content it builds from, and the letter's own settings.
@@ -109,6 +113,13 @@ pub struct Layer {
 pub struct LetterTable {
     pub content: Sourced<DeclaredPath>,
     pub settings: LetterSettings,
+    pub(crate) additions: Vec<super::additions::LetterAddition>,
+}
+
+impl LetterTable {
+    pub fn additions(&self) -> &[super::additions::LetterAddition] {
+        &self.additions
+    }
 }
 
 /// A position spec: a [`Layer`] that is known to be one, so a chain can end in it without a check.
@@ -145,7 +156,10 @@ impl SpecLayer {
         if layer.kind == Kind::Spec {
             Ok(Self(layer))
         } else {
-            NotASpecSnafu { path: layer.path }.fail()
+            NotASpecSnafu {
+                path: layer.path().to_owned(),
+            }
+            .fail()
         }
     }
 
@@ -163,6 +177,24 @@ impl SpecLayer {
 }
 
 impl Layer {
+    pub fn letter(&self) -> Option<&LetterTable> {
+        self.letter.as_ref()
+    }
+    pub fn additions(&self) -> &[super::additions::ResumeAddition] {
+        &self.additions
+    }
+    /// The source path as loaded, never canonicalized or independently mutable.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        self.source.path()
+    }
+
+    /// The exact text accepted by the loader, including unsaved editor changes.
+    #[must_use]
+    pub fn source(&self) -> &crate::diagnostics::SourceText {
+        &self.source
+    }
+
     /// Reads, parses, and validates the file at `path`.
     ///
     /// # Errors
@@ -181,50 +213,75 @@ impl Layer {
         Self::from_raw(kind, source, raw)
     }
 
-    fn from_raw(kind: Kind, source: &Source, raw: RawFile) -> Result<Self, SpecError> {
-        let extends = list(source, "extends", NameKind::Profile, raw.extends.as_deref(), |s| {
-            ProfileName::try_new(s).ok()
-        })?;
-        let position = match (kind, &raw.position) {
-            (Kind::Profile, Some(table)) => {
-                // The header is the natural place; a table written as `position.company = ..` has none, so its
-                // first value is used, and an empty `[position]` always has a header.
-                let offset = table_header(&source.text, "[position")
-                    .or_else(|| table.first_offset())
-                    .unwrap_or(0);
-                return ForbiddenInProfileSnafu {
-                    at: source.at(offset),
-                    key: "position",
-                    reason: "it describes one application, so it belongs in a position spec",
-                }
-                .fail();
-            }
-            (Kind::Spec, Some(table)) => Some(position(source, table)?),
-            (_, None) => None,
-        };
-        let build = raw.build.unwrap_or(RawBuild {
-            content: None,
-            style: None,
-            paper: None,
-        });
-        let content = content(kind, source, build.content.as_ref())?;
-        let style = build.style.as_ref().map(|t| style(source, t)).transpose()?;
-        let paper = build.paper.as_ref().map(|t| paper(source, t)).transpose()?;
-        let select = select(source, "select", raw.select)?;
-        let (letter, letter_select) = letter::from_raw(kind, source, raw.letter)?;
-        Ok(Self {
+    fn from_raw(kind: Kind, source: &Source, mut raw: RawFile) -> Result<Self, SpecError> {
+        let (additions, letter_additions, content_warnings) = super::load_additions::load(
+            source,
             kind,
-            name: None,
-            path: source.path.clone(),
-            extends,
-            position,
-            content,
-            style,
-            paper,
-            select,
-            letter,
-            letter_select,
-        })
+            raw.add.take(),
+            raw.letter.as_mut().and_then(|l| l.add.take()),
+        )?;
+        let result = (|| {
+            let extends = list(source, "extends", NameKind::Profile, raw.extends.as_deref(), |s| {
+                ProfileName::try_new(s).ok()
+            })?;
+            let position = match (kind, &raw.position) {
+                (Kind::Profile, Some(table)) => {
+                    // The header is the natural place; a table written as `position.company = ..` has none, so its
+                    // first value is used, and an empty `[position]` always has a header.
+                    let offset = table_header(source.text(), "[position")
+                        .or_else(|| table.first_offset())
+                        .unwrap_or(0);
+                    return ForbiddenInProfileSnafu {
+                        at: source.at(offset),
+                        key: "position",
+                        reason: "it describes one application, so it belongs in a position spec",
+                    }
+                    .fail();
+                }
+                (Kind::Spec, Some(table)) => Some(position(source, table)?),
+                (_, None) => None,
+            };
+            let build = raw.build.unwrap_or(RawBuild {
+                content: None,
+                style: None,
+                paper: None,
+            });
+            let content = content(kind, source, build.content.as_ref())?;
+            let style = build.style.as_ref().map(|t| style(source, t)).transpose()?;
+            let paper = build.paper.as_ref().map(|t| paper(source, t)).transpose()?;
+            let select = select(source, "select", raw.select)?;
+            let (mut letter, letter_select) = letter::from_raw(kind, source, raw.letter)?;
+            if let Some(letter) = &mut letter {
+                letter.additions = letter_additions;
+            }
+            Ok(Self {
+                kind,
+                name: None,
+                source: source.snapshot().clone(),
+                extends,
+                position,
+                content,
+                style,
+                paper,
+                select,
+                letter,
+                letter_select,
+                additions,
+                content_warnings: Vec::new(),
+            })
+        })();
+        match result {
+            Ok(mut layer) => {
+                layer.content_warnings = content_warnings;
+                Ok(layer)
+            }
+            Err(error) if content_warnings.is_empty() => Err(error),
+            Err(error) => Err(SpecError::AdditionValidation {
+                snapshot: source.snapshot().clone(),
+                diagnostics: content_warnings,
+                errors: vec![error],
+            }),
+        }
     }
 
     /// Every pick this file makes, as the alternate it names, with where it was written.

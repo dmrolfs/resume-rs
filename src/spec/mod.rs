@@ -7,16 +7,21 @@
 //! thing, the later one wins. See [`resolve`].
 
 mod adapt;
+pub mod additions;
 pub mod chain;
+pub mod content;
 pub mod error;
 pub mod items;
 pub mod layer;
 pub mod letter;
+mod load_additions;
 pub mod merge;
 pub mod names;
 pub mod overrides;
 pub mod plan;
+mod print_additions;
 mod raw;
+mod raw_additions;
 mod read;
 pub mod resolved;
 

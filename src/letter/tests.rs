@@ -10,7 +10,14 @@ use proptest::prelude::*;
 use std::path::Path;
 
 fn piece(content: Vec<LetterInline>) -> Piece {
-    Piece { content, range: 0..100 }
+    Piece {
+        content,
+        range: 0..100,
+        origin: crate::diagnostics::ItemOrigin::Baseline {
+            file: "letter.md".into(),
+            range: 0..100,
+        },
+    }
 }
 
 fn selected(content: Vec<LetterInline>) -> SelectedLetter {
@@ -130,7 +137,7 @@ fn values_are_literal_and_whitespace_is_not_rewritten() {
         title: Some(assert_ok!(FieldValue::try_new("Architect"))),
         ..Default::default()
     };
-    let resolved = assert_ok!(resolve(source, &fields, Path::new("letter.md")));
+    let resolved = assert_ok!(resolve(source, &fields));
     assert_eq!(resolved.body, vec![vec![text("the *Acme* {{title}}  role")]]);
     assert_none!(resolved.date);
     assert_none!(resolved.recipient);
@@ -155,7 +162,7 @@ fn nested_nodes_links_code_and_all_three_fields_are_preserved() {
         recipient: Some(assert_ok!(FieldValue::try_new("Hiring Team"))),
         date: Some(assert_ok!("2028-02-29".parse())),
     };
-    let resolved = assert_ok!(resolve(source, &fields, Path::new("letter.md")));
+    let resolved = assert_ok!(resolve(source, &fields));
     assert_eq!(
         resolved.body[0],
         vec![
@@ -189,7 +196,12 @@ fn missing_values_report_each_original_span_sorted_and_return_no_letter() {
             content: vec![placeholder(Placeholder::Company, 20)],
         },
     ]);
-    let errors = assert_err!(resolve(source, &LetterFields::default(), Path::new("é-letter.md")));
+    let mut source = source;
+    source.body[0].origin = crate::diagnostics::ItemOrigin::Baseline {
+        file: "é-letter.md".into(),
+        range: 0..100,
+    };
+    let errors = assert_err!(resolve(source, &LetterFields::default()));
     assert_eq!(errors.len(), 3);
     assert_eq!(errors[0].message, "`{{title}}` has no value");
     assert_eq!(errors[0].hints, vec!["supply the title application field"]);
@@ -214,7 +226,7 @@ fn missing_in_frame_is_reported_even_when_body_fields_resolve() {
         company: Some(assert_ok!(FieldValue::try_new("Acme"))),
         ..Default::default()
     };
-    let errors = assert_err!(resolve(source, &fields, Path::new("letter.md")));
+    let errors = assert_err!(resolve(source, &fields));
     assert_eq!(errors.len(), 2);
     assert_eq!(assert_some!(errors[0].span.as_ref()).range, 0..11);
     assert_eq!(assert_some!(errors[1].span.as_ref()).range, 40..51);
@@ -225,11 +237,73 @@ fn missing_in_frame_is_reported_even_when_body_fields_resolve() {
 #[test]
 fn missing_values_obey_existing_diagnostic_cap() {
     let source = selected((0..503).map(|i| placeholder(Placeholder::Company, i * 11)).collect());
-    let errors = assert_err!(resolve(source, &LetterFields::default(), Path::new("letter.md")));
+    let errors = assert_err!(resolve(source, &LetterFields::default()));
     assert_eq!(errors.len(), 501);
     assert_eq!(errors[500].code, DiagnosticCode::InputLimit);
     assert_eq!(errors[500].severity, Severity::Error);
     assert_eq!(errors[500].message, "3 more findings (3 errors) not shown");
+    assert_none!(errors[500].span.as_ref());
+}
+
+#[test]
+fn mixed_sources_keep_literal_ownership_and_baseline_offsets_in_authored_order() {
+    use crate::diagnostics::ItemOrigin;
+    let mut source = selected(vec![placeholder(Placeholder::Company, 70)]);
+    let mut added = piece(vec![LetterInline::Strong(vec![placeholder(Placeholder::Title, 2)])]);
+    added.origin = ItemOrigin::SpecContent {
+        file: "position.toml".into(),
+        content: 10..60,
+    };
+    let later = piece(vec![placeholder(Placeholder::Recipient, 90)]);
+    source.body.extend([added, later]);
+    let findings = assert_err!(resolve(source, &LetterFields::default()));
+    let spans: Vec<_> = findings.iter().map(|d| assert_some!(d.span.as_ref())).collect();
+    assert_eq!(
+        spans.iter().map(|s| s.file.to_str()).collect::<Vec<_>>(),
+        vec![Some("letter.md"), Some("position.toml"), Some("letter.md")]
+    );
+    assert_eq!(
+        spans.iter().map(|s| s.range.clone()).collect::<Vec<_>>(),
+        vec![70..81, 10..60, 90..101]
+    );
+    assert_eq!(spans[1].kind, SourceKind::Spec);
+    assert!(findings.iter().all(|d| d.fix.is_none()));
+}
+
+#[test]
+fn adjacent_spec_pieces_keep_prepared_order_not_toml_offset_order() {
+    use crate::diagnostics::ItemOrigin;
+    let mut source = selected(vec![placeholder(Placeholder::Company, 0)]);
+    source.body[0].origin = ItemOrigin::SpecContent {
+        file: "position.toml".into(),
+        content: 100..150,
+    };
+    let mut second = piece(vec![LetterInline::Emph(vec![placeholder(Placeholder::Title, 1)])]);
+    second.origin = ItemOrigin::SpecContent {
+        file: "position.toml".into(),
+        content: 10..50,
+    };
+    source.body.push(second);
+    let findings = assert_err!(resolve(source, &LetterFields::default()));
+    assert_eq!(assert_some!(findings[0].span.as_ref()).range, 100..150);
+    assert_eq!(assert_some!(findings[1].span.as_ref()).range, 10..50);
+}
+
+#[test]
+fn diagnostic_budget_is_shared_by_all_letter_sources() {
+    use crate::diagnostics::ItemOrigin;
+    let mut source = selected((0..300).map(|i| placeholder(Placeholder::Company, i * 11)).collect());
+    let mut added = piece((0..300).map(|i| placeholder(Placeholder::Title, i * 11)).collect());
+    added.origin = ItemOrigin::SpecContent {
+        file: "position.toml".into(),
+        content: 8..80,
+    };
+    source.body.push(added);
+    let findings = assert_err!(resolve(source, &LetterFields::default()));
+    assert_eq!(findings.len(), 501);
+    assert_eq!(findings[500].message, "100 more findings (100 errors) not shown");
+    assert_none!(findings[500].span.as_ref());
+    assert_eq!(findings[500].severity, Severity::Error);
 }
 
 #[test]
@@ -240,7 +314,7 @@ fn letter_json_is_a_separate_complete_contract() {
         date: Some(assert_ok!("2028-02-29".parse())),
         ..Default::default()
     };
-    let letter = assert_ok!(resolve(source, &fields, Path::new("letter.md")));
+    let letter = assert_ok!(resolve(source, &fields));
     assert_eq!(
         assert_ok!(serde_json::to_value(letter)),
         serde_json::json!({
@@ -264,7 +338,7 @@ proptest! {
         let expected = format!("{prefix}{value}{suffix}");
         let fields = LetterFields { company: Some(value), ..Default::default() };
         let source = selected(vec![LetterInline::Text(prefix), placeholder(Placeholder::Company, 0), LetterInline::Text(suffix)]);
-        let letter = assert_ok!(resolve(source, &fields, Path::new("letter.md")));
+        let letter = assert_ok!(resolve(source, &fields));
         prop_assert_eq!(letter.body, vec![vec![text(&expected)]]);
     }
 }
@@ -313,7 +387,7 @@ mod bridge {
     fn an_annotation_with_no_recorded_comment_is_still_refused_at_its_paragraph() {
         // The parser records a range for every annotation, but a value built by hand might not.
         let refused = assert_err!(SelectedLetter::try_from(letter_with_body(annotated(draft(), None))));
-        assert_eq!(refused.range, 0..100);
+        assert_eq!(refused.span.range, 0..100);
     }
 
     #[test]
@@ -322,7 +396,7 @@ mod bridge {
             Annotations::default(),
             Some(7..20)
         ))));
-        assert_eq!(refused.range, 7..20);
+        assert_eq!(refused.span.range, 7..20);
     }
 
     #[test]
@@ -341,7 +415,9 @@ mod bridge {
         };
         let group = SourceItem::Alternates(AlternateGroup { variants: vec![item] });
         assert_eq!(
-            assert_err!(SelectedLetter::try_from(letter_with_body(group))).range,
+            assert_err!(SelectedLetter::try_from(letter_with_body(group)))
+                .span
+                .range,
             3..9
         );
     }
@@ -351,6 +427,6 @@ mod bridge {
         let mut source = letter_with_body(annotated(draft(), Some(50..60)));
         source.greeting = annotated(draft(), Some(10..20));
         source.closing = annotated(draft(), Some(70..80));
-        assert_eq!(assert_err!(SelectedLetter::try_from(source)).range, 10..20);
+        assert_eq!(assert_err!(SelectedLetter::try_from(source)).span.range, 10..20);
     }
 }

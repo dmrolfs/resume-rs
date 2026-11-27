@@ -49,6 +49,7 @@ pub enum DiagnosticCode {
     MissingContact,
     PeriodPresentSpelling,
     UnsupportedMarkdown,
+    SpecFragmentShape,
     HardBreak,
     TextTooLong,
     EmptyHeading,
@@ -141,6 +142,7 @@ impl DiagnosticCode {
             | MissingContact
             | PeriodPresentSpelling
             | UnsupportedMarkdown
+            | SpecFragmentShape
             | HardBreak
             | TextTooLong
             | EmptyHeading
@@ -212,6 +214,7 @@ impl DiagnosticCode {
             | InvalidLink
             | UnsupportedLink
             | UnsupportedMarkdown
+            | SpecFragmentShape
             | TextTooLong
             | EmptyHeading
             | InputLimit

@@ -41,14 +41,23 @@ pub struct ResolvedSpec {
     pub position: Option<Position>,
     pub content: ContentRef,
     pub choices: Choices,
+    pub(crate) additions: Vec<super::additions::ResumeAddition>,
     /// Every file that contributed, least specific first, the spec last.
     pub chain: Vec<ChainLink>,
     /// The letter the spec builds, resolved apart from the resume; `None` for a spec with no `[letter]`.
-    pub letter: Option<ResolvedLetter>,
+    pub(crate) letter: Option<ResolvedLetter>,
     origins: BTreeMap<ChoiceKey, Located>,
+    sources: Vec<crate::diagnostics::SourceText>,
+    content_warnings: Vec<crate::diagnostics::Diagnostic>,
 }
 
 impl ResolvedSpec {
+    pub fn additions(&self) -> &[super::additions::ResumeAddition] {
+        &self.additions
+    }
+    pub fn letter(&self) -> Option<&ResolvedLetter> {
+        self.letter.as_ref()
+    }
     /// Resolves a chain ordered least specific first, whose last layer is the spec.
     ///
     /// The chain comes from [`super::chain::order`], which always ends in the spec the caller loaded as a
@@ -61,19 +70,24 @@ impl ResolvedSpec {
             .iter()
             .map(|layer| ChainLink {
                 name: layer.name.clone(),
-                path: layer.path.clone(),
+                path: layer.path().to_owned(),
                 declared_extends: layer.extends.iter().map(|e| e.value.clone()).collect(),
             })
             .collect();
+        let sources = layers.iter().map(|layer| layer.source().clone()).collect();
         let spec = layers.into_iter().next_back().filter(|l| l.kind == Kind::Spec);
         let Some(spec) = spec else {
             unreachable!("a chain ends in its spec");
         };
+        let dir = spec
+            .path()
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_default();
         let Some(content) = spec.content else {
             unreachable!("loading a spec requires its content path");
         };
         let (declared, at) = (content.value, content.at);
-        let dir = spec.path.parent().map(std::path::Path::to_path_buf).unwrap_or_default();
         let letter = spec
             .letter
             .zip(letter_merged)
@@ -86,10 +100,24 @@ impl ResolvedSpec {
                 at,
             },
             choices: merged.choices,
+            additions: spec.additions,
             chain,
             letter,
             origins: merged.origins,
+            sources,
+            content_warnings: spec.content_warnings,
         }
+    }
+
+    /// All content warnings, including the document not currently being built.
+    pub fn content_warnings(&self) -> impl Iterator<Item = &crate::diagnostics::Diagnostic> {
+        self.content_warnings.iter()
+    }
+
+    /// Loaded snapshots in chain order, with the final spec last. Reporting never rereads these files.
+    #[must_use]
+    pub fn sources(&self) -> &[crate::diagnostics::SourceText] {
+        &self.sources
     }
 
     /// The resume's per-item overrides, to apply to the parsed baseline before selecting from it.
@@ -154,6 +182,8 @@ struct Printed<'a> {
     select: Option<PrintedSelect<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     letter: Option<PrintedLetter<'a>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    add: Vec<super::print_additions::PrintedAddition<'a>>,
 }
 
 #[derive(Serialize)]
@@ -177,6 +207,8 @@ struct PrintedLetter<'a> {
     links: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     select: Option<PrintedSelect<'a>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    add: Vec<super::print_additions::PrintedAddition<'a>>,
 }
 
 #[derive(Serialize)]
@@ -291,6 +323,11 @@ impl<'a> From<&'a ResolvedLetter> for PrintedLetter<'a> {
             length_unit: s.length_unit.as_ref().map(|v| name(&v.value)),
             links: s.links.as_ref().map(|v| name(&v.value)),
             select: PrintedSelect::of(&letter.choices),
+            add: letter
+                .additions
+                .iter()
+                .map(super::print_additions::PrintedAddition::letter)
+                .collect(),
         }
     }
 }
@@ -321,6 +358,11 @@ impl<'a> From<&'a ResolvedSpec> for Printed<'a> {
             },
             select: PrintedSelect::of(&choices.select),
             letter: spec.letter.as_ref().map(PrintedLetter::from),
+            add: spec
+                .additions
+                .iter()
+                .map(super::print_additions::PrintedAddition::resume)
+                .collect(),
         }
     }
 }
@@ -392,7 +434,9 @@ mod tests {
         Layer {
             kind,
             name: name.map(|n| assert_ok!(ProfileName::try_new(n))),
-            path: PathBuf::from(file),
+            source: crate::diagnostics::SourceText::new(file.into(), crate::diagnostics::SourceKind::Spec, ""),
+            additions: Vec::new(),
+            content_warnings: Vec::new(),
             extends: vec![],
             position: None,
             content: (kind == Kind::Spec).then(|| Sourced {

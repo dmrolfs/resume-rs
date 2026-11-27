@@ -212,6 +212,19 @@ jobs:
               --fonts bundled --out "$dir/out-$kind" > "$dir/out-$kind/Application.txt"
           done
 
+          for kind in lf crlf; do
+            mkdir -p "$dir/additions-$kind"
+            for file in Resume.md Letter.md Additions.toml; do
+              if [ "$kind" = crlf ]; then
+                perl -pe 's/\r?\n/\r\n/' "tests/fixtures/additions/$file" > "$dir/additions-$kind/$file"
+              else
+                cp -f "tests/fixtures/additions/$file" "$dir/additions-$kind/$file"
+              fi
+            done
+            target/release/${{ matrix.binary }} build --spec "$dir/additions-$kind/Additions.toml" --fonts bundled --out "$dir/out-$kind"
+            target/release/${{ matrix.binary }} letter --spec "$dir/additions-$kind/Additions.toml" --fonts bundled --out "$dir/out-$kind" > "$dir/out-$kind/Additions.txt"
+          done
+
       - name: Upload the PDFs built by the release binary
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -227,6 +240,12 @@ jobs:
             target/determinism/cli/out-crlf/Application-letter.pdf
             target/determinism/cli/out-lf/Application.txt
             target/determinism/cli/out-crlf/Application.txt
+            target/determinism/cli/out-lf/Additions.pdf
+            target/determinism/cli/out-crlf/Additions.pdf
+            target/determinism/cli/out-lf/Additions-letter.pdf
+            target/determinism/cli/out-crlf/Additions-letter.pdf
+            target/determinism/cli/out-lf/Additions.txt
+            target/determinism/cli/out-crlf/Additions.txt
           if-no-files-found: error
           retention-days: 7
 
@@ -323,6 +342,15 @@ jobs:
           bash scripts/compare-pdfs.sh \
             macOS-LF=pdf-cli/macos/out-lf/Application.txt macOS-CRLF=pdf-cli/macos/out-crlf/Application.txt \
             Windows-LF=pdf-cli/windows/out-lf/Application.txt Windows-CRLF=pdf-cli/windows/out-crlf/Application.txt
+
+      - name: Compare additions PDFs and letter text across systems and line endings
+        shell: bash
+        run: |
+          for file in Additions.pdf Additions-letter.pdf Additions.txt; do
+            bash scripts/compare-pdfs.sh \
+              macOS-LF="pdf-cli/macos/out-lf/$file" macOS-CRLF="pdf-cli/macos/out-crlf/$file" \
+              Windows-LF="pdf-cli/windows/out-lf/$file" Windows-CRLF="pdf-cli/windows/out-crlf/$file"
+          done
 
   # Each package keeps its own minimum Rust version: the CLI at 1.92, the desktop app at 1.98 (gpui-pre-macos needs it).
   # `just check` runs on the newest stable and cannot see a use of a newer feature, so this builds each at its floor.

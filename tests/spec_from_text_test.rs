@@ -133,6 +133,123 @@ fn a_text_of_exactly_the_cap_is_accepted_both_ways() {
 }
 
 #[test]
+fn a_saved_profile_cannot_replace_unsaved_spec_text_at_the_same_path() {
+    let dir = assert_ok!(tempfile::tempdir());
+    let path = dir.path().join("base.toml");
+    assert_ok!(std::fs::write(&path, "[select]\ntags = ['rust']\n"));
+    let layer = assert_ok!(SpecLayer::from_text(
+        &path,
+        "extends = ['base']\n[build]\ncontent = 'missing.md'\n"
+    ));
+    let error = assert_err!(resume::spec::resolve_with(
+        layer,
+        &resume::spec::DirSource::new(dir.path().to_owned())
+    ));
+    assert!(matches!(error, SpecError::ConflictingSources { path: ref conflicted } if conflicted == &path));
+    assert!(error.to_string().contains("different loaded texts"), "{error}");
+}
+
+#[test]
+fn diamond_snapshots_follow_chain_identity_and_print_like_disk_loaded_specs() {
+    let dir = assert_ok!(tempfile::tempdir());
+    for (name, text) in [
+        ("base", "[select]\ntags = ['rust']\n"),
+        ("left", "extends = ['base']\n"),
+        ("right", "extends = ['base']\n"),
+    ] {
+        assert_ok!(std::fs::write(dir.path().join(format!("{name}.toml")), text));
+    }
+    let path = dir.path().join("spec.toml");
+    let text = "extends = ['left', 'right']\n[build]\ncontent = 'missing.md'\n";
+    assert_ok!(std::fs::write(&path, text));
+    let profiles = resume::spec::DirSource::new(dir.path().to_owned());
+    let disk = assert_ok!(resume::spec::resolve_with(
+        assert_ok!(SpecLayer::load(&path)),
+        &profiles
+    ));
+    let memory = assert_ok!(resume::spec::resolve_with(
+        assert_ok!(SpecLayer::from_text(&path, text)),
+        &profiles
+    ));
+    assert_eq!(disk.to_toml(), memory.to_toml());
+    assert_eq!(disk.sources().len(), 4);
+    for (link, snapshot) in disk.chain.iter().zip(disk.sources()) {
+        assert_eq!(link.path, snapshot.path());
+    }
+    assert_ok!(std::fs::write(&path, "changed"));
+    assert_eq!(disk.sources()[3].text(), text);
+    assert_eq!(disk.to_toml(), memory.to_toml());
+}
+
+#[test]
+fn snapshots_survive_resolution_disk_changes_and_missing_baselines() {
+    use claims::assert_some;
+    use resume::diagnostics::{SourceKind, Sources};
+    let dir = assert_ok!(tempfile::tempdir());
+    let path = dir.path().join("position.toml");
+    let profile = dir.path().join("base.toml");
+    let profile_text = "[select]\ntags = ['rust']\n";
+    assert_ok!(std::fs::write(&profile, profile_text));
+    let edited = "extends = ['base']\n# unsaved é\n[build]\ncontent = 'missing.md'\n";
+    let layer = assert_ok!(SpecLayer::from_text(&path, edited));
+    assert_eq!(layer.layer().source().text(), edited);
+    let resolved = assert_ok!(resume::spec::resolve_with(
+        layer,
+        &resume::spec::DirSource::new(dir.path().to_owned())
+    ));
+    assert_ok!(std::fs::write(&path, "changed"));
+    assert_ok!(std::fs::remove_file(&profile));
+    let snapshots = resolved.sources();
+    assert_eq!(snapshots.len(), 2);
+    assert_eq!(snapshots[0].path(), profile);
+    assert_eq!(snapshots[0].text(), profile_text);
+    assert_eq!(snapshots[1].path(), path);
+    assert_eq!(snapshots[1].text(), edited);
+    assert_eq!(snapshots[1].kind(), SourceKind::Spec);
+    let mut sources = Sources::new(Some(dir.path().to_owned()));
+    for snapshot in snapshots {
+        sources.insert_text(snapshot);
+    }
+    let profile_span = assert_some!(snapshots[0].span(17..21));
+    let profile_position = assert_some!(sources.position(&profile_span));
+    assert_eq!(
+        (
+            profile_position.file.as_str(),
+            profile_position.line,
+            profile_position.column
+        ),
+        ("base.toml", 2, 9)
+    );
+    let offset = assert_some!(edited.find("missing.md"));
+    let span = assert_some!(snapshots[1].span(offset..offset + 10));
+    let position = assert_some!(sources.position(&span));
+    assert_eq!(
+        (position.file.as_str(), position.line, position.column),
+        ("position.toml", 4, 12)
+    );
+    assert!(!resolved.to_toml().contains("unsaved"));
+    let diagnostic = resume::diagnostics::Diagnostic {
+        severity: resume::diagnostics::Severity::Warning,
+        code: resume::diagnostics::DiagnosticCode::UnknownTag,
+        message: "snapshot rendering probe".into(),
+        span: Some(span),
+        hints: vec![],
+        fix: None,
+    };
+    let mut human = resume::diagnostics::termcolor::Buffer::no_color();
+    assert_ok!(resume::diagnostics::emit_human(&mut human, &sources, [&diagnostic]));
+    let human = assert_ok!(std::str::from_utf8(human.as_slice()));
+    assert!(human.contains("missing.md"), "{human}");
+    assert!(!human.contains("source not available"), "{human}");
+    let mut json = Vec::new();
+    assert_ok!(resume::diagnostics::emit_json(&mut json, &sources, [&diagnostic]));
+    let record: serde_json::Value = assert_ok!(serde_json::from_slice(&json));
+    assert_eq!(record["file"], "position.toml");
+    assert_eq!(record["line"], 4);
+    assert_eq!(record["column"], 12);
+}
+
+#[test]
 fn the_text_given_is_what_is_read_not_the_file_saved_at_that_path() {
     // An editor validates what is on screen, not the last save.
     let dir = tempfile::tempdir().expect("a temp dir");
@@ -148,5 +265,5 @@ fn the_text_given_is_what_is_read_not_the_file_saved_at_that_path() {
     // A path with no file behind it reads the text too.
     let nowhere = Path::new("unsaved/new.toml");
     let layer = assert_ok!(SpecLayer::from_text(nowhere, edited));
-    assert_eq!(layer.layer().path.as_path(), nowhere);
+    assert_eq!(layer.layer().path(), nowhere);
 }
