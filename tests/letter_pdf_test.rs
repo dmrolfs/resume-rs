@@ -26,8 +26,7 @@ fn letter() -> Letter {
     };
     assert_ok!(letter::resolve(
         assert_ok!(SelectedLetter::try_from(assert_some!(parsed.into_parts().0))),
-        &fields,
-        Path::new("neutral.md")
+        &fields
     ))
 }
 
@@ -548,11 +547,7 @@ fn pdf_field_strings_remain_literal_and_metadata_ignores_application_fields() {
             recipient: Some(assert_ok!(FieldValue::try_new(recipient))),
             date: Some(assert_ok!(date.parse())),
         };
-        let letter = assert_ok!(letter::resolve(
-            assert_ok!(SelectedLetter::try_from(source)),
-            &fields,
-            Path::new("neutral.md")
-        ));
+        let letter = assert_ok!(letter::resolve(assert_ok!(SelectedLetter::try_from(source)), &fields));
         let pdf =
             assert_ok!(assert_ok!(ts.compile_letter(&letter, &style, RenderOptions::default())).export_pdf("neutral"));
         let text = common::page_texts(&pdf).join(" ");

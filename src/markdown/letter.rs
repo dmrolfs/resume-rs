@@ -99,7 +99,7 @@ fn interpret(doc: &Document, src: &Source<'_>, sink: &mut Sink<'_>) -> (Option<L
         state.block(block, above[index].take(), src, sink);
     }
     let owned = std::mem::take(&mut state.owned);
-    (state.finish(src.text.len(), sink), owned)
+    (state.finish(src, sink), owned)
 }
 
 #[derive(Default)]
@@ -114,6 +114,8 @@ struct State {
     items: [Vec<Item>; 3],
     /// Every paragraph in a section, as the group check sees it; the payload is its place in `items`.
     candidates: Vec<GroupItem<(usize, usize)>>,
+    /// Every annotated paragraph, for the one-namespace check on ids and group names.
+    names: Vec<annotation::Named>,
     /// Paragraphs that show nothing, per section. Each is reported once and kept out of `items`, as the resume
     /// parser drops such a paragraph, so the wordings on either side of it stay adjacent; they still count toward
     /// a frame's one paragraph so that an empty greeting is one error and not two.
@@ -230,6 +232,15 @@ impl State {
         }
         let annotation_range = marked.as_ref().map(|m| m.range.clone());
         let annotations = annotation::annotations_of(marked);
+        if let Some(range) = &annotation_range
+            && (annotations.id.is_some() || annotations.alternate.is_some())
+        {
+            self.names.push(annotation::Named {
+                id: annotations.id.as_deref().cloned(),
+                alternate: annotations.alternate.as_ref().map(|a| a.group.clone()),
+                range: range.clone(),
+            });
+        }
         let index = self.items[section.index()].len();
         self.candidates.push(GroupItem {
             alternate: annotations.alternate.clone(),
@@ -241,6 +252,10 @@ impl State {
         });
         self.items[section.index()].push(Item {
             piece: Piece {
+                origin: crate::diagnostics::ItemOrigin::Baseline {
+                    file: sink.path.to_path_buf(),
+                    range: p.range.clone(),
+                },
                 content,
                 range: p.range.clone(),
             },
@@ -281,11 +296,13 @@ impl State {
         self.container += 1;
     }
 
-    fn finish(mut self, end: usize, sink: &mut Sink<'_>) -> Option<LetterSource> {
+    fn finish(mut self, src: &Source<'_>, sink: &mut Sink<'_>) -> Option<LetterSource> {
+        let end = src.text.len();
         if self.name.is_none() {
             report(Code::MissingName, 0..0, "letter has no valid # Name heading", sink);
         }
         // One check for the whole letter, so a group name used in two sections is seen.
+        annotation::check_names(&self.names, src, sink);
         let groups = annotation::group(&self.candidates, sink);
         let mut sections = std::mem::take(&mut self.items).map(Some);
         let mut built: [Vec<SourceItem>; 3] = Default::default();
@@ -337,6 +354,16 @@ fn frame_takes_only_alternates(marked: Option<&Marked>, section: Section, sink: 
                 format!("the {section} takes no priority, status, or tags"),
             )
             .hint("keep only `=group.variant` here; state priority, status, and tags on body paragraphs"),
+        );
+    }
+    if said.id.is_some() {
+        sink.report(
+            Finding::new(
+                Code::AnnotationMisplaced,
+                marked.range.clone(),
+                format!("the {section} is not an item a position spec can address, so it takes no `&id`"),
+            )
+            .hint("put the `&id` on a body paragraph; a frame wording is picked by its group name"),
         );
     }
 }

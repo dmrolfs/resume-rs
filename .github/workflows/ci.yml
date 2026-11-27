@@ -32,7 +32,8 @@ jobs:
   check:
     name: check (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    # Windows takes about 31 minutes cold: the gate builds each package apart (24) and the release build follows (7).
+    timeout-minutes: 45
     strategy:
       fail-fast: false # a failure on one OS must not hide the result on the other
       matrix:
@@ -89,7 +90,7 @@ jobs:
           echo "::error title=just check failed on ${RUNNER_OS}::${body}"
 
       - name: Build release binary
-        run: cargo build --release --locked
+        run: cargo build --release --locked --package resume
 
       # The shipped Windows binary is built with MSVC, which links the Visual C++ runtime (VCRUNTIME140.dll)
       # dynamically unless crt-static is on; a clean Windows machine may not have it. Fail if the release exe
@@ -211,6 +212,19 @@ jobs:
               --fonts bundled --out "$dir/out-$kind" > "$dir/out-$kind/Application.txt"
           done
 
+          for kind in lf crlf; do
+            mkdir -p "$dir/additions-$kind"
+            for file in Resume.md Letter.md Additions.toml; do
+              if [ "$kind" = crlf ]; then
+                perl -pe 's/\r?\n/\r\n/' "tests/fixtures/additions/$file" > "$dir/additions-$kind/$file"
+              else
+                cp -f "tests/fixtures/additions/$file" "$dir/additions-$kind/$file"
+              fi
+            done
+            target/release/${{ matrix.binary }} build --spec "$dir/additions-$kind/Additions.toml" --fonts bundled --out "$dir/out-$kind"
+            target/release/${{ matrix.binary }} letter --spec "$dir/additions-$kind/Additions.toml" --fonts bundled --out "$dir/out-$kind" > "$dir/out-$kind/Additions.txt"
+          done
+
       - name: Upload the PDFs built by the release binary
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -226,6 +240,12 @@ jobs:
             target/determinism/cli/out-crlf/Application-letter.pdf
             target/determinism/cli/out-lf/Application.txt
             target/determinism/cli/out-crlf/Application.txt
+            target/determinism/cli/out-lf/Additions.pdf
+            target/determinism/cli/out-crlf/Additions.pdf
+            target/determinism/cli/out-lf/Additions-letter.pdf
+            target/determinism/cli/out-crlf/Additions-letter.pdf
+            target/determinism/cli/out-lf/Additions.txt
+            target/determinism/cli/out-crlf/Additions.txt
           if-no-files-found: error
           retention-days: 7
 
@@ -323,6 +343,46 @@ jobs:
             macOS-LF=pdf-cli/macos/out-lf/Application.txt macOS-CRLF=pdf-cli/macos/out-crlf/Application.txt \
             Windows-LF=pdf-cli/windows/out-lf/Application.txt Windows-CRLF=pdf-cli/windows/out-crlf/Application.txt
 
+      - name: Compare additions PDFs and letter text across systems and line endings
+        shell: bash
+        run: |
+          for file in Additions.pdf Additions-letter.pdf Additions.txt; do
+            bash scripts/compare-pdfs.sh \
+              macOS-LF="pdf-cli/macos/out-lf/$file" macOS-CRLF="pdf-cli/macos/out-crlf/$file" \
+              Windows-LF="pdf-cli/windows/out-lf/$file" Windows-CRLF="pdf-cli/windows/out-crlf/$file"
+          done
+
+  # Each package keeps its own minimum Rust version: the CLI at 1.92, the desktop app at 1.98 (gpui-pre-macos needs it).
+  # `just check` runs on the newest stable and cannot see a use of a newer feature, so this builds each at its floor.
+  msrv:
+    name: minimum Rust versions
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the floor toolchains
+        run: |
+          rustup toolchain install 1.92 --profile minimal
+          rustup toolchain install 1.98 --profile minimal
+          rustup default stable
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install just
+        uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
+        with:
+          tool: just@${{ env.JUST_VERSION }}
+
+      - name: Check each package at its minimum Rust version
+        run: just msrv
+
   # The macOS universal2 build runs on main and release tags only, so the `just build-macos` recipe
   # cannot rot unnoticed without spending minutes on every branch push.
   universal2:
@@ -387,7 +447,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version="$(cargo metadata --no-deps --format-version 1 --locked | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])')"
+          # By name, not by position: the workspace also holds the desktop app, which is listed first.
+          version="$(cargo metadata --no-deps --format-version 1 --locked | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "resume"))')"
           if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
             echo "::error::the tag ${GITHUB_REF_NAME} is not v${version}, the version in Cargo.toml"; exit 1
           fi

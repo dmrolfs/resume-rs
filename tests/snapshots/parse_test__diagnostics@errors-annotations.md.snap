@@ -186,5 +186,47 @@ expression: "views(&text, parsed.diagnostics())"
       "a position spec picks a wording by group name, so each group needs its own name; rename one"
     ],
     "fix": null
+  },
+  {
+    "code": "item-id-reused",
+    "severity": "error",
+    "range": [
+      1203,
+      1218
+    ],
+    "source": "<!-- &named -->",
+    "message": "the name `named` is already used by an item or a group in this document",
+    "hints": [
+      "ids and group names share one set of names; the first is on line 46, so rename one"
+    ],
+    "fix": null
+  },
+  {
+    "code": "item-id-on-alternate",
+    "severity": "error",
+    "range": [
+      1243,
+      1275
+    ],
+    "source": "<!-- =worded.default &worded -->",
+    "message": "`&worded` is on a variant of a group, which is addressed by its group name",
+    "hints": [
+      "remove the `&id`; a position spec addresses the whole group by its group name"
+    ],
+    "fix": null
+  },
+  {
+    "code": "item-id-reused",
+    "severity": "error",
+    "range": [
+      1348,
+      1364
+    ],
+    "source": "<!-- &reused -->",
+    "message": "the name `reused` is already used by an item or a group in this document",
+    "hints": [
+      "ids and group names share one set of names; the first is on line 39, so rename one"
+    ],
+    "fix": null
   }
 ]

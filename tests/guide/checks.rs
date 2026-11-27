@@ -1190,6 +1190,16 @@ pub fn spec_examples(guide: &Guide) -> Vec<String> {
         let words = fence.words();
         let body = fence.body.replace("\r\n", "\n");
         match words.get(1).map(String::as_str) {
+            Some("additions") => {
+                let text = format!("[build]\ncontent = 'missing.md'\n[letter]\ncontent = 'missing-letter.md'\n{body}");
+                match resume::spec::SpecLayer::from_text(std::path::Path::new("additions.toml"), &text) {
+                    Ok(layer)
+                        if !layer.layer().additions().is_empty()
+                            && layer.layer().letter().is_some_and(|l| !l.additions().is_empty()) => {}
+                    Ok(_) => problems.push("addition example must contain both resume and letter additions".into()),
+                    Err(error) => problems.push(format!("addition example is invalid: {error}")),
+                }
+            }
             Some("resolved") => resolved = Some(body),
             Some(name) if name.ends_with(".toml") => files.push((name.to_string(), body)),
             _ => problems.push(format!(

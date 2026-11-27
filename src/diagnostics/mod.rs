@@ -2,9 +2,13 @@
 //! ABOUTME: One type covers Markdown and Typst findings so a single renderer can display both.
 
 mod advice;
+mod collect;
+pub(crate) use collect::Collector;
 pub mod code;
 pub(crate) mod lines;
 mod render;
+mod source;
+pub use source::{ItemOrigin, SourceText};
 
 use std::ops::Range;
 use std::path::PathBuf;
@@ -13,9 +17,10 @@ use serde::Serialize;
 use strum::{AsRefStr, Display, EnumString};
 
 pub use self::code::{Advice, Category, DiagnosticCode};
+pub(crate) use self::render::has_unsafe_multiline_characters;
 pub use self::render::{
-    ColorEnv, RenderError, Sources, Summary, display_text, emit_human, emit_human_with_notes, emit_json,
-    emit_json_record, has_unsafe_characters, resolve_color, termcolor,
+    ColorEnv, RenderError, SourceConflict, SourcePosition, Sources, Summary, display_text, emit_human,
+    emit_human_with_notes, emit_json, emit_json_record, has_unsafe_characters, resolve_color, termcolor,
 };
 
 /// How serious a finding is; ordered so `Error` is the greatest.
@@ -33,6 +38,7 @@ pub enum Severity {
 pub enum SourceKind {
     Markdown,
     Style,
+    Spec,
 }
 
 /// A byte range in a source file.

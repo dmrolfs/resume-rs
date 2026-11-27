@@ -55,6 +55,11 @@ pub fn has_unsafe_characters(text: &str) -> bool {
     text.chars().any(|c| c.is_control() || is_bidi_control(c))
 }
 
+/// The same safety rule for Markdown prose, where tabs and line endings are allowed.
+pub(crate) fn has_unsafe_multiline_characters(text: &str) -> bool {
+    text.chars().any(|c| c != '\r' && escapes(c, true))
+}
+
 /// The bidirectional formatting characters, which can make source read differently from how it is stored.
 fn is_bidi_control(c: char) -> bool {
     matches!(c, '\u{61c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')

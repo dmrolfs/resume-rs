@@ -17,7 +17,7 @@ use crate::error::{Error, SpecContentSnafu, SpecSnafu, TracedToChoiceSnafu};
 use crate::markdown::Parsed;
 use crate::model::options::OutputFormat;
 use crate::output::{Overwrite, Planned, WriteMode, Writer, Written};
-use crate::pipeline::{Assessment, NameOrigins, Rendered, Selected, Session, Skip};
+use crate::pipeline::{Assessment, NameOrigins, RenderSettings, Rendered, Selected, Session, Skip};
 use crate::select::{CorePages, Selection, SelectionRecord, SelectionSummary};
 use crate::spec::{ChoiceKey, Located, ResolvedSpec};
 
@@ -29,10 +29,10 @@ struct BuildResult<'a> {
     selection: Option<Shown<'a>>,
 }
 
-/// A selection summary with what it needs to name lines: the input's node lines.
+/// A selection summary paired with the origins of its prepared input nodes.
 struct Shown<'a> {
     summary: &'a SelectionSummary,
-    lines: Vec<usize>,
+    origins: &'a [crate::diagnostics::ItemOrigin],
     /// The input, as shown to people.
     input: &'a Path,
 }
@@ -58,7 +58,7 @@ impl<'a> BuildResult<'a> {
 /// printed.
 pub(super) struct Job<'a> {
     out_dir: &'a Path,
-    render: &'a RenderArgs,
+    render: RenderSettings,
     selection: Selection,
     format: OutputFormat,
     cwd: &'a Path,
@@ -201,6 +201,7 @@ fn run_spec(cli: &Cli, args: &BuildArgs, spec_path: &Path, env: &Env, out: &mut 
         }
     };
     if args.spec.print_spec {
+        out.spec_warnings(&resolved, true);
         out.product(&resolved.to_toml());
         return Outcome::Success;
     }
@@ -227,7 +228,7 @@ fn run_spec(cli: &Cli, args: &BuildArgs, spec_path: &Path, env: &Env, out: &mut 
         names,
         style_at,
     };
-    let job = match Job::open_with(cli, &args.out, &render, selection, env) {
+    let job = match Job::open_with(cli, &args.out, render, selection, env) {
         Ok(job) => job.with_spec(run),
         Err(error) => {
             out.error(&run.style_error(error));
@@ -267,23 +268,23 @@ impl<'a> Job<'a> {
     pub(super) fn open(
         cli: &Cli,
         out_dir: &'a Path,
-        render: &'a RenderArgs,
+        render: &RenderArgs,
         select: &SelectArgs,
         env: &'a Env,
     ) -> Result<Self, Error> {
-        Self::open_with(cli, out_dir, render, select.selection(), env)
+        Self::open_with(cli, out_dir, RenderSettings::from(render), select.selection(), env)
     }
 
     /// [`Self::open`] for a selection that does not come from `SelectArgs`, such as a spec's.
     fn open_with(
         cli: &Cli,
         out_dir: &'a Path,
-        render: &'a RenderArgs,
+        render: RenderSettings,
         selection: Selection,
         env: &'a Env,
     ) -> Result<Self, Error> {
         // `build` can do nothing without a style or fonts, unlike `doctor`, which reports them.
-        let session = Session::open(render, env.resume_font_path.as_deref()).require_ready()?;
+        let session = Session::open(&render, env.resume_font_path.as_deref()).require_ready()?;
         Ok(Self {
             out_dir,
             render,
@@ -331,24 +332,46 @@ impl<'a> Job<'a> {
         let text = self.read_content(input)?;
         let no_names = NameOrigins::default();
         let names = self.spec.as_ref().map_or(&no_names, |spec| &spec.names);
-        let assessment = self
-            .session
-            .assess_with(file, &text, self.render, &self.selection, names);
+        let overrides = self.spec.as_ref().map(|spec| spec.resolved.item_overrides());
+        let additions = self
+            .spec
+            .as_ref()
+            .map_or(&[][..], |spec| spec.resolved.additions.as_slice());
+        let assessment = self.session.assess_edits(
+            file,
+            &text,
+            &self.render,
+            &self.selection,
+            names,
+            crate::pipeline::ResumeEdits { overrides, additions },
+        );
         let mut sources = out.sources();
         sources.insert(file, &text);
+        if let Some(spec) = &self.spec {
+            for snapshot in spec.resolved.sources() {
+                sources
+                    .insert_checked(snapshot.path(), snapshot.text())
+                    .context(crate::error::ReportSourceSnafu)?;
+            }
+        }
         let parsed = &assessment.parsed;
         let (summary, core_error) = self.summarize(&assessment);
         // What every outcome shows: the parse's findings, then the selection's own warnings.
         let early: Vec<&Diagnostic> = parsed
             .diagnostics()
             .iter()
+            .chain(self.spec.iter().flat_map(|spec| spec.resolved.content_warnings()))
             .chain(assessment.selected.iter().flat_map(|s| &s.findings))
             .collect();
         let shown = || {
             summary.as_ref().map(|summary| Shown {
                 summary,
-                lines: parsed.node_lines(&text),
-                input: self.shown(file),
+                origins: &assessment
+                    .selected
+                    .as_ref()
+                    .expect("summary requires a selection")
+                    .origins,
+                input: file,
             })
         };
         // A pick that names nothing is a mistake in the file that wrote it: no PDF is made, and the findings found so
@@ -387,7 +410,9 @@ impl<'a> Job<'a> {
             }
             Rendered::LayoutFailed { compiled, error } => {
                 for style_file in compiled.sources() {
-                    sources.insert(&style_file.path, &style_file.text);
+                    sources
+                        .insert_checked(&style_file.path, &style_file.text)
+                        .context(crate::error::ReportSourceSnafu)?;
                 }
                 let findings: Vec<&Diagnostic> = early.iter().copied().chain(compiled.warnings()).collect();
                 return Ok(BuiltFile::unwritten(self.present(
@@ -402,20 +427,32 @@ impl<'a> Job<'a> {
             Rendered::Laid { compiled, layout } => (compiled, layout),
         };
         for style_file in compiled.sources() {
-            sources.insert(&style_file.path, &style_file.text);
+            sources
+                .insert_checked(&style_file.path, &style_file.text)
+                .context(crate::error::ReportSourceSnafu)?;
         }
         let mut findings: Vec<&Diagnostic> = early.clone();
         findings.extend(compiled.warnings());
         findings.extend(&layout.diagnostics);
         let target = self.out_dir.join(input.stem.file_name());
+        let protected = crate::output::protect_inputs(
+            &target,
+            std::iter::once(input.read).chain(
+                self.spec
+                    .iter()
+                    .flat_map(|s| s.resolved.sources().iter().map(|s| s.path())),
+            ),
+        );
         // Delivery can fail after diagnostics exist. Present both rather than discarding the findings.
-        let written = compiled.export_pdf(input.stem.as_str()).and_then(|pdf| {
-            self.writer.commit(Planned {
-                target: &target,
-                bytes: &pdf,
-                overwrite: Overwrite::Replace,
-            })
-        });
+        let written = protected
+            .and_then(|()| compiled.export_pdf(input.stem.as_str()))
+            .and_then(|pdf| {
+                self.writer.commit(Planned {
+                    target: &target,
+                    bytes: &pdf,
+                    overwrite: Overwrite::Replace,
+                })
+            });
         let written = match written {
             Ok(written) => written,
             Err(error) => {
@@ -454,16 +491,22 @@ impl<'a> Job<'a> {
     fn summarize(&self, assessment: &Assessment) -> (Option<SelectionSummary>, Option<Error>) {
         let mut summary = assessment.selected.as_ref().map(|s| s.summary.clone());
         let mut core_error = None;
-        if let (Some(summary), Some(baseline)) = (summary.as_mut(), assessment.parsed.valid())
+        // The prepared copy, not the parse: the core-only count must see the same effective priorities the build did.
+        if let (Some(summary), Some(prepared)) = (summary.as_mut(), assessment.prepared.as_ref())
             && !summary.is_silent()
         {
-            summary.core = Some(match self.session.core_pages(baseline, &self.selection, self.render) {
-                Ok(core) => core,
-                Err(error) => {
-                    core_error = Some(error);
-                    CorePages::Failed
-                }
-            });
+            summary.core = Some(
+                match self
+                    .session
+                    .core_pages(prepared.resume(), &self.selection, &self.render)
+                {
+                    Ok(core) => core,
+                    Err(error) => {
+                        core_error = Some(error);
+                        CorePages::Failed
+                    }
+                },
+            );
         }
         (summary, core_error)
     }
@@ -497,7 +540,7 @@ impl<'a> Job<'a> {
     /// # Errors
     /// The style can no longer be resolved, as it could at the start.
     pub(super) fn refresh_style(&mut self) -> Result<(), Error> {
-        self.session.resolve_style_again(self.render)
+        self.session.resolve_style_again(&self.render)
     }
 
     /// The name of the style in use; the session was checked ready before any file was built.
@@ -559,7 +602,7 @@ impl<'a> Job<'a> {
         self.spec_summary(&result.built, out);
         out.fonts(fonts);
         if let Some(selection) = &result.selection {
-            self.selection_summary(selection, out);
+            self.selection_summary(selection, sources, out);
         }
         out.diagnostics(sources, &shown);
         if let Some(error) = result.error {
@@ -594,17 +637,17 @@ impl<'a> Job<'a> {
     }
 
     /// The selection's lines under the build line, or its JSON record on stdout; nothing when it is silent.
-    fn selection_summary(&self, selection: &Shown<'_>, out: &mut Reporter<'_, '_>) {
-        let line_of = |index: usize| selection.lines.get(index).copied();
+    fn selection_summary(&self, selection: &Shown<'_>, sources: &Sources<'_>, out: &mut Reporter<'_, '_>) {
+        let location_of = |index| Some(report_location(selection.origins, selection.input, sources, index));
         match self.format {
             OutputFormat::Human => {
-                for line in selection.summary.lines(&line_of) {
+                for line in selection.summary.lines(&location_of) {
                     out.line(&format!("  {line}"));
                 }
             }
             OutputFormat::Json if !selection.summary.is_silent() => {
-                let input = selection.input.display().to_string();
-                out.record(&SelectionRecord::new(selection.summary, &input, &line_of));
+                let input = self.shown(selection.input).display().to_string();
+                out.record(&SelectionRecord::new(selection.summary, &input, &location_of));
             }
             OutputFormat::Json => {}
         }
@@ -616,11 +659,74 @@ impl<'a> Job<'a> {
     }
 }
 
+fn report_location(
+    origins: &[crate::diagnostics::ItemOrigin],
+    input: &Path,
+    sources: &Sources<'_>,
+    index: usize,
+) -> crate::select::ReportLocation {
+    let span = origins
+        .get(index)
+        .expect("report indexes prepared input origins")
+        .span();
+    crate::select::ReportLocation {
+        same_input: span.file == input,
+        position: sources
+            .position(&span)
+            .expect("prepared input origins have registered sources"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::diagnostics::{Edit, Severity};
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn report_locations_use_source_identity_and_registered_snapshot_coordinates() {
+        use crate::diagnostics::{ItemOrigin, SourceKind, SourceText};
+        use claims::assert_some;
+        let base = std::env::temp_dir().join("resume-origin-test");
+        let input = base.join("resume.md");
+        let spec = SourceText::new(base.join("position.toml"), SourceKind::Spec, "# é\ncontent = 'words'\n");
+        let origins = [
+            ItemOrigin::Baseline {
+                file: input.clone(),
+                range: 2..3,
+            },
+            assert_some!(ItemOrigin::spec(&spec, 15..22)),
+        ];
+        let mut sources = Sources::new(Some(base));
+        sources.insert(&input, "# A");
+        sources.insert_text(&spec);
+        let baseline = report_location(&origins, &input, &sources, 0);
+        assert!(baseline.same_input);
+        assert_eq!(
+            (
+                baseline.position.file.as_str(),
+                baseline.position.line,
+                baseline.position.column
+            ),
+            ("resume.md", 1, 3)
+        );
+        let added = report_location(&origins, &input, &sources, 1);
+        assert!(!added.same_input);
+        assert_eq!(
+            (added.position.file.as_str(), added.position.line, added.position.column),
+            ("position.toml", 2, 11)
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "prepared input origins have registered sources")]
+    fn missing_report_source_is_not_silently_replaced_with_a_baseline_line() {
+        let origins = [crate::diagnostics::ItemOrigin::SpecContent {
+            file: "missing.toml".into(),
+            content: 0..1,
+        }];
+        report_location(&origins, Path::new("resume.md"), &Sources::new(None), 0);
+    }
 
     #[test]
     fn operational_failure_adds_one_error_without_changing_other_counts() {

@@ -49,6 +49,7 @@ pub enum DiagnosticCode {
     MissingContact,
     PeriodPresentSpelling,
     UnsupportedMarkdown,
+    SpecFragmentShape,
     HardBreak,
     TextTooLong,
     EmptyHeading,
@@ -68,6 +69,8 @@ pub enum DiagnosticCode {
     AlternateGroupReused,
     AlternateVariantRepeated,
     AlternatePriorityConflict,
+    ItemIdReused,
+    ItemIdOnAlternate,
     LetterMissingSection,
     LetterUnknownSection,
     LetterDuplicateSection,
@@ -139,6 +142,7 @@ impl DiagnosticCode {
             | MissingContact
             | PeriodPresentSpelling
             | UnsupportedMarkdown
+            | SpecFragmentShape
             | HardBreak
             | TextTooLong
             | EmptyHeading
@@ -158,6 +162,8 @@ impl DiagnosticCode {
             | AlternateGroupReused
             | AlternateVariantRepeated
             | AlternatePriorityConflict
+            | ItemIdReused
+            | ItemIdOnAlternate
             | LetterMissingSection
             | LetterUnknownSection
             | LetterDuplicateSection
@@ -208,6 +214,7 @@ impl DiagnosticCode {
             | InvalidLink
             | UnsupportedLink
             | UnsupportedMarkdown
+            | SpecFragmentShape
             | TextTooLong
             | EmptyHeading
             | InputLimit
@@ -225,6 +232,8 @@ impl DiagnosticCode {
             | AlternateGroupReused
             | AlternateVariantRepeated
             | AlternatePriorityConflict
+            | ItemIdReused
+            | ItemIdOnAlternate
             | LetterMissingSection
             | LetterUnknownSection
             | LetterDuplicateSection

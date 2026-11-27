@@ -32,15 +32,22 @@ fmt:
 fmt-fix:
     cargo fmt --all
 
-[doc('Lint all targets; any warning fails')]
+# PER-PACKAGE RULE: the gate runs each package on its own, never with `--workspace`. With `--workspace` cargo merges
+# the features of every member, and the app turns on `serde_json/preserve_order` (through GPUI), which changes the
+# key order of the CLI's JSON output and fails a `resume` test that passes in the shipped build. Every package needs
+# its own line in each of these recipes; a test in tests/justfile_test.rs fails when one is missing.
+
+[doc('Lint all targets of each package on its own; any warning fails')]
 [group('gate')]
 clippy:
-    cargo clippy --all-targets -- -D warnings
+    cargo clippy --package resume --all-targets -- -D warnings
+    cargo clippy --package workbench --all-targets -- -D warnings
 
-[doc('Run all tests, continuing past failures')]
+[doc('Run the tests of each package on its own, continuing past failures within a package')]
 [group('gate')]
 test:
-    cargo test --no-fail-fast
+    cargo test --package resume --no-fail-fast
+    cargo test --package workbench --no-fail-fast
 
 # Needs cargo-machete (cargo install cargo-machete --locked --version 0.9.2, the version CI pins). Two checks.
 # First, cargo's `unused_dependencies` lint on the library and binary alone: clippy's all-targets run compiles the
@@ -51,7 +58,8 @@ test:
 [doc('Fail on a dependency nothing uses: the lint on the library and binary, then cargo-machete')]
 [group('gate')]
 unused-deps:
-    cargo check --lib --bins
+    cargo check --package resume --lib --bins
+    cargo check --package workbench --bins
     cargo machete --with-metadata
 
 [doc('The quality gate: formatting, lints, unused dependencies, and tests')]
@@ -97,10 +105,10 @@ clean:
 # CI: what a CI leg runs, so a failure can be reproduced locally
 # ---------------------------------------------------------------------------------------------------
 
-[doc('Locked release build, the same flags the shipped binaries use')]
+[doc('Locked release build of the resume CLI, the same flags the shipped binaries use')]
 [group('ci')]
 release:
-    cargo build --release --locked
+    cargo build --release --locked --package resume
 
 [doc('One CI leg: the quality gate, then a locked release build')]
 [group('ci')]
@@ -156,19 +164,24 @@ coverage *args: (_need 'cargo-llvm-cov' 'cargo install cargo-llvm-cov --locked')
 mutants *args: (_need 'cargo-mutants' 'cargo install cargo-mutants --locked')
     cargo mutants {{ args }}
 
-[doc('Check the build with the minimum Rust version in Cargo.toml (needs that toolchain)')]
+[doc('Check each package with its own minimum Rust version: resume (Cargo.toml) and the app (crates/workbench/Cargo.toml)')]
 [group('verify')]
 [unix]
 msrv:
     #!/usr/bin/env bash
     set -euo pipefail
-    msrv=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)
-    [ -n "$msrv" ] || { echo "error: no rust-version in Cargo.toml" >&2; exit 1; }
-    rustup toolchain list | grep -q "^${msrv}" || {
-        echo "error: Rust ${msrv} is not installed; run: rustup toolchain install ${msrv} --profile minimal" >&2
-        exit 1
+    check_floor() {
+        local manifest="$1" package="$2" msrv
+        msrv=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' "$manifest")
+        [ -n "$msrv" ] || { echo "error: no rust-version in $manifest" >&2; exit 1; }
+        rustup toolchain list | grep -q "^${msrv}" || {
+            echo "error: Rust ${msrv} is not installed; run: rustup toolchain install ${msrv} --profile minimal" >&2
+            exit 1
+        }
+        cargo +"${msrv}" check --locked --all-targets --package "$package"
     }
-    cargo +"${msrv}" check --locked --all-targets
+    check_floor Cargo.toml resume
+    check_floor crates/workbench/Cargo.toml workbench
 
 [doc('Everything to run before pushing: CI leg, docs, lint, and both cross-builds (macOS)')]
 [group('verify')]
@@ -189,7 +202,7 @@ build-macos:
     export MACOSX_DEPLOYMENT_TARGET=11.0
     for target in aarch64-apple-darwin x86_64-apple-darwin; do
         rustup target list --installed | grep -qx "$target" || rustup target add "$target"
-        cargo build --release --locked --target "$target"
+        cargo build --release --locked --package resume --target "$target"
     done
     mkdir -p target/universal2
     lipo -create -output target/universal2/resume \
@@ -209,7 +222,7 @@ build-windows:
     set -euo pipefail
     command -v x86_64-w64-mingw32-gcc >/dev/null || { echo "error: mingw-w64 not found (brew install mingw-w64)" >&2; exit 1; }
     rustup target list --installed | grep -qx x86_64-pc-windows-gnu || rustup target add x86_64-pc-windows-gnu
-    cargo build --release --locked --target x86_64-pc-windows-gnu
+    cargo build --release --locked --package resume --target x86_64-pc-windows-gnu
     just check-windows-imports target/x86_64-pc-windows-gnu/release/resume.exe
 
 [doc('Fail if a Windows exe imports a runtime DLL a clean machine may lack (mingw, dynamic std, VC++)')]

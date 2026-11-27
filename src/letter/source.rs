@@ -36,7 +36,10 @@ pub enum LetterInline {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Piece {
     pub content: Vec<LetterInline>,
+    /// Parser coordinates: baseline bytes for a baseline piece, decoded Markdown bytes for spec content.
+    /// Use `origin` for diagnostics, never this range without its source owner.
     pub range: Range<usize>,
+    pub origin: crate::diagnostics::ItemOrigin,
 }
 
 /// One authored paragraph with what its annotation comment said, if it had one.
@@ -112,12 +115,45 @@ pub struct LetterSource {
     pub closing: SourceItem,
 }
 
+impl LetterSource {
+    /// The group names of the greeting and the closing, each with the frame it is in. A frame is not an item a
+    /// position spec can address, so a spec that names one is told that, not that it is missing.
+    #[must_use]
+    pub fn frame_groups(&self) -> Vec<(&'static str, &crate::model::GroupName)> {
+        [("greeting", &self.greeting), ("closing", &self.closing)]
+            .into_iter()
+            .filter_map(|(frame, item)| match item {
+                SourceItem::Alternates(group) => group
+                    .variants
+                    .first()
+                    .and_then(|v| v.annotations.alternate.as_ref())
+                    .map(|a| (frame, &a.group)),
+                SourceItem::Paragraph(_) => None,
+            })
+            .collect()
+    }
+
+    /// The annotation of every body paragraph and every variant of a body group, in document order.
+    ///
+    /// A greeting or closing is a frame, not an item a position spec can address, so it is not here.
+    pub(crate) fn body_annotations_mut(&mut self) -> Vec<&mut Annotations> {
+        self.body
+            .iter_mut()
+            .flat_map(|item| match item {
+                SourceItem::Paragraph(item) => std::slice::from_mut(item).iter_mut(),
+                SourceItem::Alternates(group) => group.variants.iter_mut(),
+            })
+            .map(|item| &mut item.annotations)
+            .collect()
+    }
+}
+
 /// A letter with annotations cannot become a [`SelectedLetter`] until selection has chosen its paragraphs.
 #[derive(Debug, Clone, PartialEq, Eq, Snafu)]
 #[snafu(display("the letter has annotations, so selection must choose its paragraphs first"))]
 pub struct SelectionRequired {
-    /// The first annotation comment, or the paragraph it marks when its comment has no location.
-    pub range: Range<usize>,
+    /// The first annotation comment, or its paragraph; spec-owned refusals name the whole content literal.
+    pub span: crate::diagnostics::Span,
 }
 
 /// Paragraphs retained by selection. Only these pieces need application field values.
@@ -148,10 +184,11 @@ impl TryFrom<LetterSource> for SelectedLetter {
         } = source;
         let one = |item: SourceItem| -> Result<Piece, SelectionRequired> {
             let refuse = |item: &Item| SelectionRequired {
-                range: item
-                    .annotation_range
-                    .clone()
-                    .unwrap_or_else(|| item.piece.range.clone()),
+                span: item.piece.origin.inline_span(
+                    item.annotation_range
+                        .clone()
+                        .unwrap_or_else(|| item.piece.range.clone()),
+                ),
             };
             match item {
                 SourceItem::Paragraph(item) if item.annotations.is_empty() && item.annotation_range.is_none() => {
@@ -159,7 +196,7 @@ impl TryFrom<LetterSource> for SelectedLetter {
                 }
                 SourceItem::Paragraph(item) => Err(refuse(&item)),
                 SourceItem::Alternates(group) => {
-                    Err(group.variants.first().map_or(SelectionRequired { range: 0..0 }, refuse))
+                    Err(refuse(group.variants.first().expect("parsed groups are nonempty")))
                 }
             }
         };

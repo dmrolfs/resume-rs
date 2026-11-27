@@ -196,6 +196,10 @@ fn every_format_code_is_demonstrated_by_a_fixture() {
         .collect();
     // Field resolution runs after parsing; demonstrate its Format finding with a located model fixture.
     let missing = resume::letter::Piece {
+        origin: resume::diagnostics::ItemOrigin::Baseline {
+            file: "letter.md".into(),
+            range: 0..11,
+        },
         content: vec![resume::letter::LetterInline::Placeholder {
             key: resume::letter::Placeholder::Company,
             range: 0..11,
@@ -212,10 +216,11 @@ fn every_format_code_is_demonstrated_by_a_fixture() {
     let findings = claims::assert_err!(resume::letter::resolve(
         selected,
         &resume::letter::LetterFields::default(),
-        std::path::Path::new("letter.md"),
     ));
     seen.extend(findings.iter().map(|d| d.code));
     seen.push(DiagnosticCode::InputLimit); // the size and nesting caps are exercised below
+    let fragment_findings = claims::assert_err!(resume::markdown::fragment::letter_paragraph("- not a leaf"));
+    seen.extend(fragment_findings.iter().map(|d| d.code));
     for fixture in [
         include_str!("fixtures/letters/valid.md"),
         include_str!("fixtures/letters/invalid.md"),

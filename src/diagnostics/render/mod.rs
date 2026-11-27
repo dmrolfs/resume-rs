@@ -20,8 +20,9 @@ use crate::diagnostics::Diagnostic;
 pub use codespan_reporting::term::termcolor;
 
 pub use self::color::{ColorEnv, resolve_color};
+pub(crate) use self::sanitize::has_unsafe_multiline_characters;
 pub use self::sanitize::{display_text, has_unsafe_characters};
-pub use self::sources::Sources;
+pub use self::sources::{SourceConflict, SourcePosition, Sources};
 pub use self::summary::Summary;
 
 /// Failure to write rendered diagnostics.

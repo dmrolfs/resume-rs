@@ -42,3 +42,9 @@ London · ada@example.com
 Between the groups.
 
 - Reused again. <!-- =reused.default -->
+## Ids
+- Named once. <!-- &named -->
+- Named again. <!-- &named -->
+- A wording with an id. <!-- =worded.default &worded -->
+- Another wording. <!-- =worded.short -->
+- An id that is a group name. <!-- &reused -->

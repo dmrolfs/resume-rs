@@ -13,6 +13,34 @@ use crate::error::{
     OutputReadOnlySnafu, WriteOutputSnafu,
 };
 
+/// Refuses delivery over an input, including aliases through symlinked parent directories.
+/// Atomic replacement breaks hard links rather than changing their other names.
+pub(crate) fn protect_inputs<'a>(target: &Path, inputs: impl Iterator<Item = &'a Path>) -> Result<(), Error> {
+    let target_real = match fs::canonicalize(target) {
+        Ok(path) => Some(path),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(source) => {
+            return Err(Error::WriteOutput {
+                path: target.to_owned(),
+                source,
+            });
+        }
+    };
+    for input in inputs {
+        if target == input
+            || target_real
+                .as_ref()
+                .is_some_and(|path| fs::canonicalize(input).as_ref().is_ok_and(|input| input == path))
+        {
+            return Err(Error::OutputInputCollision {
+                target: target.to_owned(),
+                input: input.to_owned(),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Whether a write happens or is only checked and described.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WriteMode {

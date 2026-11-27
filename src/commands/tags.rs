@@ -108,6 +108,18 @@ fn listing(inventory: &Inventory) -> String {
             keyword.lines.len()
         ));
     }
+    if !inventory.ids.is_empty() {
+        out.push_str("ids\n");
+        let width = inventory.ids.iter().map(|i| i.name.chars().count()).max().unwrap_or(0) + 1;
+        for id in &inventory.ids {
+            out.push_str(&format!(
+                "  {:<width$}  {}  line {}\n",
+                format!("&{}", id.name),
+                id.kind,
+                id.line
+            ));
+        }
+    }
     out.push_str("groups\n");
     if inventory.groups.is_empty() {
         out.push_str("  (none)\n");

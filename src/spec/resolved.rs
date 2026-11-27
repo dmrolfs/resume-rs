@@ -41,14 +41,23 @@ pub struct ResolvedSpec {
     pub position: Option<Position>,
     pub content: ContentRef,
     pub choices: Choices,
+    pub(crate) additions: Vec<super::additions::ResumeAddition>,
     /// Every file that contributed, least specific first, the spec last.
     pub chain: Vec<ChainLink>,
     /// The letter the spec builds, resolved apart from the resume; `None` for a spec with no `[letter]`.
-    pub letter: Option<ResolvedLetter>,
+    pub(crate) letter: Option<ResolvedLetter>,
     origins: BTreeMap<ChoiceKey, Located>,
+    sources: Vec<crate::diagnostics::SourceText>,
+    content_warnings: Vec<crate::diagnostics::Diagnostic>,
 }
 
 impl ResolvedSpec {
+    pub fn additions(&self) -> &[super::additions::ResumeAddition] {
+        &self.additions
+    }
+    pub fn letter(&self) -> Option<&ResolvedLetter> {
+        self.letter.as_ref()
+    }
     /// Resolves a chain ordered least specific first, whose last layer is the spec.
     ///
     /// The chain comes from [`super::chain::order`], which always ends in the spec the caller loaded as a
@@ -61,19 +70,24 @@ impl ResolvedSpec {
             .iter()
             .map(|layer| ChainLink {
                 name: layer.name.clone(),
-                path: layer.path.clone(),
+                path: layer.path().to_owned(),
                 declared_extends: layer.extends.iter().map(|e| e.value.clone()).collect(),
             })
             .collect();
+        let sources = layers.iter().map(|layer| layer.source().clone()).collect();
         let spec = layers.into_iter().next_back().filter(|l| l.kind == Kind::Spec);
         let Some(spec) = spec else {
             unreachable!("a chain ends in its spec");
         };
+        let dir = spec
+            .path()
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_default();
         let Some(content) = spec.content else {
             unreachable!("loading a spec requires its content path");
         };
         let (declared, at) = (content.value, content.at);
-        let dir = spec.path.parent().map(std::path::Path::to_path_buf).unwrap_or_default();
         let letter = spec
             .letter
             .zip(letter_merged)
@@ -86,10 +100,36 @@ impl ResolvedSpec {
                 at,
             },
             choices: merged.choices,
+            additions: spec.additions,
             chain,
             letter,
             origins: merged.origins,
+            sources,
+            content_warnings: spec.content_warnings,
         }
+    }
+
+    /// All content warnings, including the document not currently being built.
+    pub fn content_warnings(&self) -> impl Iterator<Item = &crate::diagnostics::Diagnostic> {
+        self.content_warnings.iter()
+    }
+
+    /// Loaded snapshots in chain order, with the final spec last. Reporting never rereads these files.
+    #[must_use]
+    pub fn sources(&self) -> &[crate::diagnostics::SourceText] {
+        &self.sources
+    }
+
+    /// The resume's per-item overrides, to apply to the parsed baseline before selecting from it.
+    #[must_use]
+    pub fn item_overrides(&self) -> super::items::ItemOverrides<'_> {
+        super::items::ItemOverrides::new(&self.choices.select.overrides, &self.origins)
+    }
+
+    /// The letter's per-item overrides; `None` for a spec with no `[letter]`.
+    #[must_use]
+    pub fn letter_item_overrides(&self) -> Option<super::items::ItemOverrides<'_>> {
+        self.letter.as_ref().map(ResolvedLetter::item_overrides)
     }
 
     /// Every choice and the file and place that decided it, in key order.
@@ -142,6 +182,8 @@ struct Printed<'a> {
     select: Option<PrintedSelect<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     letter: Option<PrintedLetter<'a>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    add: Vec<super::print_additions::PrintedAddition<'a>>,
 }
 
 #[derive(Serialize)]
@@ -165,6 +207,8 @@ struct PrintedLetter<'a> {
     links: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     select: Option<PrintedSelect<'a>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    add: Vec<super::print_additions::PrintedAddition<'a>>,
 }
 
 #[derive(Serialize)]
@@ -220,6 +264,19 @@ struct PrintedSelect<'a> {
     pick: BTreeMap<&'a str, &'a str>,
     #[serde(rename = "core-only", skip_serializing_if = "Option::is_none")]
     core_only: Option<bool>,
+    /// `[select.override.<id>]`, sorted by id. Printed last, so the plain keys above stay in one table.
+    #[serde(rename = "override", skip_serializing_if = "BTreeMap::is_empty")]
+    overrides: BTreeMap<&'a str, PrintedOverride<'a>>,
+}
+
+/// One item's overrides. A field nobody wrote is left out; one that was written is always printed, an empty tag
+/// list and `none` included, because they are choices and not the absence of one.
+#[derive(Serialize)]
+struct PrintedOverride<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tags: Option<Vec<&'a str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    priority: Option<&'static str>,
 }
 
 impl<'a> PrintedSelect<'a> {
@@ -235,13 +292,25 @@ impl<'a> PrintedSelect<'a> {
             promote: select.promote.iter().map(AsRef::as_ref).collect(),
             pick: select.pick.iter().map(|(g, v)| (g.as_ref(), v.as_ref())).collect(),
             core_only: select.core_only,
+            overrides: select
+                .overrides
+                .iter()
+                .map(|(id, o)| {
+                    let printed = PrintedOverride {
+                        tags: o.tags.as_ref().map(|t| t.iter().map(AsRef::as_ref).collect()),
+                        priority: o.priority.map(Into::into),
+                    };
+                    (id.as_ref(), printed)
+                })
+                .collect(),
         };
         let says_something = printed.groups.is_some()
             || !printed.tags.is_empty()
             || !printed.prefer.is_empty()
             || !printed.promote.is_empty()
             || !printed.pick.is_empty()
-            || printed.core_only.is_some();
+            || printed.core_only.is_some()
+            || !printed.overrides.is_empty();
         says_something.then_some(printed)
     }
 }
@@ -261,6 +330,11 @@ impl<'a> From<&'a ResolvedLetter> for PrintedLetter<'a> {
             length_unit: s.length_unit.as_ref().map(|v| name(&v.value)),
             links: s.links.as_ref().map(|v| name(&v.value)),
             select: PrintedSelect::of(&letter.choices),
+            add: letter
+                .additions
+                .iter()
+                .map(super::print_additions::PrintedAddition::letter)
+                .collect(),
         }
     }
 }
@@ -291,6 +365,11 @@ impl<'a> From<&'a ResolvedSpec> for Printed<'a> {
             },
             select: PrintedSelect::of(&choices.select),
             letter: spec.letter.as_ref().map(PrintedLetter::from),
+            add: spec
+                .additions
+                .iter()
+                .map(super::print_additions::PrintedAddition::resume)
+                .collect(),
         }
     }
 }
@@ -314,5 +393,165 @@ impl<'a> From<&'a Position> for PrintedPosition<'a> {
                 technical: level(emphasis.technical),
             }),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::path::PathBuf;
+
+    use claims::{assert_ok, assert_some};
+    use pretty_assertions::assert_eq;
+
+    use crate::model::{ItemId, PriorityEdit, Tag};
+    use crate::spec::chain::ProfileSource;
+    use crate::spec::error::{Located, SpecError};
+    use crate::spec::layer::{ItemOverrideLayer, Kind, Layer, SelectLayer, Sourced, SpecLayer};
+    use crate::spec::names::{DeclaredPath, ProfileName};
+    use crate::spec::resolve_with;
+
+    fn at(file: &str, line: usize) -> Located {
+        Located {
+            path: PathBuf::from(file).into(),
+            line,
+            column: 1,
+        }
+    }
+
+    fn item(name: &str) -> ItemId {
+        assert_ok!(ItemId::try_new(name))
+    }
+
+    fn tags(names: &[&str]) -> Option<Sourced<BTreeSet<Tag>>> {
+        Some(Sourced {
+            value: names.iter().map(|n| assert_ok!(Tag::try_new(*n))).collect(),
+            at: at("x.toml", 1),
+        })
+    }
+
+    fn priority(edit: PriorityEdit) -> Option<Sourced<PriorityEdit>> {
+        Some(Sourced {
+            value: edit,
+            at: at("x.toml", 2),
+        })
+    }
+
+    fn layer(kind: Kind, name: Option<&str>, file: &str, overrides: BTreeMap<ItemId, ItemOverrideLayer>) -> Layer {
+        Layer {
+            kind,
+            name: name.map(|n| assert_ok!(ProfileName::try_new(n))),
+            source: crate::diagnostics::SourceText::new(file.into(), crate::diagnostics::SourceKind::Spec, ""),
+            additions: Vec::new(),
+            content_warnings: Vec::new(),
+            extends: vec![],
+            position: None,
+            content: (kind == Kind::Spec).then(|| Sourced {
+                value: assert_ok!(DeclaredPath::parse("baseline.md")),
+                at: at(file, 1),
+            }),
+            style: None,
+            paper: None,
+            select: SelectLayer {
+                overrides,
+                ..SelectLayer::default()
+            },
+            letter: None,
+            letter_select: SelectLayer::default(),
+        }
+    }
+
+    struct NoProfiles;
+    impl ProfileSource for NoProfiles {
+        fn find(&self, name: &ProfileName, at: &Located) -> Result<Layer, SpecError> {
+            panic!("unexpected profile {name} asked for at {at}")
+        }
+    }
+
+    fn resolved(overrides: BTreeMap<ItemId, ItemOverrideLayer>) -> super::ResolvedSpec {
+        let spec = layer(Kind::Spec, None, "acme.toml", overrides);
+        let spec = assert_ok!(SpecLayer::try_from_layer(spec));
+        assert_ok!(resolve_with(spec, &NoProfiles))
+    }
+
+    fn printed(overrides: BTreeMap<ItemId, ItemOverrideLayer>) -> String {
+        resolved(overrides).to_toml()
+    }
+
+    #[test]
+    fn a_spec_with_no_overrides_prints_no_override_table() {
+        let text = printed(BTreeMap::new());
+        assert!(!text.contains("override"), "{text}");
+    }
+
+    #[test]
+    fn overrides_print_with_their_tags_and_priority_sorted_by_id() {
+        let text = printed(BTreeMap::from([
+            (
+                item("gateway"),
+                ItemOverrideLayer {
+                    tags: tags(&["platform", "ai"]),
+                    priority: priority(PriorityEdit::Core),
+                },
+            ),
+            (
+                item("cache"),
+                ItemOverrideLayer {
+                    tags: None,
+                    priority: priority(PriorityEdit::Extra),
+                },
+            ),
+        ]));
+        let cache = assert_some!(text.find("[select.override.cache]"), "{text}");
+        let gateway = assert_some!(text.find("[select.override.gateway]"), "{text}");
+        assert!(cache < gateway, "sorted by id: {text}");
+        assert!(
+            text.contains("tags = [\"ai\", \"platform\"]"),
+            "tags are sorted: {text}"
+        );
+        assert!(text.contains("priority = \"core\""), "{text}");
+        assert!(text.contains("priority = \"extra\""), "{text}");
+    }
+
+    #[test]
+    fn an_explicit_clear_prints_and_is_not_dropped_as_empty() {
+        let text = printed(BTreeMap::from([(
+            item("gateway"),
+            ItemOverrideLayer {
+                tags: tags(&[]),
+                priority: priority(PriorityEdit::None),
+            },
+        )]));
+        assert!(text.contains("tags = []"), "{text}");
+        assert!(text.contains("priority = \"none\""), "{text}");
+    }
+
+    #[test]
+    fn a_field_nobody_wrote_is_not_printed() {
+        let text = printed(BTreeMap::from([(
+            item("gateway"),
+            ItemOverrideLayer {
+                tags: tags(&["ai"]),
+                priority: None,
+            },
+        )]));
+        assert!(text.contains("tags = [\"ai\"]"), "{text}");
+        assert!(!text.contains("priority"), "{text}");
+    }
+
+    #[test]
+    fn an_override_is_printed_under_select_so_the_spec_resolves_to_the_same_choices_again() {
+        let spec = resolved(BTreeMap::from([(
+            item("gateway"),
+            ItemOverrideLayer {
+                tags: tags(&[]),
+                priority: priority(PriorityEdit::None),
+            },
+        )]));
+        let text = spec.to_toml();
+        let value: toml::Value = assert_ok!(text.parse());
+        let table = &value["select"]["override"]["gateway"];
+        assert_eq!(table["tags"].as_array().map(Vec::len), Some(0));
+        assert_eq!(table["priority"].as_str(), Some("none"));
     }
 }

@@ -8,7 +8,9 @@ pub mod text;
 
 use serde::Serialize;
 
-pub use self::annotation::{Alternate, Annotations, GroupName, Priority, Status, Tag, VariantName};
+pub use self::annotation::{
+    Alternate, Annotations, GroupName, ItemId, Priority, PriorityEdit, Status, Tag, VariantName,
+};
 pub use self::period::{PartialDate, Period, PeriodEnd, Season, Year};
 pub use self::text::{Company, EraName, LinkUrl, Name, SectionTitle, StyleName, Title};
 
@@ -271,9 +273,45 @@ impl Resume {
         out
     }
 
-    /// Every annotation in the resume, in document order; for tests that set, clear, or count them all.
+    /// The annotation of every node [`Self::nodes`] lists, in the same order, so index `i` is node `i`.
     ///
-    /// The one place that lists every annotated node, so a test cannot miss a field that a new node adds.
+    /// A role with no blurb has no blurb node, so it gives no blurb slot: a slot there would shift every address
+    /// after it. This is how a position spec's changes reach a copy of the baseline.
+    pub(crate) fn node_annotations_mut(&mut self) -> Vec<&mut Annotations> {
+        let mut out = Vec::new();
+        for section in &mut self.sections {
+            out.push(&mut section.annotations);
+            for block in &mut section.blocks {
+                match block {
+                    Block::Paragraph { annotations, .. } => out.push(annotations),
+                    Block::Bullets { items } => out.extend(items.iter_mut().map(|b| &mut b.annotations)),
+                    Block::Role(role) => {
+                        out.push(&mut role.annotations);
+                        if role.blurb.is_some() {
+                            out.push(&mut role.blurb_annotations);
+                        }
+                        for part in &mut role.body {
+                            match part {
+                                RoleBlock::Era { items, annotations, .. } => {
+                                    out.push(annotations);
+                                    out.extend(items.iter_mut().map(|b| &mut b.annotations));
+                                }
+                                RoleBlock::Bullets { items } => {
+                                    out.extend(items.iter_mut().map(|b| &mut b.annotations))
+                                }
+                                RoleBlock::Paragraph { annotations, .. } => out.push(annotations),
+                            }
+                        }
+                    }
+                    Block::PageBreak => {}
+                }
+            }
+        }
+        out
+    }
+
+    /// Every annotation slot, a role's blurb slot included even when it has no blurb; for tests that set, clear, or
+    /// count them all. Use [`Self::node_annotations_mut`] to address nodes.
     #[cfg(test)]
     pub(crate) fn annotations_mut(&mut self) -> Vec<&mut Annotations> {
         let mut out = Vec::new();
@@ -392,6 +430,49 @@ mod tests {
         resume
     }
 
+    /// A resume with every shape of node: a role with and without a blurb, an era, a page break, prose and bullets.
+    fn every_shape() -> Resume {
+        let parsed = crate::markdown::parse(
+            "r.md",
+            "# Ada\n\nLondon · a@b.co\n\n## Summary\n\nProse.\n\n- S1\n\n## Experience\n\n\
+             ### Acme · Engineer · 2015 – 2020\n\nThe blurb.\n\n- R1\n- R2\n\n**AI · 2016 – 2017**\n\n- E1\n\n\
+             Closing.\n\n<div class=\"page-break\"></div>\n\n### Beta · 2010 – 2014\n\n- No blurb here\n\n\
+             ### Gamma · 2008 – 2010\n\n**Only an era · 2008 – 2009**\n\n- G1\n",
+        );
+        assert_eq!(parsed.diagnostics(), []);
+        parsed.valid().expect("a valid resume").clone()
+    }
+
+    #[test]
+    fn the_mutable_walk_visits_exactly_the_nodes_nodes_lists_in_the_same_order() {
+        // A role with no blurb has no blurb node, so the walk must not hand out a slot for it: every address after
+        // it would shift by one.
+        let mut resume = every_shape();
+        let kinds: Vec<NodeKind> = resume.nodes().iter().map(|n| n.kind).collect();
+        let slots = resume.node_annotations_mut();
+        assert_eq!(slots.len(), kinds.len());
+        assert!(kinds.contains(&NodeKind::Blurb) && kinds.contains(&NodeKind::Era));
+        let roles = kinds.iter().filter(|k| **k == NodeKind::Role).count();
+        let blurbs = kinds.iter().filter(|k| **k == NodeKind::Blurb).count();
+        assert!(blurbs < roles, "the sample has a role with no blurb");
+    }
+
+    #[test]
+    fn writing_through_the_mutable_walk_lands_on_the_node_at_that_index() {
+        let mut resume = every_shape();
+        let marked: Vec<usize> = (0..resume.nodes().len()).collect();
+        for (index, slot) in resume.node_annotations_mut().into_iter().enumerate() {
+            slot.id = Some(Box::new(assert_ok!(ItemId::try_new(format!("n{index}")))));
+        }
+        let seen: Vec<Option<String>> = resume
+            .nodes()
+            .iter()
+            .map(|n| n.annotations.id.as_deref().map(ToString::to_string))
+            .collect();
+        let expected: Vec<Option<String>> = marked.iter().map(|i| Some(format!("n{i}"))).collect();
+        assert_eq!(seen, expected, "the id written at index i is read back from node i");
+    }
+
     #[test]
     fn the_visitor_reaches_every_kind_of_annotated_node() {
         // Section, role, blurb, era, era bullet, section paragraph, role paragraph.
@@ -409,6 +490,7 @@ mod tests {
                 group: assert_ok!(GroupName::try_new("gateway")),
                 variant: assert_ok!(VariantName::try_new("short")),
             }),
+            id: Some(Box::new(assert_ok!(ItemId::try_new("gateway")))),
         };
         let plain = annotate_everything(sample(), &Annotations::default());
         let annotated = annotate_everything(sample(), &annotations);

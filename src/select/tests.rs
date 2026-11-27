@@ -620,7 +620,16 @@ fn the_summary_is_silent_for_a_default_selection_that_changed_nothing() {
 #[test]
 fn the_summary_counts_routine_wordings_and_lists_first_ready_fallbacks() {
     let body = "## S\n\n- A <!-- =a.default @draft -->\n- A2 <!-- =a.short -->\n- B <!-- =b.default -->\n- B2 <!-- =b.short -->\n";
-    let lines = summary(body, &Selection::default()).lines(&|i| Some(i + 100));
+    let lines = summary(body, &Selection::default()).lines(&|i| {
+        Some(super::ReportLocation {
+            position: crate::diagnostics::SourcePosition {
+                file: "r.md".into(),
+                line: i + 100,
+                column: 1,
+            },
+            same_input: true,
+        })
+    });
     assert!(
         lines.contains(&"wordings: 2 chosen (1 default, 1 first-ready)".to_string()),
         "{lines:?}"

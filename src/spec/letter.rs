@@ -59,6 +59,7 @@ pub(super) fn from_raw(
         length_unit,
         links,
         select: raw_select,
+        add: _,
     } = raw;
     let select = select(source, "letter.select", raw_select.map(Into::into))?;
     let written = {
@@ -92,7 +93,7 @@ pub(super) fn from_raw(
     }
     let Some(content) = content else {
         return MissingKeySnafu {
-            at: source.at(table_header(&source.text, "[letter")
+            at: source.at(table_header(source.text(), "[letter")
                 .or_else(|| written.map(|(offset, _)| offset))
                 .unwrap_or(0)),
             key: "letter.content",
@@ -143,7 +144,14 @@ pub(super) fn from_raw(
         }
         .fail();
     }
-    Ok((Some(LetterTable { content, settings }), select))
+    Ok((
+        Some(LetterTable {
+            content,
+            settings,
+            additions: Vec::new(),
+        }),
+        select,
+    ))
 }
 
 /// A value that is one of an enum's command-line spellings, as `--links` and the others take it.
@@ -174,19 +182,27 @@ pub struct ResolvedLetter {
     /// `letter.select` of every file of the chain, merged by the rules `select` follows.
     pub choices: SelectChoices,
     pub settings: LetterSettings,
+    pub(crate) additions: Vec<super::additions::LetterAddition>,
     company: Option<crate::model::Company>,
     title: Option<crate::model::Title>,
     origins: BTreeMap<ChoiceKey, Located>,
 }
 
 impl ResolvedLetter {
+    pub fn additions(&self) -> &[super::additions::LetterAddition] {
+        &self.additions
+    }
     pub(super) fn new(
         table: LetterTable,
         spec_dir: &std::path::Path,
         position: Option<&super::layer::Position>,
         (choices, origins): (SelectChoices, BTreeMap<ChoiceKey, Located>),
     ) -> Self {
-        let LetterTable { content, settings } = table;
+        let LetterTable {
+            content,
+            settings,
+            additions,
+        } = table;
         let (declared, at) = (content.value, content.at);
         Self {
             content: ContentRef {
@@ -196,10 +212,17 @@ impl ResolvedLetter {
             },
             choices,
             settings,
+            additions,
             company: position.and_then(|p| p.company.clone()),
             title: position.and_then(|p| p.title.clone()),
             origins,
         }
+    }
+
+    /// The letter's per-item overrides, to apply to the parsed letter before selecting from it.
+    #[must_use]
+    pub fn item_overrides(&self) -> super::items::ItemOverrides<'_> {
+        super::items::ItemOverrides::new(&self.choices.overrides, &self.origins)
     }
 
     /// The file and place that decided `key` of `letter.select`, if anything did.

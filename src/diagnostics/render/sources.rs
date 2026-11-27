@@ -6,8 +6,8 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use crate::diagnostics::Span;
 use crate::diagnostics::lines::{LineIndex, Location};
+use crate::diagnostics::{SourceText, Span};
 
 /// Source text by path, with a lazily built line index per file.
 ///
@@ -17,6 +17,22 @@ use crate::diagnostics::lines::{LineIndex, Location};
 pub struct Sources<'a> {
     base_dir: Option<PathBuf>,
     files: HashMap<PathBuf, SourceFile<'a>>,
+}
+
+/// Two report inputs used one path for different text.
+#[derive(Debug, snafu::Snafu)]
+#[snafu(display("conflicting report source texts for {}", path.display()))]
+pub struct SourceConflict {
+    pub path: PathBuf,
+}
+
+/// A source location ready for a human or JSON report; line and column are one-based.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourcePosition {
+    /// Display path (possibly relative and lossy), not a key for registering source text.
+    pub file: String,
+    pub line: usize,
+    pub column: usize,
 }
 
 #[derive(Debug)]
@@ -66,6 +82,37 @@ impl<'a> Sources<'a> {
                 index: OnceLock::new(),
             },
         );
+    }
+
+    /// Registers immutable report inputs without allowing one source to replace another's text.
+    pub fn insert_checked(&mut self, path: impl Into<PathBuf>, text: &'a str) -> Result<(), SourceConflict> {
+        let path = path.into();
+        if let Some(existing) = self.files.get(&path) {
+            if existing.text != text {
+                return Err(SourceConflict { path });
+            }
+            return Ok(());
+        }
+        self.insert(path, text);
+        Ok(())
+    }
+
+    /// Registers an immutable snapshot under the same identity its spans carry.
+    pub fn insert_text(&mut self, source: &'a SourceText) {
+        self.insert(source.path(), source.text());
+    }
+
+    /// Resolves a report location using the renderer's cached line index and snapping rules.
+    #[must_use]
+    pub fn position(&self, span: &Span) -> Option<SourcePosition> {
+        match self.resolve(Some(span)) {
+            Resolved::Located(found) => Some(SourcePosition {
+                file: found.name,
+                line: found.start.line,
+                column: found.start.column,
+            }),
+            Resolved::NoSpan | Resolved::Unlocated { .. } => None,
+        }
     }
 
     /// Snaps and locates a span, or says why it cannot be located.
@@ -139,6 +186,49 @@ mod tests {
             Resolved::Located(located) => located,
             other => panic!("expected a located span, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn public_positions_use_the_same_cached_index_and_snapping_as_excerpts() {
+        use claims::{assert_none, assert_some};
+        let snapshot = SourceText::new("position.toml".into(), SourceKind::Spec, "\u{feff}a\r\né中\rnext");
+        let mut sources = Sources::new(None);
+        sources.insert_text(&snapshot);
+        let span = Span {
+            file: snapshot.path().to_owned(),
+            kind: SourceKind::Spec,
+            range: 7..8,
+        };
+        let position = assert_some!(sources.position(&span));
+        assert_eq!(
+            position,
+            SourcePosition {
+                file: "position.toml".into(),
+                line: 2,
+                column: 1
+            }
+        );
+        let first = located(sources.resolve(Some(&span)));
+        assert_eq!((first.start.line, first.start.column), (position.line, position.column));
+        let second = located(sources.resolve(Some(&span)));
+        assert!(std::ptr::eq(first.index, second.index));
+        assert_none!(sources.position(&super::tests::span("missing.toml", 0..0)));
+        assert_none!(sources.position(&super::tests::span("position.toml", 100..101)));
+    }
+
+    #[test]
+    fn checked_registration_preserves_original_text_on_conflict() {
+        use claims::{assert_err, assert_ok, assert_some};
+        let mut sources = Sources::new(None);
+        assert_ok!(sources.insert_checked("same", "baseline\ntext"));
+        assert_ok!(sources.insert_checked("same", "baseline\ntext"));
+        assert_err!(sources.insert_checked("same", "x"));
+        assert_eq!(assert_some!(sources.position(&span("same", 9..13))).line, 2);
+        assert_err!(sources.insert_checked("same", "other text long enough"));
+        assert_eq!(
+            located(sources.resolve(Some(&span("same", 0..8)))).text,
+            "baseline\ntext"
+        );
     }
 
     #[test]

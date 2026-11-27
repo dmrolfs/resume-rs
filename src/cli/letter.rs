@@ -1,6 +1,6 @@
 //! ABOUTME: Explicit letter CLI settings, resolved defaults and text-mode usage checks.
 //! ABOUTME: Render options are syntax-checked but never applied by the text command.
-use crate::letter::{FieldValue, LengthUnit, LetterDate, LetterFields, LetterOutput, LinkStyle, TextLimit};
+use crate::letter::{FieldValue, LengthUnit, LetterDate, LetterOutput, LinkStyle};
 use crate::model::{
     StyleName,
     options::{FontsMode, OutputFormat, PageLimit, Paper},
@@ -73,26 +73,7 @@ pub struct LetterRenderArgs {
     pub font_path: Vec<PathBuf>,
 }
 
-pub struct LetterTextSettings {
-    pub fields: LetterFields,
-    pub links: LinkStyle,
-    pub limit: Option<TextLimit>,
-}
-
-impl LetterTextSettings {
-    /// The text settings of `choices`, whose defaults were applied after every layer.
-    #[must_use]
-    pub fn of(choices: &LetterChoices) -> Self {
-        Self {
-            fields: choices.fields(),
-            links: choices.links.value,
-            limit: choices.max_length.as_ref().map(|max| TextLimit {
-                max: max.value,
-                unit: choices.length_unit.value,
-            }),
-        }
-    }
-}
+pub use crate::spec::plan::LetterTextSettings;
 
 impl LetterArgs {
     /// The letter to read when it is given as a file: `None` only beside `--spec`, which names its own.
@@ -200,16 +181,24 @@ impl LetterArgs {
     /// What is rendered, with the choices' style and paper and the machine flags from the command line.
     #[must_use]
     pub fn render_for(&self, choices: &LetterChoices) -> super::RenderArgs {
+        let render = crate::spec::plan::letter_render(&self.machine_flags(), choices);
         super::RenderArgs {
-            style: choices.style.value.clone(),
+            style: render.style,
+            styles_dir: render.styles_dir,
+            paper: render.paper,
+            max_pages: render.max_pages,
+            fonts: render.fonts,
+            font_path: render.font_path,
+        }
+    }
+
+    /// The machine flags as typed, in the shared planner's terms.
+    #[must_use]
+    pub fn machine_flags(&self) -> crate::spec::plan::LetterMachineFlags {
+        crate::spec::plan::LetterMachineFlags {
             styles_dir: self.render.styles_dir.clone(),
-            paper: choices.paper.value,
-            max_pages: Some(
-                self.render
-                    .max_pages
-                    .unwrap_or_else(|| PageLimit::try_new(1).expect("one page is valid")),
-            ),
-            fonts: self.render.fonts.unwrap_or_default(),
+            max_pages: self.render.max_pages,
+            fonts: self.render.fonts,
             font_path: self.render.font_path.clone(),
         }
     }

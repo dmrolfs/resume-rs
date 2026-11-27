@@ -170,6 +170,16 @@ pub(super) fn order(spec: SpecLayer, source: &dyn ProfileSource) -> Result<Vec<L
     walk.visit(&spec.extends, 0)?;
     let mut layers = walk.layers;
     layers.push(spec);
+    let mut snapshots = BTreeMap::new();
+    for layer in &layers {
+        if let Some(previous) = snapshots.insert(layer.path(), layer.source().text())
+            && previous != layer.source().text()
+        {
+            return Err(SpecError::ConflictingSources {
+                path: layer.path().to_owned(),
+            });
+        }
+    }
     let constraints = Constraints::new(&layers, &walk.done);
     match constraints.sorted() {
         Some(sequence) => {
@@ -771,7 +781,7 @@ mod tests {
         let dir = dir_with(&["p.toml"]);
         let name = assert_ok!(ProfileName::try_new("p"));
         let layer = assert_ok!(DirSource::new(dir.path().to_path_buf()).find(&name, &here()));
-        assert_eq!(layer.path, dir.path().join("p.toml"));
+        assert_eq!(layer.path(), dir.path().join("p.toml"));
     }
 
     #[test]

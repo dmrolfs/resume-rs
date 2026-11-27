@@ -15,9 +15,10 @@ pub(crate) struct Outline {
     pub sections: Vec<SectionOutline>,
     /// The visible text of each variant of each valid alternate group, in document order.
     pub groups: Vec<Vec<Located>>,
-    /// Where each node of the model starts, as a byte offset, in the order [`crate::model::Resume::nodes`]
-    /// visits them, so a report about a node can name its line.
-    pub starts: Vec<usize>,
+    /// The source range of each node of the model, in the order [`crate::model::Resume::nodes`] visits them, so a
+    /// report about a node can name its line and a view can mark its text. A node's range is its own block: a
+    /// heading line, a paragraph, or a bullet's first paragraph, with any annotation comment written inside it.
+    pub ranges: Vec<Range<usize>>,
 }
 
 /// A kept `##` section.

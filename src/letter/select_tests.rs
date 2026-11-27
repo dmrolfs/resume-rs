@@ -201,7 +201,7 @@ fn exact_report_locations_and_frames_are_stable() {
     };
     let loc = |part, piece: &Piece| LetterRef {
         part,
-        range: piece.range.clone(),
+        origin: piece.origin.clone(),
     };
     assert_eq!(
         r.kept,
@@ -234,7 +234,7 @@ fn exact_report_locations_and_frames_are_stable() {
     assert!(r.unknown_picks.is_empty());
     assert_eq!(l.greeting, greeting.variants()[1].piece);
     for node in &r.kept {
-        assert!(!source[node.range.clone()].is_empty());
+        assert!(!source[node.origin.span().range].is_empty());
     }
 }
 
@@ -244,14 +244,14 @@ fn unavailable_frame_groups_and_error_precedence_are_explicit() {
     let group = s.body[0].clone();
     s.greeting = group.clone();
     s.body.clear();
-    let LetterSelectError::FrameNotReady { part, range } = assert_err!(select(&s, &Selection::default())) else {
+    let LetterSelectError::FrameNotReady { part, origin } = assert_err!(select(&s, &Selection::default())) else {
         panic!("frame error before empty body")
     };
     assert_eq!(part, LetterPart::Greeting);
     let SourceItem::Alternates(g) = &s.greeting else {
         panic!("group")
     };
-    assert_eq!(range, g.variants()[0].piece.range);
+    assert_eq!(origin, g.variants()[0].piece.origin);
     assert!(matches!(
         assert_err!(select(&s, &pick("short"))),
         LetterSelectError::PickedDraft { .. }

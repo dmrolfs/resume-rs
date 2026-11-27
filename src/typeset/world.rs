@@ -23,9 +23,9 @@ pub(crate) const RESUME_JSON: &str = "/resume.json";
 pub(crate) const LETTER_JSON: &str = "/letter.json";
 
 /// Entry and payload identity travel together; no caller can mix their document kinds.
-#[derive(Debug, Clone, Copy, strum::Display)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::Display)]
 #[strum(serialize_all = "kebab-case")]
-pub(crate) enum DocumentKind {
+pub enum DocumentKind {
     Resume,
     Letter,
 }
@@ -54,11 +54,17 @@ const PACKAGES_UNSUPPORTED: &str = "packages are not supported; copy the file in
 /// The UTF-8 byte order mark that Windows editors prepend; Typst's own CLI strips it.
 const UTF8_BOM: &[u8] = b"\xEF\xBB\xBF";
 
-/// Everything Typst may see while compiling one resume with one style.
+/// Everything Typst may see while compiling one resume or letter with one style.
+///
+/// This is the world the renderer compiles in, public so that a tool (the desktop app's code editor) asks Typst's
+/// IDE questions of the same file map the build uses: the style's files, the `/lib` they share, and the payload as
+/// `/resume.json` or `/letter.json`. A world is one request: build a new one when the style, the payload or the
+/// paper changes.
 ///
 /// Typst assumes a `World` answers the same question the same way for a whole compile, so each file
 /// is read from the style once and then served from memory.
-pub(crate) struct ResumeWorld {
+pub struct StyleWorld {
+    kind: DocumentKind,
     library: LazyHash<Library>,
     fonts: Arc<FontSet>,
     main: FileId,
@@ -71,12 +77,19 @@ pub(crate) struct ResumeWorld {
     sources: Mutex<HashMap<FileId, Source>>,
 }
 
-impl ResumeWorld {
-    pub(crate) fn new(style: StyleSource, fonts: Arc<FontSet>, resume_json: Vec<u8>, paper: Paper) -> Self {
+impl StyleWorld {
+    /// A world that compiles a resume: `resume_json` is what a style reads as `json("/resume.json")`, normally
+    /// from [`resume_json`](crate::typeset::resume_json).
+    #[must_use]
+    pub fn new(style: StyleSource, fonts: Arc<FontSet>, resume_json: Vec<u8>, paper: Paper) -> Self {
         Self::for_kind(DocumentKind::Resume, style, fonts, resume_json, paper)
     }
 
-    pub(crate) fn for_kind(
+    /// A world for `kind` of document; `payload` is its JSON, served as `/resume.json` or `/letter.json`.
+    ///
+    /// The payload is required even to ask IDE questions, because a style may evaluate it in an import.
+    #[must_use]
+    pub fn for_kind(
         kind: DocumentKind,
         style: StyleSource,
         fonts: Arc<FontSet>,
@@ -88,6 +101,7 @@ impl ResumeWorld {
             (Str::from("fonts"), Value::Array(installed_families(&fonts))),
         ]);
         Self {
+            kind,
             library: LazyHash::new(Library::builder().with_inputs(inputs).build()),
             fonts,
             main: project_file(kind.entry(&style)),
@@ -99,8 +113,20 @@ impl ResumeWorld {
         }
     }
 
+    /// Which document this world compiles.
+    #[must_use]
+    pub fn kind(&self) -> DocumentKind {
+        self.kind
+    }
+
+    /// The style this world reads its files from.
+    #[must_use]
+    pub fn style(&self) -> &StyleSource {
+        &self.style
+    }
+
     /// The path to show users for a file, or `None` for the in-memory resume and package files.
-    pub(crate) fn display_path(&self, id: FileId) -> Option<PathBuf> {
+    pub fn display_path(&self, id: FileId) -> Option<PathBuf> {
         (!reserved(id) && matches!(id.root(), VirtualRoot::Project)).then(|| self.style.display_path(id.vpath()))
     }
 
@@ -179,7 +205,7 @@ fn project_file(vpath: VirtualPath) -> FileId {
     RootedPath::new(VirtualRoot::Project, vpath).intern()
 }
 
-impl World for ResumeWorld {
+impl World for StyleWorld {
     fn library(&self) -> &LazyHash<Library> {
         &self.library
     }
@@ -235,8 +261,8 @@ mod tests {
         assert_ok!(StyleSource::directory(root, assert_ok!(StyleName::try_new(name))))
     }
 
-    fn world_of(style: StyleSource) -> ResumeWorld {
-        ResumeWorld::new(
+    fn world_of(style: StyleSource) -> StyleWorld {
+        StyleWorld::new(
             style,
             Arc::new(FontSet::bundled()),
             br#"{"name":"Ada"}"#.to_vec(),
@@ -244,7 +270,7 @@ mod tests {
         )
     }
 
-    fn world(root: &std::path::Path, name: &str) -> ResumeWorld {
+    fn world(root: &std::path::Path, name: &str) -> StyleWorld {
         world_of(style(root, name))
     }
 
@@ -253,7 +279,7 @@ mod tests {
     }
 
     /// A temporary styles directory whose style `s` has the given `style.typ` bytes.
-    fn temp_style(bytes: &[u8]) -> (tempfile::TempDir, ResumeWorld) {
+    fn temp_style(bytes: &[u8]) -> (tempfile::TempDir, StyleWorld) {
         let tmp = assert_ok!(tempfile::tempdir());
         assert_ok!(std::fs::create_dir(tmp.path().join("s")));
         assert_ok!(std::fs::write(tmp.path().join("s/style.typ"), bytes));
@@ -303,7 +329,7 @@ mod tests {
             (DocumentKind::Resume, RESUME_JSON, LETTER_JSON, "/s/style.typ"),
             (DocumentKind::Letter, LETTER_JSON, RESUME_JSON, "/s/letter.typ"),
         ] {
-            let world = ResumeWorld::for_kind(
+            let world = StyleWorld::for_kind(
                 kind,
                 style(tmp.path(), "s"),
                 Arc::new(FontSet::bundled()),

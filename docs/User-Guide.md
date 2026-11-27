@@ -715,14 +715,14 @@ The preview is a guide to the look and not to the page count: Typst's own tools 
 
 ### resume tags
 
-Lists what one resume's annotations offer: its tags, how often each keyword is used, and its groups of alternate wordings, with the line of each and which wordings are drafts. A position spec, or you at the command line, can only name what this lists. See [Annotations](#annotations).
+Lists what one resume's annotations offer: its tags, how often each keyword is used, the `&id` names a spec can change, and its groups of alternate wordings (a group is changed by its group name), with the line of each and which wordings are drafts. A position spec, or you at the command line, can only name what this lists. See [Annotations](#annotations).
 
 ```sh
 resume tags Resume.md
 resume tags Resume.md --format json
 ```
 
-A tag shows how many items carry it themselves, and how many more carry it because a section, role, or era above them does. With `--format json` it prints one JSON object, with `type` `inventory`, instead. A resume with format errors prints its findings and no list, and exits 1, because a partial list would suggest a name is not used.
+A tag shows how many items carry it themselves, and how many more carry it because a section, role, or era above them does. An `ids` section appears only when the resume has names, and lists each with its kind and line. With `--format json` it prints one JSON object, with `type` `inventory`, instead. A resume with format errors prints its findings and no list, and exits 1, because a partial list would suggest a name is not used.
 
 | Option | Values and default | What it does |
 |---|---|---|
@@ -751,7 +751,7 @@ One baseline resume can hold everything you might say, for every kind of job. An
 
 ### Syntax
 
-An annotation is an HTML comment whose first word starts with `@`, `#`, or `=` followed by a letter. Any other comment is an ordinary comment and is ignored.
+An annotation is an HTML comment whose first word starts with `@`, `#`, `=`, or `&` followed by a letter. Any other comment is an ordinary comment and is ignored.
 
 | Write | Meaning |
 |---|---|
@@ -761,8 +761,9 @@ An annotation is an HTML comment whose first word starts with `@`, `#`, or `=` f
 | `@verify` | Kept, and listed after each build until you remove the mark. |
 | `#tag` | A topic, such as `#ai` or `#platform`. Any number on one line; the same tag twice counts once. |
 | `=group.variant` | One wording of an item. Every group has a `default`. At most one per line. |
+| `&id` | A name for one item, so a position spec can change its tags or priority for one application. At most one per item. |
 
-Tag, group, and wording names are lowercase letters and digits, starting with a letter, with single hyphens between, and at most 40 characters. A misspelled keyword, such as `@cor`, is the error [`annotation-unknown-keyword`](#code-annotation-unknown-keyword):
+Tag, group, wording, and id names are lowercase letters and digits, starting with a letter, with single hyphens between, and at most 40 characters. A misspelled keyword, such as `@cor`, is the error [`annotation-unknown-keyword`](#code-annotation-unknown-keyword):
 
 ```markdown in-section expect=annotation-unknown-keyword
 ### Acme · Engineer · 2015 – 2017
@@ -803,6 +804,35 @@ Several wordings of one item sit next to each other, each marked with the same g
 ```
 
 A group without a `default` is [`alternate-missing-default`](#code-alternate-missing-default). The numbers in the wordings of one group should agree; [`alternate-facts-differ`](#code-alternate-facts-differ) warns when they do not.
+
+### Naming an item
+
+`&id` gives one item a name. A position spec uses the name to change that item's tags or priority for one application, so the baseline stays as it is for every other job. The name does not appear in the PDF and does not change what a build keeps.
+
+```markdown in-section expect=none
+### Acme · Engineer · 2015 – 2017
+
+- Led delivery of the LLM gateway for 20 teams. <!-- &gateway @extra #ai -->
+- Mentored 6 engineers through promotion in 2 years. <!-- #leadership -->
+```
+
+An id is unique in a document, and shares its names with the groups of alternate wordings, so an id cannot also be a group name. Two items with one id are [`item-id-reused`](#code-item-id-reused):
+
+```markdown in-section expect=item-id-reused
+### Acme · Engineer · 2015 – 2017
+
+- Led delivery of the LLM gateway for 20 teams. <!-- &gateway -->
+- Cut the gateway's cache cost by 30% in 2 quarters. <!-- &gateway -->
+```
+
+A wording in a group has no id of its own; the group name is its name. An `&id` on one is [`item-id-on-alternate`](#code-item-id-on-alternate):
+
+```markdown in-section expect=item-id-on-alternate
+### Acme · Engineer · 2015 – 2017
+
+- Led delivery of the LLM gateway for 20 teams. <!-- =gateway.default &gateway -->
+- Built the LLM gateway 20 teams use. <!-- =gateway.short -->
+```
 
 ### What a build keeps
 
@@ -849,7 +879,9 @@ ok out/Resume.pdf  pragmatic  2 pages  0 errors, 0 warnings  built in 90ms
 
 Routine choices are counted; what can surprise you is listed with its line. `core alone` is the page count of the `@core` content by itself, with the same style, paper, fonts, and wordings: it is what a `--core-only` build would print. A build of a file without annotations, with no options, prints none of these lines.
 
-With `--format json`, the same facts are one JSON object on standard output, with `type` `selection`, before the build's findings. Each item it names has its `line`.
+With `--format json`, the same facts are one JSON object on standard output, with `type` `selection`, before the build's findings.
+Each item it names has its source `file`, `line`, and `column`, including dropped, verify, and reordered items.
+The count field `baseline` means the prepared input to selection, before anything is dropped or reordered.
 
 To see what a file's annotations offer, use [`resume tags`](#resume-tags).
 
@@ -1027,6 +1059,7 @@ The files are applied from the least specific to the most specific: each profile
 - `tags` are a union of every file's tags.
 - `prefer` and `promote` list the most specific file's names first, then the names of less specific files that are not listed yet.
 - `pick`, `style`, `paper`, and `core-only` are decided by the most specific file that has one. A pick is decided for each group on its own.
+- An item override ([Changing one item for one application](#changing-one-item-for-one-application)) is decided for each item and each field on its own: the most specific file that writes an item's `tags` decides its tags, and the most specific file that writes its `priority` decides its priority. Tags are replaced, never added together.
 
 If the files cannot be put in one order, because a spec lists `["b", "base"]` while `b` extends `base`, the build stops and names both. A cycle is an error that prints the way round. The most you can nest is 8 levels and 32 profiles.
 
@@ -1060,6 +1093,35 @@ The spec lines come before anything else is said, so you see which spec and whic
 The PDF is named after the spec, not the baseline: `positions/acme.toml` builds `acme.pdf`, and that name is also the identity written into the PDF. Two specs over one baseline therefore write two files. Two specs with the same name in different directories would write the same file, and so would two names that differ only in capitals on macOS and Windows, so give each application its own file name.
 
 With `--format json`, a build writes one object with `type` `spec` on standard output, before the `selection` object and the findings. Every key is always there: `file`, `position` (the fields of `[position]`, each `null` when unset; `null` itself when the spec has no `[position]`), `chain` (the `name` and `file` of each link; the spec's `name` is `null`), `content`, `pdf` (the file written or, with `--dry-run`, the file that would be written; `null` when there is none), `style`, `paper`, `drafts`, `overrides`, `environment`, and `version`. Each override has the `flag`, the values it `set` (none for a switch), what it `replaced` (`null` when the spec chose nothing, else the `setting` and its `value` list), and `at`, where the spec chose it, one place for each file. The `selection` object also has `picks`, which is empty for a build of a file.
+
+### Changing one item for one application
+
+Sometimes one application needs one item to count differently, such as a bullet that is `@extra` in the baseline but central to this job. Do not edit the baseline, which every other application also reads. Give the item a name in the baseline with [`&id`](#naming-an-item), then say what changes in the spec or in a profile:
+
+```text
+[select.override.gateway]
+tags = ["ai", "platform"]
+priority = "core"
+
+[select.override.cache]
+tags = []
+priority = "none"
+```
+
+The name after `override.` is the item's `&id`, or the group name of a group of alternate wordings. An override can change only two things:
+
+| Key | What it does |
+|---|---|
+| `tags` | Replaces the item's own tags as a whole. `tags = []` removes them all. It does not change the tags `--tags` selects, and it does not change the tags the item inherits from its section, role, or era. |
+| `priority` | Sets the item's own priority to `core` or `extra`. `none` removes the item's own `@core` or `@extra`, so the item is judged by its tags alone. A role's blurb that has no priority of its own still takes its role's. |
+
+A table must write at least one of them; an empty one is an error. Nothing else about an item can change: not its text, its draft status, its order, or its name. Use `pick` and `prefer` to choose a wording, and `promote` to move items up. A group override applies to every wording of the group, so the wordings still agree.
+
+An item in a container follows the container's rules as before: a tag on a section, role, or era still applies to everything under it, and a priority on a container does not pass down. An item that is a draft stays out of the build whatever its priority.
+
+The cover letter has its own table, `[letter.select.override.<id>]`, for the body paragraphs of the letter. A name used in the resume and in the letter means two different items, one in each document. The greeting and closing are not items a spec can address.
+
+Naming an item that the baseline does not have is an error that names the line that wrote the override, and no PDF is made. The check runs before anything is selected, so a misspelled name is found even when the item it meant would have been left out. `--print-spec` prints the overrides, including `tags = []` and `priority = "none"`, and still does not read the baseline. `resume tags` lists the names a spec can use.
 
 ### Ordering with promote
 
@@ -1177,6 +1239,55 @@ Nothing from `[position]`, the profiles' names, or the tags reaches the PDF: the
 
 A spec can name any file you can read as its `content`, and the summary prints the resolved path before anything is read from it. Build only specs you wrote or have read.
 
+### Adding content for one application
+
+A final position spec can add content without changing either baseline file.
+Use `[[add]]` for a resume bullet, paragraph, or role blurb; use `[[letter.add]]` for a letter body paragraph.
+Profiles cannot contain either array, even an empty one.
+
+```toml additions
+[[add]]
+id = "application-result"
+kind = "bullet"
+place = { after = "gateway" }
+content = '**Delivery:** Shipped the migration to 12 teams.'
+tags = ["platform"]
+priority = "core"
+
+[[letter.add]]
+id = "application-fit"
+place = { at = "end" }
+content = 'My platform experience fits the {{title}} role at {{company}}.'
+```
+
+Every addition needs an `id` that is unique within its document, including baseline item and wording-group names.
+References always name the unchanged baseline, never another addition.
+An override cannot target an addition; edit its declaration directly.
+Before/after a wording group means before/after the whole group, even if selection later drops it.
+Additions at the same original gap keep their declaration order.
+
+Resume placement forms:
+
+- A bullet may go before/after a bullet or bullet group, or at the start/end of a section, role body, or era.
+- A paragraph may go before/after a paragraph or paragraph group, after a role blurb/group, or at the start/end of a section or role body.
+- A blurb uses `place = { parent = "role-id", at = "blurb" }` and requires an empty blurb slot.
+- Container boundaries use `place = { parent = "container-id", at = "start" }` or `at = "end"`.
+
+Letter placement accepts `before` or `after` a body item/group, or `at = "start"` / `at = "end"` of the body.
+Greeting and closing cannot be insertion targets.
+
+Content must be one nonempty Markdown leaf, without a list marker for bullets.
+The usual leading bold bullet label is supported.
+Headings, lists, images, raw HTML, reference definitions, and annotation comments are rejected.
+Put `tags`, `priority` (`core` or `extra`), and `status` (`draft` or `verify`) in the declaration instead.
+Omitted metadata follows normal selection rules; a draft addition stays excluded even when marked core.
+All fragments are checked when loading the spec, including drafts and the document not being built.
+
+The baseline plus decoded additions may total at most 1 MiB per document, with drafts included.
+The spec itself retains its existing 64 KiB limit.
+Diagnostics for additions point at their content literal in the spec; decoded Markdown positions appear as context, not automatic edits.
+`--print-spec` preserves authored content and array order without reading either baseline.
+
 ### Names a profile uses that the baseline does not
 
 A tag or wording written in the spec itself that the baseline does not use is a warning that names the line, as for the options: it is probably a misspelling. A profile is shared by baselines that use different tags and wordings, and a `prefer` list means "where a group has it", so a name only a profile writes is a note, not a warning. The note names the profile and the line. The two codes are [`unknown-tag`](#code-unknown-tag) and [`unknown-wording`](#code-unknown-wording).
@@ -1233,6 +1344,7 @@ How the Markdown is written. Every command that reads a resume reports these.
 | <a id="code-missing-contact"></a>`missing-contact` | warning | The name has no contact line. |
 | <a id="code-period-present-spelling"></a>`period-present-spelling` | warning | Write `Present` for an ongoing role. |
 | <a id="code-unsupported-markdown"></a>`unsupported-markdown` | error | This Markdown construct can't be represented. |
+| <a id="code-spec-fragment-shape"></a>`spec-fragment-shape` | error | Spec content must be one Markdown leaf. |
 | <a id="code-hard-break"></a>`hard-break` | warning | A hard line break is rendered as a space. |
 | <a id="code-text-too-long"></a>`text-too-long` | error | A heading or role part is too long. |
 | <a id="code-empty-heading"></a>`empty-heading` | error | A heading has no text. |
@@ -1240,7 +1352,7 @@ How the Markdown is written. Every command that reads a resume reports these.
 | <a id="code-heading-marker-spacing"></a>`heading-marker-spacing` | warning | A line starts with `#` but has no space after it, so it is text, not a heading. |
 | <a id="code-placeholder-unresolved"></a>`placeholder-unresolved` | error | A selected letter placeholder has no application field value. |
 | <a id="code-annotation-unknown-keyword"></a>`annotation-unknown-keyword` | error | An `@` word in an annotation is not one the tool knows. |
-| <a id="code-annotation-malformed"></a>`annotation-malformed` | error | An annotation token is not `@word`, `#tag`, or `=group.variant` with valid names. |
+| <a id="code-annotation-malformed"></a>`annotation-malformed` | error | An annotation token is not `@word`, `#tag`, `=group.variant`, or `&id` with valid names. |
 | <a id="code-annotation-conflict"></a>`annotation-conflict` | error | One annotation gives two priorities, two statuses, or two alternates. |
 | <a id="code-annotation-duplicate"></a>`annotation-duplicate` | error | An item has two annotations. |
 | <a id="code-annotation-without-target"></a>`annotation-without-target` | error | An annotation on its own line has nothing after it to annotate. |
@@ -1252,6 +1364,8 @@ How the Markdown is written. Every command that reads a resume reports these.
 | <a id="code-alternate-group-reused"></a>`alternate-group-reused` | error | Two separate groups of alternates use the same group name. |
 | <a id="code-alternate-variant-repeated"></a>`alternate-variant-repeated` | error | A group has two variants with the same name. |
 | <a id="code-alternate-priority-conflict"></a>`alternate-priority-conflict` | error | The variants of one group give different priorities. |
+| <a id="code-item-id-reused"></a>`item-id-reused` | error | Two items share one `&id`, or an `&id` is also a group name. |
+| <a id="code-item-id-on-alternate"></a>`item-id-on-alternate` | error | A variant of a group has an `&id`. |
 | <a id="code-letter-missing-section"></a>`letter-missing-section` | error | The letter needs Greeting, Body and Closing sections in that order. |
 | <a id="code-letter-unknown-section"></a>`letter-unknown-section` | error | The letter needs Greeting, Body and Closing sections in that order. |
 | <a id="code-letter-duplicate-section"></a>`letter-duplicate-section` | error | The letter needs Greeting, Body and Closing sections in that order. |

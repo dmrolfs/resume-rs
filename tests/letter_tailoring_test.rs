@@ -62,7 +62,7 @@ fn shared_flags_produce_exact_library_output_and_private_reports() {
         };
         let source = assert_some!(parse_letter(&path, SOURCE).into_parts().0);
         let (selected, _) = assert_ok!(letter::select(&source, &args.select.selection()));
-        let resolved = assert_ok!(letter::resolve(selected, &args.effective().fields, &path));
+        let resolved = assert_ok!(letter::resolve(selected, &args.effective().fields));
         let expected = letter::to_plain(&resolved, args.effective().links);
         let (outcome, stdout, stderr) = run(&cli, root.path());
         assert_eq!(outcome, Outcome::Success);

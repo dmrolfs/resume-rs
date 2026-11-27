@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 
+use super::raw_additions::{RawLetterAddition, RawResumeAddition};
 use serde::Deserialize;
 use toml::Spanned;
 use toml::value::Datetime;
@@ -18,6 +19,7 @@ pub(super) struct RawFile {
     pub build: Option<RawBuild>,
     pub select: Option<RawSelect>,
     pub letter: Option<RawLetter>,
+    pub add: Option<Spanned<Vec<RawResumeAddition>>>,
 }
 
 /// The `[position]` table. It is not wrapped in `Spanned`: a table written as `[position.emphasis]` or as
@@ -86,6 +88,18 @@ pub(super) struct RawSelect {
     /// The group is a plain `String`: a map key wrapped in `Spanned` has no readable path when its value is wrong.
     pub pick: Option<BTreeMap<String, Text>>,
     pub core_only: Option<Spanned<bool>>,
+    /// `[select.override.<id>]`. The id is a plain map key, as `pick`'s group is: a key in `Spanned` has no position.
+    #[serde(rename = "override")]
+    pub overrides: Option<BTreeMap<String, Spanned<RawOverride>>>,
+}
+
+/// One item's override: only its own tags and priority. Nothing else about an item can be changed from a spec.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub(super) struct RawOverride {
+    /// `Spanned` as a whole, so an empty list still has the place `tags =` was written.
+    pub tags: Option<Spanned<Vec<Text>>>,
+    pub priority: Option<Text>,
 }
 
 /// The `[letter]` table. Every key is optional here; which are allowed depends on the kind of file.
@@ -102,6 +116,7 @@ pub(super) struct RawLetter {
     pub length_unit: Option<Text>,
     pub links: Option<Text>,
     pub select: Option<RawLetterSelect>,
+    pub add: Option<Spanned<Vec<RawLetterAddition>>>,
 }
 
 /// `[letter.select]`: the resume's `[select]` without `promote`, because a letter keeps its written order.
@@ -112,6 +127,8 @@ pub(super) struct RawLetterSelect {
     pub prefer: Option<Vec<Text>>,
     pub pick: Option<BTreeMap<String, Text>>,
     pub core_only: Option<Spanned<bool>>,
+    #[serde(rename = "override")]
+    pub overrides: Option<BTreeMap<String, Spanned<RawOverride>>>,
 }
 
 impl From<RawLetterSelect> for RawSelect {
@@ -123,6 +140,7 @@ impl From<RawLetterSelect> for RawSelect {
             promote: None,
             pick: raw.pick,
             core_only: raw.core_only,
+            overrides: raw.overrides,
         }
     }
 }

@@ -11,13 +11,13 @@ use snafu::ResultExt;
 use super::error::{Located, MAX_FILE_BYTES, NotAFileSnafu, NotUtf8Snafu, ReadSnafu, SpecError, TooLargeSnafu, shown};
 use super::raw::RawFile;
 use crate::diagnostics::lines::LineIndex;
+use crate::diagnostics::{SourceKind, SourceText};
 
 /// A file's text with what is needed to turn a byte offset into `file:line:column`.
 #[derive(Debug)]
 pub(super) struct Source {
-    pub path: PathBuf,
+    snapshot: SourceText,
     shared_path: Arc<Path>,
-    pub text: String,
     lines: LineIndex,
 }
 
@@ -26,15 +26,22 @@ impl Source {
         let lines = LineIndex::new(&text);
         Self {
             shared_path: path.as_path().into(),
-            path,
-            text,
+            snapshot: SourceText::new(path, SourceKind::Spec, text),
             lines,
         }
     }
 
+    pub(super) fn snapshot(&self) -> &SourceText {
+        &self.snapshot
+    }
+
+    pub(super) fn text(&self) -> &str {
+        self.snapshot.text()
+    }
+
     /// The location of byte `offset`, as an editor would show it.
     pub(super) fn at(&self, offset: usize) -> Located {
-        let location = self.lines.location(&self.text, offset);
+        let location = self.lines.location(self.text(), offset);
         Located {
             path: Arc::clone(&self.shared_path),
             line: location.line,
@@ -83,12 +90,27 @@ pub(super) fn read_source_shown(open: &Path, path: &Path) -> Result<Source, Spec
     Ok(Source::new(path.to_path_buf(), text))
 }
 
+/// A spec or profile that is already in memory, shown as `path` in every error and location.
+///
+/// The file does not have to exist: the desktop app resolves text that is not saved yet. The size cap is the one a
+/// file read applies, so text a file would be refused for is refused here too.
+pub(super) fn text_source(path: &Path, text: &str) -> Result<Source, SpecError> {
+    if text.len() as u64 > MAX_FILE_BYTES {
+        return TooLargeSnafu {
+            path,
+            len: text.len() as u64,
+        }
+        .fail();
+    }
+    Ok(Source::new(path.to_path_buf(), text.to_string()))
+}
+
 /// The segment `Spanned` adds to a key path; it is not a key.
 const SPANNED_SEGMENT: &str = "$__serde_spanned_private_value";
 
 /// Parses `source` strictly: an unknown key, a wrong type, or bad syntax is a located error.
 pub(super) fn parse(source: &Source) -> Result<RawFile, SpecError> {
-    let deserializer = toml::Deserializer::new(&source.text);
+    let deserializer = toml::Deserializer::new(source.text());
     serde_path_to_error::deserialize::<_, RawFile>(deserializer).map_err(|e| classify(source, &e))
 }
 
@@ -402,7 +424,10 @@ mod tests {
                 suggestion, expected, ..
             } => {
                 assert_eq!(suggestion, None);
-                assert_eq!(expected.len(), 6);
+                assert_eq!(
+                    expected,
+                    ["groups", "tags", "prefer", "promote", "pick", "core-only", "override"]
+                );
             }
             other => panic!("{other:?}"),
         }

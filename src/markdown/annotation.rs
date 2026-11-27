@@ -6,7 +6,7 @@ use std::ops::Range;
 use std::str::FromStr;
 
 use crate::diagnostics::DiagnosticCode;
-use crate::model::{Alternate, Annotations, GroupName, Priority, Status, Tag, VariantName};
+use crate::model::{Alternate, Annotations, GroupName, ItemId, Priority, Status, Tag, VariantName};
 
 use super::tree::{BlockNode, InlineNode};
 use super::{Finding, Sink, Source};
@@ -20,7 +20,7 @@ fn body(comment: &str) -> Option<(usize, &str)> {
     (*only == (0..comment.len())).then_some((4, inner))
 }
 
-/// True when `comment` is one whole HTML comment whose first word is `@`, `#`, or `=` followed by a letter.
+/// True when `comment` is one whole HTML comment whose first word is `@`, `#`, `=`, or `&` followed by a letter.
 ///
 /// The one predicate both document parsers use: an annotation-shaped comment is never dropped as ordinary.
 /// The letter keeps a commented-out heading (`<!-- ## Hobbies -->`), a banner (`<!-- ===== -->`), and a note
@@ -30,7 +30,7 @@ pub(crate) fn is_annotation(comment: &str) -> bool {
         .and_then(|(_, inner)| inner.split_whitespace().next())
         .is_some_and(|first| {
             let mut chars = first.chars();
-            matches!(chars.next(), Some('@' | '#' | '=')) && chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+            matches!(chars.next(), Some('@' | '#' | '=' | '&')) && chars.next().is_some_and(|c| c.is_ascii_alphabetic())
         })
 }
 
@@ -394,6 +394,71 @@ pub(crate) struct GroupItem<T> {
     pub payload: T,
 }
 
+/// One annotated node of a document, as the name check sees it: what it declared and where.
+#[derive(Debug, Clone)]
+pub(crate) struct Named {
+    pub id: Option<ItemId>,
+    pub alternate: Option<GroupName>,
+    /// The annotation comment, where every finding about this node points.
+    pub range: Range<usize>,
+}
+
+/// Checks the one namespace of a document: every `&id` and every group name, in document order.
+///
+/// An id is the name a position spec addresses one item by, and a group name is the name it addresses a group by,
+/// so a name that is both, or an id used twice, would mean two things. A group name is reserved once, by its first
+/// variant; the group check owns a group name that comes back after other items. An id on a variant is refused,
+/// because the group name is already the variant's address.
+pub(crate) fn check_names(nodes: &[Named], src: &Source<'_>, sink: &mut Sink<'_>) {
+    let mut taken: HashMap<String, Range<usize>> = HashMap::new();
+    let mut groups: HashSet<String> = HashSet::new();
+    for node in nodes {
+        if let (Some(id), Some(_)) = (&node.id, &node.alternate) {
+            sink.report(
+                Finding::new(
+                    DiagnosticCode::ItemIdOnAlternate,
+                    node.range.clone(),
+                    format!("`&{id}` is on a variant of a group, which is addressed by its group name"),
+                )
+                .hint("remove the `&id`; a position spec addresses the whole group by its group name"),
+            );
+        }
+        if let Some(id) = &node.id
+            && node.alternate.is_none()
+        {
+            claim(&mut taken, id.as_ref(), node, src, sink);
+        }
+        if let Some(group) = &node.alternate {
+            // Later variants of one group repeat the name, and the group check owns a group split apart, so only the
+            // first variant claims it; a different kind of claim on the same name is the collision.
+            if !groups.contains(group.as_ref() as &str) {
+                claim(&mut taken, group.as_ref(), node, src, sink);
+                groups.insert(group.as_ref().to_string());
+            }
+        }
+    }
+}
+
+/// Records `name` as taken by `node`, or reports that it already was, pointing at the later declaration.
+fn claim(taken: &mut HashMap<String, Range<usize>>, name: &str, node: &Named, src: &Source<'_>, sink: &mut Sink<'_>) {
+    match taken.get(name) {
+        Some(earlier) => sink.report(
+            Finding::new(
+                DiagnosticCode::ItemIdReused,
+                node.range.clone(),
+                format!("the name `{name}` is already used by an item or a group in this document"),
+            )
+            .hint(format!(
+                "ids and group names share one set of names; the first is on line {}, so rename one",
+                src.line_of(earlier.start)
+            )),
+        ),
+        None => {
+            taken.insert(name.to_string(), node.range.clone());
+        }
+    }
+}
+
 /// The kinds of item a group can hold. A blurb and the paragraphs after it are one kind, because a blurb's other
 /// wordings are written as the paragraphs that follow it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, strum::Display)]
@@ -591,12 +656,14 @@ pub(crate) fn parse(comment: &str, at: usize, sink: &mut Sink<'_>) -> Annotation
             }
         } else if let Some(alternate) = word.strip_prefix('=') {
             alternate_token(alternate, range, &mut annotations, sink);
+        } else if let Some(name) = word.strip_prefix('&') {
+            id_token(name, range, &mut annotations, sink);
         } else {
             sink.report(
                 Finding::new(
                     DiagnosticCode::AnnotationMalformed,
                     range,
-                    format!("`{word}` is not an annotation; every word must start with `@`, `#`, or `=`"),
+                    format!("`{word}` is not an annotation; every word must start with `@`, `#`, `=`, or `&`"),
                 )
                 .hint("move notes into a separate comment that starts with a word"),
             );
@@ -649,6 +716,14 @@ fn alternate_token(text: &str, range: Range<usize>, annotations: &mut Annotation
         None => {
             sink.report(malformed(range, "alternate", text).hint("write `=group.variant`, such as `=gateway.short`"))
         }
+    }
+}
+
+/// An `&id` token: the name a position spec addresses the item by.
+fn id_token(name: &str, range: Range<usize>, annotations: &mut Annotations, sink: &mut Sink<'_>) {
+    match ItemId::try_new(name) {
+        Ok(id) => set_once(&mut annotations.id, Box::new(id), "id", range, sink),
+        Err(_) => sink.report(malformed(range, "id", name).hint("write `&name`, such as `&gateway`")),
     }
 }
 
@@ -789,6 +864,7 @@ mod tests {
                     group: assert_ok!(GroupName::try_new("gateway")),
                     variant: assert_ok!(VariantName::try_new("short")),
                 }),
+                id: None,
             }
         );
     }
