@@ -76,6 +76,7 @@ pub(super) struct DocumentPanel {
     pub(super) title: String,
     pub(super) document: Document,
     pub(super) discard_allowed: bool,
+    pub(super) content: super::content::ContentView,
     pub(super) editor: Entity<EditorState>,
     pub(super) highlight: Option<super::highlight::Highlight>,
 }
@@ -117,6 +118,7 @@ impl DocumentPanel {
                 title,
                 document,
                 discard_allowed: false,
+                content: super::content::ContentView::default(),
                 editor,
                 highlight,
             }
@@ -196,6 +198,19 @@ impl Render for DocumentPanel {
                     })),
             );
         }
-        view.child(Editor::new(&self.editor).readonly(true).bordered(false).h_full())
+        if self.content.spec {
+            let workspace = self.content.workspace.clone();
+            let key = self.key.clone();
+            view = view.child(
+                Button::new("use-spec")
+                    .label("Use saved spec")
+                    .on_click(move |_, w, cx| {
+                        if let (Some(workspace), FileKey::Disk(path)) = (&workspace, &key) {
+                            let _ = workspace.update(cx, |ws, cx| ws.activate_spec(Some(path.clone()), w, cx));
+                        }
+                    }),
+            );
+        }
+        view.child(self.content_view(cx))
     }
 }

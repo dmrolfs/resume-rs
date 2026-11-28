@@ -124,6 +124,7 @@ impl Workspace {
                 .update(cx, |area, cx| area.remove_panel(panel.clone(), window, cx));
         }
         self.docs.clear();
+        self.active_spec = None;
         self.index = FileIndex::default();
         self.files.update(cx, |p, cx| {
             p.rows.clear();
@@ -156,7 +157,7 @@ impl Workspace {
             self.rescan_pending = true;
             return;
         }
-        if self.generation != generation {
+        if self.generation != generation || self.rescan_pending {
             self.rescan_pending = false;
             self.rescan(window, cx);
             return;
@@ -197,13 +198,31 @@ impl Workspace {
         };
         let generation = self.generation;
         let restore = self.restore;
+        let active_spec = self.active_spec.clone();
         let watcher = self.watch.clone();
         let scan = cx.background_spawn(async move {
             let state = restore.then(|| {
                 let path = layout::path(&root)?;
                 Ok::<_, layout::LayoutError>((path.clone(), layout::load(&path)?))
             });
-            let mut index = FileIndex::scan(&root);
+            let mut index = FileIndex::scan_active(&root, active_spec.as_deref());
+            if let Some(watcher) = &watcher {
+                let targets = active_spec
+                    .as_ref()
+                    .and_then(|p| index.specs.get(p))
+                    .map(|s| {
+                        std::iter::once(s.content.path.clone())
+                            .chain(s.letter().map(|l| l.content.path.clone()))
+                            .map(|p| resume::spec::error::tidy_path(&p))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                for error in watcher.watch_content(targets) {
+                    index
+                        .problems
+                        .push(Problem::file(&root, snafu::Report::from_error(error).to_string()));
+                }
+            }
             if let Some(watcher) = watcher
                 && let Err(error) = watcher.refresh_dependencies()
             {
@@ -223,6 +242,7 @@ impl Workspace {
 
     pub(super) fn apply_index(&mut self, index: FileIndex, window: &mut Window, cx: &mut Context<'_, Self>) {
         self.prune_closed(cx);
+        let workspace = cx.entity().downgrade();
         for (key, panel) in &self.docs {
             let disk = index
                 .entries
@@ -230,10 +250,20 @@ impl Workspace {
                 .and_then(|e| e.text.clone())
                 .map_or(DiskState::Unavailable, DiskState::Text);
             panel.update(cx, |p, cx| {
+                if p.content.cursor_subscription.is_none() {
+                    p.observe_cursor(cx);
+                }
+                p.content.workspace = Some(workspace.clone());
+                p.content.spec = index.entries.get(key).is_some_and(|e| e.kind == FileKind::Specs);
                 p.document.observe(disk);
                 if p.document.has_conflict() {
                     p.discard_allowed = false;
                 }
+                p.content.set(if p.document.is_dirty() {
+                    None
+                } else {
+                    index.content.get(key).cloned()
+                });
                 p.sync(window, cx);
             });
         }
@@ -286,6 +316,27 @@ impl Workspace {
             }
         );
         self.index = index;
+        let targets: Vec<_> = self
+            .active_spec
+            .as_ref()
+            .and_then(|p| self.index.specs.get(p))
+            .map(|s| {
+                std::iter::once(s.content.path.clone())
+                    .chain(s.letter().map(|l| l.content.path.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if self.open_spec_targets && !targets.is_empty() {
+            self.open_spec_targets = false;
+            for path in targets {
+                self.open(
+                    FileKey::Disk(resume::spec::error::tidy_path(&path)),
+                    Location::File,
+                    window,
+                    cx,
+                );
+            }
+        }
         self.files.update(cx, |p, cx| {
             p.rows = files;
             cx.notify();

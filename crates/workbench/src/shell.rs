@@ -1,4 +1,7 @@
 //! Native window and dock; policy lives in app modules.
+mod content;
+#[cfg(test)]
+mod content_tests;
 mod highlight;
 #[cfg(test)]
 mod highlight_tests;
@@ -84,6 +87,8 @@ enum FolderError {
 pub struct Workspace {
     dock: Entity<DockArea>,
     index: FileIndex,
+    active_spec: Option<PathBuf>,
+    open_spec_targets: bool,
     root: Option<PathBuf>,
     docs: BTreeMap<FileKey, Entity<DocumentPanel>>,
     files: Entity<RowsPanel>,
@@ -133,6 +138,8 @@ impl Workspace {
         let workspace = cx.new(|cx| Self {
             dock,
             index: FileIndex::default(),
+            active_spec: None,
+            open_spec_targets: false,
             root: None,
             docs: BTreeMap::new(),
             files: files.clone(),
@@ -280,9 +287,16 @@ impl Workspace {
                     .into_owned(),
             };
             let panel = DocumentPanel::new(key.clone(), title, Document::new(text), window, cx);
+            let workspace = cx.entity().downgrade();
+            panel.update(cx, |p, _| {
+                p.content.workspace = Some(workspace);
+                p.content.spec = self.index.entries.get(&key).is_some_and(|e| e.kind == FileKind::Specs);
+                p.content.set(self.index.content.get(&key).cloned());
+            });
             self.dock.update(cx, |area, cx| {
                 area.add_panel_view(panel_handle(panel.clone()), DockPlacement::Center, None, window, cx)
             });
+            panel.update(cx, |p, cx| p.observe_cursor(cx));
             self.docs.insert(key.clone(), panel.clone());
             panel
         };
@@ -296,6 +310,9 @@ impl Workspace {
         }
         panel.update(cx, |p, cx| {
             let pos = location.position(p.document.text());
+            if let Some(offset) = location.offset(p.document.text()) {
+                p.content.follow_source(&p.key, offset);
+            }
             p.editor.update(cx, |e, cx| e.set_cursor_position(pos, window, cx));
             window.focus(&p.editor.focus_handle(cx), cx);
         });
@@ -327,6 +344,24 @@ impl Render for Workspace {
             .track_focus(&self.focus)
             .size_full()
             .text_color(cx.theme().foreground)
+            .children(self.active_spec.as_ref().map(|path| {
+                h_flex()
+                    .gap_2()
+                    .child(format!(
+                        "Active spec{}: {}",
+                        if self.index.specs.contains_key(path) {
+                            ""
+                        } else {
+                            " unavailable; see Problems"
+                        },
+                        path.display()
+                    ))
+                    .child(
+                        Button::new("clear-spec")
+                            .label("Clear spec")
+                            .on_click(cx.listener(|this, _, w, cx| this.activate_spec(None, w, cx))),
+                    )
+            }))
             .on_action(cx.listener(Self::choose_folder))
             .on_action(cx.listener(|this, _: &QuickOpen, w, cx| this.show_palette(true, w, cx)))
             .on_action(cx.listener(|this, _: &ShowCommands, w, cx| this.show_palette(false, w, cx)))

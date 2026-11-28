@@ -41,14 +41,22 @@ pub struct FileEntry {
 pub struct FileIndex {
     pub entries: BTreeMap<FileKey, FileEntry>,
     pub problems: Vec<Problem>,
+    pub specs: BTreeMap<PathBuf, Arc<spec::ResolvedSpec>>,
+    pub content: BTreeMap<FileKey, Arc<super::content::Content>>,
 }
 
 impl FileIndex {
     pub fn scan(root: &Path) -> Self {
+        Self::scan_active(root, None)
+    }
+
+    pub fn scan_active(root: &Path, active: Option<&Path>) -> Self {
         let mut index = Self::default();
         let mut remaining = 10_000;
         index.walk(root, root, 0, &mut remaining, &mut (32 * 1024 * 1024));
         index.resolve_specs();
+        index.load_targets(active);
+        index.assess_content(active);
         index.builtins();
         index
     }
@@ -150,7 +158,11 @@ impl FileIndex {
             };
             entry.problems =
                 match SpecLayer::from_text(path, text).and_then(|layer| spec::resolve_with(layer, &profiles)) {
-                    Ok(spec) => spec.content_warnings().map(|d| Problem::diagnostic(path, d)).collect(),
+                    Ok(spec) => {
+                        let problems = spec.content_warnings().map(|d| Problem::diagnostic(path, d)).collect();
+                        self.specs.insert(path.clone(), Arc::new(spec));
+                        problems
+                    }
                     Err(error) => Problem::spec(path, &error),
                 };
         }
@@ -177,6 +189,38 @@ impl FileIndex {
                 text: None,
                 problems,
             });
+        }
+    }
+
+    fn load_targets(&mut self, active: Option<&Path>) {
+        let Some(spec) = active.and_then(|p| self.specs.get(p)) else {
+            return;
+        };
+        let targets: Vec<_> = std::iter::once((&spec.content.path, FileKind::Resumes))
+            .chain(spec.letter().map(|l| (&l.content.path, FileKind::Letters)))
+            .map(|(path, kind)| (spec::error::tidy_path(path), kind))
+            .collect();
+        let mut bytes: usize = self
+            .entries
+            .values()
+            .filter_map(|e| e.text.as_ref())
+            .map(|t| t.len())
+            .sum();
+        for (path, kind) in targets {
+            let key = FileKey::Disk(path.clone());
+            if self.entries.contains_key(&key) {
+                continue;
+            }
+            let mut entry = classify_as(&path, kind);
+            bytes += entry.text.as_ref().map_or(0, |t| t.len());
+            if bytes > 32 * 1024 * 1024 {
+                entry.text = None;
+                entry.problems.push(Problem::file(
+                    &path,
+                    "Folder and dependency text exceed the 32 MiB display budget",
+                ));
+            }
+            self.entries.insert(key, entry);
         }
     }
 

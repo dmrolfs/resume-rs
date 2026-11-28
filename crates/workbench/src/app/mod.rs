@@ -1,4 +1,8 @@
 //! Window-independent workspace state.
+mod assessment;
+#[cfg(test)]
+mod assessment_tests;
+pub mod content;
 pub mod document;
 pub mod index;
 pub mod layout;

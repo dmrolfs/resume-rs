@@ -182,10 +182,21 @@ fn stale_scan_cannot_replace_new_folder_and_pending_refresh_is_scheduled(cx: &mu
             window,
             cx,
         );
+        assert!(ws.index.entries.is_empty());
+        assert!(ws.layout_path.is_none());
+        assert!(ws.scan.is_some());
+        assert!(ws.restore);
+        ws.scan = None;
+        ws.accept_scan(
+            2,
+            FileIndex::scan(b.path()),
+            Some(Ok((b.path().join("layout"), None))),
+            window,
+            cx,
+        );
         assert!(ws.index.entries.contains_key(&FileKey::Disk(b.path().join("b.md"))));
         assert!(!ws.index.entries.contains_key(&FileKey::Disk(a.path().join("a.md"))));
         assert_eq!(ws.layout_path.as_deref(), Some(b.path().join("layout").as_path()));
-        assert!(ws.scan.is_some());
         assert!(!ws.restore);
         ws.scan = None;
     })));
