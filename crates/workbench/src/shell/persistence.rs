@@ -71,6 +71,7 @@ impl Workspace {
             if !self.index.entries.contains_key(&key) {
                 let editor = cx.new(|cx| EditorState::new(window, cx));
                 let panel = cx.new(|_| DocumentPanel {
+                    content: content::ContentView::default(),
                     title: format!("{} (unavailable)", key_label(&key)),
                     key: key.clone(),
                     document: Document::unavailable(),
@@ -103,6 +104,7 @@ impl Workspace {
             }
             let editor = cx.new(|cx| EditorState::new(window, cx).default_value("File unavailable; see Problems"));
             panel_handle(cx.new(|_| DocumentPanel {
+                content: content::ContentView::default(),
                 title: "Unavailable document".into(),
                 key: key.unwrap_or_else(|| FileKey::Disk(PathBuf::new())),
                 document: Document::new("File unavailable; see Problems".into()),

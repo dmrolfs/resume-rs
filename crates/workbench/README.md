@@ -9,7 +9,7 @@ cargo run -p workbench --bin resume-workbench -- /path/to/job-folder
 Without a folder argument, choose **Open Folder**.
 The shell shows resumes, letters, specs, profiles and styles, including built-in styles.
 Document tabs are read-only.
-Building PDFs, tailoring controls and editing belong to later workbench tasks.
+Building PDFs and editing belong to later workbench tasks.
 
 ## Navigation
 
@@ -24,7 +24,23 @@ Building PDFs, tailoring controls and editing belong to later workbench tasks.
 
 Select a problem to open its source location.
 Markdown diagnostics retain their codes; spec and Typst syntax errors show their messages without invented codes.
-Spec validation includes profile resolution, not a PDF build or baseline selection validation.
+Spec validation includes profile resolution.
+Open a spec tab and choose Use saved spec to assess its saved resume and letter inputs without building a PDF.
+Clear spec returns to all authored items, including drafts and alternate wordings, with Unselected outcomes.
+
+## Content inspection
+
+Source + Items keeps the original read-only Markdown beside source-linked metadata cards.
+Cards show IDs, priority, status, own/inherited/group tags, alternate wordings, engine outcomes and promotions.
+Spec additions link to their TOML content literal, not an invented baseline line.
+All, Kept and Dropped filter the cards only; ancestor headings stay as labelled context.
+Dropped includes unchosen alternatives, which have a distinct Not chosen label.
+Previous item, Next item and Open source provide keyboard-focusable navigation through the virtualized list.
+
+Rendered shows the engine's selected resume or resolved letter when assessment succeeds.
+Without a spec it shows all authored content; it is not a PDF layout preview.
+Missing fields or failed selection disable selection filters and show Unavailable outcomes, never guessed decisions.
+Changes to saved inputs refresh the assessment; unsaved retained text never receives disk-based source links.
 
 ## Disk changes and layouts
 

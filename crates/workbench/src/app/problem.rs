@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Location {
     Bytes(Range<usize>),
     LineColumn { line: usize, column: usize },
@@ -16,25 +16,29 @@ pub enum Location {
 }
 
 impl Location {
-    pub fn position(&self, text: &str) -> lsp_types::Position {
+    pub fn offset(&self, text: &str) -> Option<usize> {
         let offset = match self {
             Self::Bytes(range) => range.start.min(text.len()),
             Self::LineColumn { line, column } => {
                 resume::diagnostics::SourceText::new(PathBuf::new(), resume::diagnostics::SourceKind::Spec, text)
                     .byte_offset(*line, *column)
             }
-            Self::File => 0,
+            Self::File => return None,
         };
-        let offset = text.floor_char_boundary(offset.min(text.len()));
+        Some(text.floor_char_boundary(offset.min(text.len())))
+    }
+
+    pub fn position(&self, text: &str) -> lsp_types::Position {
+        let offset = self.offset(text).unwrap_or(0);
         let prefix = &text[..offset];
         lsp_types::Position::new(
             prefix.bytes().filter(|b| *b == b'\n').count() as u32,
-            prefix.rsplit('\n').next().unwrap_or("").encode_utf16().count() as u32,
+            prefix.rsplit('\n').next().unwrap_or("").chars().count() as u32,
         )
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Problem {
     pub file: PathBuf,
     pub severity: Severity,
@@ -156,12 +160,12 @@ mod tests {
     use std::path::Path;
 
     #[test]
-    fn byte_and_character_locations_map_to_utf16_without_splitting_characters() {
+    fn byte_and_character_locations_map_to_editor_scalar_columns_without_splitting_characters() {
         let text = "first\r\né😀x\r\n";
-        assert_eq!(Location::Bytes(13..14).position(text), lsp_types::Position::new(1, 3));
+        assert_eq!(Location::Bytes(13..14).position(text), lsp_types::Position::new(1, 2));
         assert_eq!(
             Location::LineColumn { line: 2, column: 3 }.position(text),
-            lsp_types::Position::new(1, 3)
+            lsp_types::Position::new(1, 2)
         );
         assert_eq!(Location::Bytes(10..11).position(text), lsp_types::Position::new(1, 1));
     }

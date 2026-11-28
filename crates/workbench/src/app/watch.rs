@@ -33,11 +33,16 @@ pub struct FolderWatch {
     watcher: Arc<Mutex<RecommendedWatcher>>,
     profiles: Option<std::path::PathBuf>,
     pending: Arc<Mutex<Pending>>,
+    subscriptions: Arc<Mutex<std::collections::BTreeSet<std::path::PathBuf>>>,
+    root: std::path::PathBuf,
+    dependencies: Arc<Mutex<std::collections::BTreeSet<std::path::PathBuf>>>,
 }
 impl FolderWatch {
     pub fn new(path: &Path) -> Result<Self, WatchError> {
         let pending = Arc::new(Mutex::new(Pending::default()));
         let callback = pending.clone();
+        let dependencies = Arc::new(Mutex::new(std::collections::BTreeSet::<std::path::PathBuf>::new()));
+        let dependency_callback = dependencies.clone();
         let root = std::fs::canonicalize(path).context(ResolveSnafu { path })?;
         let profiles = root.parent().map(|parent| parent.join("profiles"));
         let profiles_callback = profiles.clone();
@@ -48,6 +53,11 @@ impl FolderWatch {
                     if (event.paths.is_empty()
                         || event.paths.iter().any(|p| {
                             relevant(&root, p)
+                                || dependency_callback
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner())
+                                    .iter()
+                                    .any(|d| d == p || d.starts_with(p))
                                 || profiles_callback.as_ref().is_some_and(|profiles| relevant(profiles, p))
                         }))
                         && matches!(
@@ -86,6 +96,9 @@ impl FolderWatch {
             watcher: Arc::new(Mutex::new(watcher)),
             profiles,
             pending,
+            dependencies,
+            subscriptions: Arc::default(),
+            root: std::fs::canonicalize(path).context(ResolveSnafu { path })?,
         })
     }
 
@@ -99,6 +112,57 @@ impl FolderWatch {
                 .context(FolderSnafu { path: profiles })?;
         }
         Ok(())
+    }
+
+    /// Watch parents too, so atomic replacement or a missing target becoming readable schedules a scan.
+    pub fn watch_content(&self, paths: impl IntoIterator<Item = std::path::PathBuf>) -> Vec<WatchError> {
+        let paths: std::collections::BTreeSet<_> = paths
+            .into_iter()
+            .map(|path| {
+                // Resolve the existing prefix while retaining missing components for creation events.
+                for ancestor in path.ancestors() {
+                    if let Ok(base) = std::fs::canonicalize(ancestor) {
+                        return base.join(path.strip_prefix(ancestor).expect("ancestor prefix"));
+                    }
+                }
+                path
+            })
+            .collect();
+        *self.dependencies.lock().unwrap_or_else(|e| e.into_inner()) = paths.clone();
+        let parents: std::collections::BTreeSet<_> = paths
+            .iter()
+            .filter_map(|p| p.ancestors().skip(1).find(|p| p.is_dir()))
+            .filter(|p| {
+                !p.starts_with(&self.root)
+                    && self.root.parent() != Some(*p)
+                    && !self.profiles.as_ref().is_some_and(|profiles| p.starts_with(profiles))
+            })
+            .map(Path::to_owned)
+            .collect();
+        let mut watcher = self.watcher.lock().unwrap_or_else(|e| e.into_inner());
+        let mut subscriptions = self.subscriptions.lock().unwrap_or_else(|e| e.into_inner());
+        let mut errors = Vec::new();
+        for parent in subscriptions.difference(&parents) {
+            if let Err(source) = watcher.unwatch(parent) {
+                errors.push(WatchError::Folder {
+                    path: parent.clone(),
+                    source,
+                });
+            }
+        }
+        subscriptions.retain(|p| parents.contains(p));
+        for parent in parents {
+            if subscriptions.contains(&parent) {
+                continue;
+            }
+            match watcher.watch(&parent, RecursiveMode::NonRecursive) {
+                Ok(()) => {
+                    subscriptions.insert(parent);
+                }
+                Err(source) => errors.push(WatchError::Folder { path: parent, source }),
+            }
+        }
+        errors
     }
 
     /// A complete bounded rescan handles rename pairs and missed/coalesced events alike.
@@ -121,6 +185,28 @@ fn relevant(root: &Path, path: &Path) -> bool {
 mod tests {
     use super::FolderWatch;
     use claims::assert_ok;
+    use pretty_assertions::assert_eq;
+    #[test]
+    fn external_content_aliases_and_replacements_are_watched_and_unsubscribed() {
+        let dir = assert_ok!(tempfile::tempdir());
+        let root = dir.path().join("positions");
+        let external = dir.path().join("content");
+        assert_ok!(std::fs::create_dir(&root));
+        assert_ok!(std::fs::create_dir(&external));
+        let target = external.join("r.md");
+        assert_ok!(std::fs::write(&target, "before"));
+        let watch = assert_ok!(FolderWatch::new(&root));
+        assert!(watch.watch_content([target.clone()]).is_empty());
+        watch.take();
+        assert_ok!(std::fs::write(external.join("replacement"), "after"));
+        assert_ok!(std::fs::rename(external.join("replacement"), &target));
+        wait_changed(&watch);
+        assert_eq!(assert_ok!(watch.subscriptions.lock()).len(), 1);
+        assert!(watch.watch_content([]).is_empty());
+        assert!(assert_ok!(watch.subscriptions.lock()).is_empty());
+        assert!(assert_ok!(watch.dependencies.lock()).is_empty());
+    }
+
     #[test]
     fn ignored_directories_do_not_schedule_scans() {
         let root = std::path::Path::new("job");
