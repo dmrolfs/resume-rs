@@ -190,6 +190,50 @@ Those checks prove reference integrity, not entailment, requirement coverage, or
 The report's citation union is not a shortlist: uncited evidence may still be relevant, and cited statements may overlap.
 Both extraction coverage and semantic judgments require human review before downstream tailoring.
 
+## Local-model evaluation against the frontier reference
+
+`model_compare.py` freezes an owner-approved, complete gateway run as a fixture, reruns the same clauses on another model, and compares the two.
+The frontier answers are a reference, not ground truth: an agreeing local answer is evidence, a disagreement needs reading.
+
+```sh
+python3 model_compare.py freeze /private/runs/approved-run /private/fixtures/name
+python3 model_compare.py run /private/fixtures/name --config /private/local.toml --out /private/runs/local-v1
+python3 model_compare.py compare /private/fixtures/name /private/runs/local-v1 --report /private/runs/local-v1/compare.json
+```
+
+`freeze` refuses a run that is incomplete or was not assessed from an approved clause file, and records a SHA-256 for every fixture file.
+`run` and `compare` refuse a fixture that was edited after freezing.
+A malformed or failed answer is recorded by category and the run continues, so one bad answer does not hide the others.
+`compare` reports exact support agreement, clauses where the candidate claims more (the serious case) or less than the reference, failures, and mean citation overlap.
+`compare` also lists answers that validation rejected but whose saved raw response claimed `direct` (`rejected_claiming_direct`), and on a probe fixture those that are overclaims on a negative, near-miss or trap.
+It reads only the support label from a rejected answer; nothing is repaired and the answer is not counted as valid.
+It does not check that the candidate's boundary text is correct; read those for the disagreements.
+Fixtures and runs must live outside this checkout.
+
+### Probe fixtures (false support)
+
+The frontier fixtures contain no not-established answers, so they cannot show a model inventing support.
+A probe fixture adds assistant-authored expectations in four categories:
+- `negative`: nothing related in the baseline; must be not-established.
+- `near-miss`: the key item is absent but related content exists; adjacent or not-established is acceptable, direct is the failure.
+- `trap`: wording that inflates real evidence; adjacent or not-established, never direct.
+- `control`: plainly supported; must be direct and cite the named wording.
+
+The engine's own definition of adjacent is relevant but incomplete support, so a near-miss answered adjacent is correct when its boundary text says the item is not established.
+Read the boundary of every adjacent answer on a near-miss: the label alone does not show whether the explanation claims the item.
+
+```sh
+python3 model_compare.py build-probe /private/probes-spec.json /private/Resume-Baseline.md /private/fixtures/probes-v1
+python3 model_compare.py run /private/fixtures/probes-v1 --config /private/local.toml --out /private/runs/probes-local-v1
+python3 model_compare.py compare /private/fixtures/probes-v1 /private/runs/probes-local-v1
+```
+
+`build-probe` refuses a negative or near-miss that has no `absent_terms`, or whose terms occur anywhere in the baseline, and refuses a control that cites an unknown wording ID.
+Compare reports false support on negatives, `direct` on near-misses and traps, controls not judged direct, and controls judged direct without citing the expected wording.
+The labels are not owner-reviewed and the frontier model has not been run against them.
+Run the frontier config on the probes once before relying on them: a probe the frontier also fails is a label to reread.
+Each probe sees the earlier probe texts as preceding context, the same way real clauses see earlier JD text.
+
 ## Tests
 
 ```sh
