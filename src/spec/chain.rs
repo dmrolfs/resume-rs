@@ -50,6 +50,8 @@ impl DirSource {
         let mut names: Vec<String> = std::fs::read_dir(&self.root)
             .into_iter()
             .flatten()
+            // Suggestions are optional; inspect a bounded directory prefix even for huge folders.
+            .take(1024)
             .flatten()
             .filter_map(|entry| {
                 let path = entry.path();
@@ -58,12 +60,29 @@ impl DirSource {
             })
             .collect();
         names.sort();
+        names.truncate(64);
         names
     }
 }
 
 impl ProfileSource for DirSource {
     fn find(&self, name: &ProfileName, at: &Located) -> Result<Layer, SpecError> {
+        self.find_with(name, at, |open, shown| Layer::load_shown(Kind::Profile, open, shown))
+    }
+}
+
+impl DirSource {
+    /// Finds and checks a profile, then delegates reading to a snapshot-aware caller.
+    /// The callback receives the checked canonical path and the diagnostic path.
+    ///
+    /// # Errors
+    /// The same containment, case and lookup errors as [`ProfileSource::find`], or the loader error.
+    pub fn find_with(
+        &self,
+        name: &ProfileName,
+        at: &Located,
+        load: impl FnOnce(&Path, &Path) -> Result<Layer, SpecError>,
+    ) -> Result<Layer, SpecError> {
         let path = self.root.join(format!("{name}.toml"));
         match std::fs::symlink_metadata(&path) {
             Ok(_) => {}
@@ -102,7 +121,7 @@ impl ProfileSource for DirSource {
             .fail();
         }
         // The file that was checked is the file that is read, so a link swapped in between cannot be followed.
-        Layer::load_shown(Kind::Profile, &file, &path)
+        load(&file, &path)
     }
 }
 
@@ -296,6 +315,14 @@ impl Constraints {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn missing_profile_suggestions_are_bounded() {
+        let dir = claims::assert_ok!(tempfile::tempdir());
+        for i in 0..100 {
+            claims::assert_ok!(std::fs::write(dir.path().join(format!("p{i}.toml")), ""));
+        }
+        assert_eq!(super::DirSource::new(dir.path().to_owned()).available().len(), 64);
+    }
     use super::*;
     use crate::spec::read::Source;
     use claims::{assert_err, assert_ok};

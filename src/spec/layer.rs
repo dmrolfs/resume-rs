@@ -178,6 +178,13 @@ impl SpecLayer {
 }
 
 impl Layer {
+    /// Validates a spec or profile snapshot without rereading the file.
+    ///
+    /// # Errors
+    /// The same size, syntax and validation errors as [`Self::load`].
+    pub fn from_text(kind: Kind, path: &Path, text: &str) -> Result<Self, SpecError> {
+        Self::from_source(kind, &text_source(path, text)?)
+    }
     pub fn letter(&self) -> Option<&LetterTable> {
         self.letter.as_ref()
     }

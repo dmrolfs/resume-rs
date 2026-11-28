@@ -102,6 +102,21 @@ impl SourceText {
         self.kind
     }
 
+    /// Converts a 1-based engine line and Unicode-scalar column into a byte offset.
+    /// Handles BOM and all line endings exactly as diagnostic rendering does.
+    #[must_use]
+    pub fn byte_offset(&self, line: usize, column: usize) -> usize {
+        let index = super::lines::LineIndex::new(self.text());
+        let Some(range) = index.content(line.saturating_sub(1)) else {
+            return self.text.len();
+        };
+        range.start
+            + self.text[range.clone()]
+                .char_indices()
+                .nth(column.saturating_sub(1))
+                .map_or(range.len(), |(offset, _)| offset)
+    }
+
     /// A span into this exact snapshot, or `None` for a reversed, out-of-bounds or split-character range.
     #[must_use]
     pub fn span(&self, range: Range<usize>) -> Option<Span> {
@@ -119,6 +134,16 @@ mod tests {
     use super::*;
     use claims::{assert_none, assert_some};
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn engine_coordinates_reverse_to_bytes_with_bom_and_mixed_endings() {
+        let source = SourceText::new("p.toml".into(), SourceKind::Spec, "\u{feff}é\r😀x\r\nlast");
+        assert_eq!(source.byte_offset(1, 1), 3);
+        assert_eq!(source.byte_offset(2, 2), 10);
+        assert_eq!(source.byte_offset(3, 2), 14);
+        assert_eq!(source.byte_offset(1, 999), 5);
+        assert_eq!(source.byte_offset(99, 1), source.text().len());
+    }
 
     #[test]
     fn spec_origins_require_a_spec_snapshot_and_use_whole_literal_spans() {

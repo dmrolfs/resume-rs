@@ -34,5 +34,19 @@ opener = "0.9"
 typst-ide = "=0.15.1"
 typst-syntax = "=0.15.1"
 anyhow = "1"
+notify = "8"
+tempfile = "3"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+dirs = "6"
+sha2 = "0.11"
+snafu = "0.9.2"
+strum = { version = "0.28.0", features = ["derive"] }
+pulldown-cmark = { version = "0.13.6", default-features = false }
 typst = "=0.15.1"
 typst-layout = "=0.15.1"
+
+[dev-dependencies]
+claims = "0.8.0"
+pretty_assertions = "1.4.1"
+gpui-kit = { version = "=0.11.0", features = ["test-support"] }
