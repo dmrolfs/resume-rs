@@ -225,6 +225,111 @@ fn has_command(recipe: &Value, words: &[&str]) -> bool {
         .any(|line| words.iter().all(|w| line.iter().any(|x| x == w)))
 }
 
+/// True when `line` runs all of `words` for exactly one package, `package`.
+///
+/// Two `--package` selectors in one cargo command merge the features of both packages, which is what the gate keeps
+/// apart; a command that names the right package among others must not satisfy the check. The short `-p` is
+/// refused too, so the one spelling the check reads is the only one in use.
+fn runs_alone_for(line: &[String], words: &[&str], package: &str) -> bool {
+    let selectors: Vec<&str> = line
+        .windows(2)
+        .filter(|pair| pair[0] == "--package")
+        .map(|pair| pair[1].as_str())
+        .collect();
+    let short = line
+        .iter()
+        .any(|w| w == "-p" || w.starts_with("-p=") || w.starts_with("--package="));
+    words.iter().all(|w| line.iter().any(|x| x == w)) && selectors == [package] && !short
+}
+
+#[test]
+fn a_command_counts_for_a_package_only_when_it_names_that_one_package() {
+    let line = |text: &str| text.split_whitespace().map(String::from).collect::<Vec<_>>();
+    let words = ["cargo", "test"];
+    assert!(runs_alone_for(
+        &line("cargo test --package advisor --no-fail-fast"),
+        &words,
+        "advisor"
+    ));
+    assert!(!runs_alone_for(&line("cargo test --package advisor"), &words, "resume"));
+    assert!(!runs_alone_for(
+        &line("cargo test --package resume --package advisor"),
+        &words,
+        "advisor"
+    ));
+    assert!(!runs_alone_for(
+        &line("cargo test --package resume --package advisor"),
+        &words,
+        "resume"
+    ));
+    assert!(!runs_alone_for(&line("cargo test -p advisor"), &words, "advisor"));
+    assert!(!runs_alone_for(
+        &line("cargo test --package=advisor"),
+        &words,
+        "advisor"
+    ));
+    assert!(!runs_alone_for(
+        &line("cargo check --package advisor"),
+        &words,
+        "advisor"
+    ));
+}
+
+/// `(name, manifest path relative to the workspace root, with `/`)` of each workspace member.
+fn workspace_manifests() -> Vec<(String, String)> {
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let output = Command::new(cargo)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .args(["metadata", "--no-deps", "--format-version", "1", "--locked"])
+        .output()
+        .expect("cargo runs");
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let metadata: Value = serde_json::from_slice(&output.stdout).expect("cargo metadata prints JSON");
+    let root = metadata["workspace_root"]
+        .as_str()
+        .expect("a workspace root")
+        .replace('\\', "/");
+    let mut found: Vec<(String, String)> = metadata["packages"]
+        .as_array()
+        .expect("packages is a list")
+        .iter()
+        .map(|p| {
+            let name = p["name"].as_str().expect("a package name").to_string();
+            let manifest = p["manifest_path"].as_str().expect("a manifest path").replace('\\', "/");
+            let relative = manifest
+                .strip_prefix(&format!("{root}/"))
+                .unwrap_or_else(|| panic!("{manifest} is not under {root}"))
+                .to_string();
+            (name, relative)
+        })
+        .collect();
+    found.sort();
+    found
+}
+
+/// The `check_floor <manifest> <package>` lines the msrv recipe must have, one for each member.
+fn missing_floor_checks(live_lines: &[&str], members: &[(String, String)]) -> Vec<String> {
+    members
+        .iter()
+        .map(|(name, manifest)| format!("check_floor {manifest} {name}"))
+        .filter(|wanted| !live_lines.iter().any(|l| l.trim() == wanted))
+        .collect()
+}
+
+#[test]
+fn a_member_with_no_floor_check_is_named() {
+    let members = vec![
+        ("advisor".to_string(), "crates/advisor/Cargo.toml".to_string()),
+        ("newcomer".to_string(), "crates/newcomer/Cargo.toml".to_string()),
+    ];
+    let live = ["check_floor crates/advisor/Cargo.toml advisor", "cargo test"];
+    assert_eq!(
+        missing_floor_checks(&live, &members),
+        ["check_floor crates/newcomer/Cargo.toml newcomer"]
+    );
+    assert!(missing_floor_checks(&live, &members[..1]).is_empty());
+}
+
 /// The names of the packages in this workspace, as `cargo metadata` reads them.
 fn workspace_package_names() -> Vec<String> {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
@@ -260,11 +365,8 @@ fn the_gate_runs_each_package_on_its_own() {
         let lines = command_lines(found);
         for package in workspace_package_names() {
             assert!(
-                lines.iter().any(|line| {
-                    words.iter().all(|w| line.iter().any(|x| x == w))
-                        && line.windows(2).any(|pair| pair[0] == "--package" && pair[1] == package)
-                }),
-                "`{recipe}` must run {words:?} with `--package {package}`: {lines:?}"
+                lines.iter().any(|line| runs_alone_for(line, words, &package)),
+                "`{recipe}` must run {words:?} with `--package {package}` and no other package: {lines:?}"
             );
         }
         assert!(
@@ -316,21 +418,19 @@ fn the_minimum_rust_check_runs_cargo_on_the_package_it_reads_the_floor_of() {
     // The justfile is the same text everywhere, so read that, and ignore comment lines.
     let text = std::fs::read_to_string(crate_path("justfile")).expect("the justfile is readable");
     let live: Vec<&str> = text.lines().filter(|l| !l.trim_start().starts_with('#')).collect();
-    let has = |needle: &str| live.iter().any(|l| l.trim() == needle);
+    let missing = missing_floor_checks(&live, &workspace_manifests());
     assert!(
-        has("check_floor Cargo.toml resume"),
-        "msrv must check resume at its floor"
-    );
-    assert!(
-        has("check_floor crates/workbench/Cargo.toml workbench"),
-        "msrv must check the app at its floor"
+        missing.is_empty(),
+        "msrv must check every package at its floor: {missing:?}"
     );
     let cargo_line = live
         .iter()
         .find(|l| l.contains("cargo +"))
         .expect("msrv runs a toolchain-pinned cargo");
     assert!(
-        cargo_line.contains("--package \"$package\""),
-        "the floor of one package must build that package: {cargo_line}"
+        cargo_line.contains("--package \"$package\"")
+            && cargo_line.contains("--locked")
+            && cargo_line.contains("--all-targets"),
+        "the floor of one package must build that package, locked, with every target: {cargo_line}"
     );
 }

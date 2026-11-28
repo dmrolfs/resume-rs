@@ -1080,6 +1080,17 @@ The repository is a Cargo workspace whose root is the `resume` package, so every
 - `resolver = "3"` makes cargo prefer dependency versions that build on each package's own Rust floor. Today it changes nothing; once the app has dependencies, a shared crate may resolve to a version that builds on 1.92.
 - The network check uses `--all-features`, so a network crate behind an optional feature of `resume` is found.
 
+### Advisor package (rsm-eam.5.2)
+
+The member `crates/advisor`, package `advisor`, binary `resume-advisor`, holds the resume advisor. It is a separate package so a model client can never link into `resume`: only `advisor` and `workbench` may depend on the HTTP and TLS stack.
+
+- It declares Rust 1.92 (the floor of `resume`, which it builds on) and `publish = false`. It has its own line in `just clippy`, `just test`, `just unused-deps` and `just msrv`; `tests/justfile_test.rs` fails when a member has none, and when one cargo command names two packages.
+- `tests/dependencies_test.rs` reads every locked version of each network crate from `Cargo.lock` and asks cargo for each as `name@version`. A bare name that is locked twice (for example `aes`) is an error in cargo, and the old check read every cargo failure as "not in the tree". Now only a name absent from the lock file reads as absent, and any failed query fails the test with cargo's own message. The result handling is a pure function, so the failure branches are tested without a fake cargo.
+- The denylist is the HTTP and TLS stack: `ureq`, `native-tls`, `openssl`, `openssl-sys`, `reqwest`, `hyper`, `hyper-util`, `rustls`, `rustls-webpki`, `webpki-roots`. `ring` is left out because it is general cryptography. A name in the list shows the stack is present; the list cannot show that no code opens a socket.
+- `only_the_advisor_and_the_app_may_depend_on_the_network_stack` fails when any other workspace member, present or added later, depends on a listed crate. `resume`'s own tree must hold no other member, and no `serde_json` row with `preserve_order`: the advisor needs that feature for byte-exact requests, and `resume`'s JSON key order must not change.
+- `Parsed::node_nested_in` gives each node the index of the bullet it is nested in. The parser flattens nested lists to one level, so the model alone cannot tell a child of a draft bullet from a ready bullet. The advisor leaves out a child, and a grandchild, of a `@draft` or `@verify` bullet.
+- Evidence policy `resume-evidence/v1`: grouped statements keep `group.variant` IDs; other citable statements and employment records get `src:<sha256 of the baseline bytes>:node:<index>`; section, era and role-description records are context with `ctx:` IDs and are never citable. The text is `model::plain_text`. The model-visible payload is built field by field and carries no byte offsets, line numbers, paths, contact line or excluded text.
+
 ### Engine API for the desktop app (rsm-yjj.3)
 
 The app uses four additions to the library instead of copying CLI logic. None changes CLI output.

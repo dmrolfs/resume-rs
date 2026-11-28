@@ -166,3 +166,111 @@ fn a_node_written_over_several_lines_is_covered_to_its_last_line() {
         assert_eq!(found[3].1, "Next", "{markdown:?}");
     }
 }
+
+// ---------------------------------------------------------------------------------------------------
+// `Parsed::node_nested_in`: the source parent of a nested bullet, which the flat model does not keep.
+// ---------------------------------------------------------------------------------------------------
+
+/// `(kind, text, parent's text)` for every node, with the parent named by the text of the node it points at.
+fn parents(markdown: &str) -> Vec<(String, String, Option<String>)> {
+    let parsed = parse("r.md", markdown);
+    let resume = assert_some!(parsed.best_effort());
+    let nodes = resume.nodes();
+    let ranges = parsed.node_ranges();
+    let nested = parsed.node_nested_in();
+    assert_eq!(nested.len(), nodes.len(), "one slot per node");
+    nodes
+        .iter()
+        .enumerate()
+        .map(|(i, node)| {
+            let own = markdown[ranges[i].clone()].to_string();
+            let parent = nested[i].map(|p| {
+                assert!(p < i, "a parent comes before its child: node {i} names {p}");
+                markdown[ranges[p].clone()].to_string()
+            });
+            (node.kind.to_string(), own, parent)
+        })
+        .collect()
+}
+
+fn nested_pairs(markdown: &str) -> Vec<(String, String)> {
+    parents(markdown)
+        .into_iter()
+        .filter_map(|(_, own, parent)| parent.map(|p| (own, p)))
+        .collect()
+}
+
+fn pairs(items: &[(&str, &str)]) -> Vec<(String, String)> {
+    owned(items)
+}
+
+#[test]
+fn a_nested_bullet_names_the_bullet_it_is_nested_in() {
+    let markdown = format!("{HEAD}## S\n\n- Parent\n  - Child\n    - Grandchild\n  - Second child\n- Sibling\n");
+    assert_eq!(
+        nested_pairs(&markdown),
+        pairs(&[("Child", "Parent"), ("Grandchild", "Child"), ("Second child", "Parent"),])
+    );
+}
+
+#[test]
+fn nesting_inside_a_role_and_an_era_is_found_too() {
+    let markdown = format!(
+        "{HEAD}## Experience\n\n### Acme · Engineer · 2015 – 2020\n\n- R1\n  - R1 detail\n\n**AI · 2016 – 2017**\n\n- E1\n  - E1 detail\n"
+    );
+    assert_eq!(
+        nested_pairs(&markdown),
+        pairs(&[("R1 detail", "R1"), ("E1 detail", "E1")])
+    );
+}
+
+#[test]
+fn only_nested_bullets_have_a_parent() {
+    let markdown = format!("{HEAD}{EVERY_KIND}");
+    let all = parents(&markdown);
+    let with_parent: Vec<_> = all.iter().filter(|(_, _, p)| p.is_some()).collect();
+    assert_eq!(with_parent.len(), 1, "{all:?}");
+    assert_eq!(
+        (
+            with_parent[0].0.as_str(),
+            with_parent[0].1.as_str(),
+            with_parent[0].2.as_deref()
+        ),
+        ("bullet", "Nested one", Some("R1"))
+    );
+}
+
+#[test]
+fn a_nested_bullet_keeps_its_parent_when_the_parent_is_a_draft() {
+    let markdown = format!("{HEAD}## S\n\n- Parent <!-- @draft -->\n  - Child\n- Sibling\n");
+    assert_eq!(nested_pairs(&markdown), pairs(&[("Child", "Parent <!-- @draft -->")]));
+}
+
+#[test]
+fn nesting_survives_crlf_and_a_byte_order_mark() {
+    let lf = format!("{HEAD}## S\n\n- Parent\n  - Child\n");
+    for text in [lf.replace('\n', "\r\n"), format!("\u{feff}{lf}")] {
+        let found = nested_pairs(&text);
+        assert_eq!(found.len(), 1, "{text:?}");
+        assert_eq!((found[0].0.as_str(), found[0].1.as_str()), ("Child", "Parent"));
+    }
+}
+
+#[test]
+fn a_text_without_a_model_has_no_nesting() {
+    assert!(parse("r.md", "no name heading here\n").node_nested_in().is_empty());
+}
+
+#[test]
+fn a_bullet_with_nothing_to_show_passes_its_parent_down_to_its_children() {
+    // The middle bullet shows nothing (an image only), so it is no node. `C` must still be tied to `A`, or a draft
+    // `A` would not reach it.
+    let markdown = format!("{HEAD}## S\n\n- A <!-- @draft -->\n  - ![](x.png)\n    - C\n- S\n");
+    assert_eq!(nested_pairs(&markdown), pairs(&[("C", "A <!-- @draft -->")]));
+}
+
+#[test]
+fn a_bullet_with_nothing_to_show_at_the_top_leaves_its_children_unparented() {
+    let markdown = format!("{HEAD}## S\n\n-\n  - C\n- S\n");
+    assert_eq!(nested_pairs(&markdown), pairs(&[]));
+}

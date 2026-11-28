@@ -113,6 +113,38 @@ impl Parsed {
         self.outline.as_ref().map_or(&[], |outline| outline.ranges.as_slice())
     }
 
+    /// For each node of the model, in [`Resume::nodes`] order, the index of the bullet it is nested in, or `None` for
+    /// everything that is not a nested bullet; empty without a model.
+    ///
+    /// The model flattens nested bullets to one level, so a child shows no sign of its parent. This keeps the link,
+    /// for a reader that must treat a child as part of what its parent says (for example, to leave out a child of a
+    /// draft bullet). A parent always comes before its child. A bullet that shows nothing is no node, so a child of
+    /// one is tied to the nearest bullet above it that is a node, and to `None` when there is none.
+    #[must_use]
+    pub fn node_nested_in(&self) -> Vec<Option<usize>> {
+        let Some(outline) = self.outline.as_ref() else {
+            return Vec::new();
+        };
+        let node_at: std::collections::HashMap<usize, usize> = outline
+            .ranges
+            .iter()
+            .enumerate()
+            .rev()
+            .map(|(index, range)| (range.start, index))
+            .collect();
+        let mut nested = vec![None; outline.ranges.len()];
+        let bullets = outline
+            .sections
+            .iter()
+            .flat_map(|s| s.bullets.iter().chain(s.roles.iter().flat_map(|r| &r.bullets)));
+        for bullet in bullets {
+            if let (Some(&child), Some(parent)) = (node_at.get(&bullet.item.start), bullet.kept_in) {
+                nested[child] = node_at.get(&parent).copied();
+            }
+        }
+        nested
+    }
+
     /// The model, only when there is no error-severity diagnostic.
     #[must_use]
     pub fn valid(&self) -> Option<&Resume> {

@@ -352,7 +352,7 @@ jobs:
               Windows-LF="pdf-cli/windows/out-lf/$file" Windows-CRLF="pdf-cli/windows/out-crlf/$file"
           done
 
-  # Each package keeps its own minimum Rust version: the CLI at 1.92, the desktop app at 1.98 (gpui-pre-macos needs it).
+  # Each package keeps its own minimum Rust version: the CLI and the advisor at 1.92, the desktop app at 1.98 (gpui-pre-macos needs it).
   # `just check` runs on the newest stable and cannot see a use of a newer feature, so this builds each at its floor.
   msrv:
     name: minimum Rust versions
@@ -447,7 +447,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # By name, not by position: the workspace also holds the desktop app, which is listed first.
+          # By name, not by position: the workspace also holds other members, and one of them is listed first.
           version="$(cargo metadata --no-deps --format-version 1 --locked | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "resume"))')"
           if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
             echo "::error::the tag ${GITHUB_REF_NAME} is not v${version}, the version in Cargo.toml"; exit 1

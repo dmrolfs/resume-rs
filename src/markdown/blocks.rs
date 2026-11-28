@@ -682,7 +682,7 @@ impl SectionBuilder {
     fn list(&mut self, list: &ListNode, above: Option<Marked>, continues: bool, src: &Source<'_>, sink: &mut Sink<'_>) {
         let mut items = Vec::new();
         let mut located = Vec::new();
-        bullets(list, above, None, src, sink, &mut items, &mut located);
+        bullets(list, above, Above::default(), src, sink, &mut items, &mut located);
         if items.is_empty() {
             return;
         }
@@ -860,12 +860,21 @@ impl RoleBuilder {
 // Bullets
 // ---------------------------------------------------------------------------------------------
 
+/// Where a list sits inside a bullet: both links `BulletOutline` records, for a list that is nested.
+#[derive(Debug, Clone, Copy, Default)]
+struct Above {
+    /// Where the enclosing bullet starts, as the container of alternates.
+    nested_in: Option<usize>,
+    /// Where the nearest enclosing bullet that is kept starts.
+    kept_in: Option<usize>,
+}
+
 /// Converts a list into bullets, flattening nested lists depth-first after their parent.
 /// `above` is the full-line annotation over the list, which marks its first bullet.
 fn bullets(
     list: &ListNode,
     above: Option<Marked>,
-    nested_in: Option<usize>,
+    enclosing: Above,
     src: &Source<'_>,
     sink: &mut Sink<'_>,
     out: &mut Vec<Bullet>,
@@ -882,14 +891,14 @@ fn bullets(
     }
     let mut above = above;
     for item in &list.items {
-        bullet(item, above.take(), nested_in, src, sink, out, located);
+        bullet(item, above.take(), enclosing, src, sink, out, located);
     }
 }
 
 fn bullet(
     item: &ItemNode,
     above: Option<Marked>,
-    nested_in: Option<usize>,
+    enclosing: Above,
     src: &Source<'_>,
     sink: &mut Sink<'_>,
     out: &mut Vec<Bullet>,
@@ -922,8 +931,11 @@ fn bullet(
         }
     }
     let parent = paragraphs.first().map_or(0, |p| p.range.start);
+    let mut kept_parent = enclosing.kept_in;
     if let Some((bullet, mut outline)) = bullet_from(&paragraphs, above, src, sink) {
-        outline.nested_in = nested_in;
+        outline.nested_in = enclosing.nested_in;
+        outline.kept_in = enclosing.kept_in;
+        kept_parent = Some(outline.item.start);
         out.push(bullet);
         located.push(outline);
     }
@@ -932,7 +944,11 @@ fn bullet(
         lint::nested_list(list, sink);
     }
     for (list, marked) in nested {
-        bullets(list, marked, Some(parent), src, sink, out, located);
+        let inside = Above {
+            nested_in: Some(parent),
+            kept_in: kept_parent,
+        };
+        bullets(list, marked, inside, src, sink, out, located);
     }
 }
 
@@ -1000,6 +1016,7 @@ fn bullet_from(
     }
     let outline = BulletOutline {
         nested_in: None,
+        kept_in: None,
         annotation: marked.as_ref().map(|m| m.range.clone()),
         item: first.range.clone(),
         // The model drops a label that is empty after its colon is stripped; the outline must agree.

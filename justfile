@@ -42,12 +42,14 @@ fmt-fix:
 clippy:
     cargo clippy --package resume --all-targets -- -D warnings
     cargo clippy --package workbench --all-targets -- -D warnings
+    cargo clippy --package advisor --all-targets -- -D warnings
 
 [doc('Run the tests of each package on its own, continuing past failures within a package')]
 [group('gate')]
 test:
     cargo test --package resume --no-fail-fast
     cargo test --package workbench --no-fail-fast
+    cargo test --package advisor --no-fail-fast
 
 # Needs cargo-machete (cargo install cargo-machete --locked --version 0.9.2, the version CI pins). Two checks.
 # First, cargo's `unused_dependencies` lint on the library and binary alone: clippy's all-targets run compiles the
@@ -60,6 +62,7 @@ test:
 unused-deps:
     cargo check --package resume --lib --bins
     cargo check --package workbench --bins
+    cargo check --package advisor --lib --bins
     cargo machete --with-metadata
 
 [doc('The quality gate: formatting, lints, unused dependencies, and tests')]
@@ -164,7 +167,7 @@ coverage *args: (_need 'cargo-llvm-cov' 'cargo install cargo-llvm-cov --locked')
 mutants *args: (_need 'cargo-mutants' 'cargo install cargo-mutants --locked')
     cargo mutants {{ args }}
 
-[doc('Check each package with its own minimum Rust version: resume (Cargo.toml) and the app (crates/workbench/Cargo.toml)')]
+[doc('Check each package with its own minimum Rust version: resume (Cargo.toml), the app and the advisor (crates/*/Cargo.toml)')]
 [group('verify')]
 [unix]
 msrv:
@@ -182,6 +185,7 @@ msrv:
     }
     check_floor Cargo.toml resume
     check_floor crates/workbench/Cargo.toml workbench
+    check_floor crates/advisor/Cargo.toml advisor
 
 [doc('Everything to run before pushing: CI leg, docs, lint, and both cross-builds (macOS)')]
 [group('verify')]

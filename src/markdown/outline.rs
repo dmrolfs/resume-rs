@@ -61,6 +61,10 @@ pub(crate) struct BulletOutline {
     pub annotation: Option<Range<usize>>,
     /// Where the parent bullet starts, for a nested bullet; it names the parent as a container of alternates.
     pub nested_in: Option<usize>,
+    /// Where the nearest kept bullet above this one starts. A bullet that shows nothing is no node, so its children
+    /// pass its own parent on; `nested_in` still names the dropped bullet, because that is the container of
+    /// alternates.
+    pub kept_in: Option<usize>,
 }
 
 /// Visible text with a map back to the source.
