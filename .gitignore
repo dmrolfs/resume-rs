@@ -42,3 +42,4 @@ rustc-ice-*.txt
 _gsdata_/
 # Local Dolt server settings for beads; machine-specific.
 .beads/dolt-server-config.yaml
+sessions
