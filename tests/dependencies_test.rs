@@ -294,10 +294,12 @@ fn the_resume_tree_holds_no_other_workspace_member() {
 }
 
 /// The app turns on `serde_json/preserve_order` through GPUI, which reorders the CLI's JSON keys. The advisor needs
-/// it for byte-exact requests. Each is its own package, and the shipped `resume` must not get it: its own tree is
-/// checked, never the workspace's.
+/// it for byte-exact requests, and `raw_value` to keep provider JSON as written. `raw_value` changes how a plain
+/// `serde_json::Value` reads an object whose first key is `$serde_json::private::RawValue`, and `arbitrary_precision`
+/// does the same for `$serde_json::private::Number`. Each is its own package, and the shipped `resume` must not get
+/// them: its own tree is checked, never the workspace's.
 #[test]
-fn serde_json_in_the_resume_tree_does_not_keep_object_order() {
+fn serde_json_in_the_resume_tree_keeps_neither_object_order_nor_raw_values() {
     let tree = cargo_output(&[
         "tree",
         "--package",
@@ -316,7 +318,39 @@ fn serde_json_in_the_resume_tree_does_not_keep_object_order() {
     let rows: Vec<&str> = tree.lines().filter(|l| l.starts_with("serde_json ")).collect();
     assert!(!rows.is_empty(), "the tree must list serde_json:\n{tree}");
     for row in rows {
-        assert!(!features_of(row).contains(&"preserve_order"), "{row}");
+        for feature in ["preserve_order", "raw_value", "arbitrary_precision"] {
+            assert!(!features_of(row).contains(&feature), "{feature}: {row}");
+        }
+    }
+}
+
+/// The advisor reads artifacts with `raw_value` so provider JSON is kept as written. `arbitrary_precision` would turn
+/// every number into a pseudo-object that `contract::decode` is not built for, so the advisor's own tree must have the
+/// first and not the second.
+#[test]
+fn serde_json_in_the_advisor_tree_keeps_raw_values_and_not_arbitrary_precision() {
+    let tree = cargo_output(&[
+        "tree",
+        "--package",
+        "advisor",
+        "--edges",
+        "normal,build",
+        "--target",
+        "all",
+        "--prefix",
+        "none",
+        "--format",
+        "{p}|{f}",
+        "--locked",
+    ]);
+    let rows: Vec<&str> = tree.lines().filter(|l| l.starts_with("serde_json ")).collect();
+    assert!(!rows.is_empty(), "the tree must list serde_json:\n{tree}");
+    assert!(
+        rows.iter().any(|row| features_of(row).contains(&"raw_value")),
+        "{rows:?}"
+    );
+    for row in rows {
+        assert!(!features_of(row).contains(&"arbitrary_precision"), "{row}");
     }
 }
 
@@ -334,6 +368,9 @@ fn a_feature_row_is_read_whole_with_cargos_repeat_marker_removed() {
         ["default", "preserve_order"]
     );
     assert!(!features_of("serde_json v1.0.154|std,preserve_orderly").contains(&"preserve_order"));
+    assert!(features_of("serde_json v1.0.154|std,raw_value").contains(&"raw_value"));
+    assert!(features_of("serde_json v1.0.154|std,arbitrary_precision (*)").contains(&"arbitrary_precision"));
+    assert!(!features_of("serde_json v1.0.154|std,arbitrary_precisions").contains(&"arbitrary_precision"));
 }
 
 /// The gate runs each package alone, so this no longer protects `just check`. It still protects `cargo test --workspace`
