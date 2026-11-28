@@ -26,6 +26,16 @@ Select a problem to open its source location.
 Markdown diagnostics retain their codes; spec and Typst syntax errors show their messages without invented codes.
 Spec validation includes profile resolution, not a PDF build or baseline selection validation.
 
+## Styles
+
+Typst files use Typst's own syntax colours, refreshed when the file reloads or the app theme changes.
+Built-in styles and their shared `lib/` files appear alongside style files under the opened folder.
+Directory styles outside that folder are not discovered.
+All style tabs remain read-only; definition jumps, hover and editing are separate workbench tasks.
+Only Typst tabs disable line wrapping; Markdown and TOML retain wrapping.
+A `README.md` beside `style.typ` is shown as style documentation, not validated as a resume.
+Skipped directory symlinks are reported without following them into the file list.
+
 ## Disk changes and layouts
 
 Clean documents reload after disk changes.

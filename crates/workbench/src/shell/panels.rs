@@ -77,8 +77,53 @@ pub(super) struct DocumentPanel {
     pub(super) document: Document,
     pub(super) discard_allowed: bool,
     pub(super) editor: Entity<EditorState>,
+    pub(super) highlight: Option<super::highlight::Highlight>,
 }
 impl DocumentPanel {
+    pub(super) fn new(
+        key: FileKey,
+        title: String,
+        document: Document,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Entity<Self> {
+        let path = match &key {
+            FileKey::Disk(path) | FileKey::Builtin(path) => path,
+        };
+        let extension = path
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let language = match extension.as_str() {
+            "md" => "markdown",
+            "toml" => "toml",
+            _ => "text",
+        };
+        let editor = cx.new(|cx| {
+            EditorState::new(window, cx)
+                .language(language)
+                .line_number(true)
+                .soft_wrap(extension != "typ")
+                .default_value(document.text().to_owned())
+        });
+        let panel = cx.new(|cx| {
+            let highlight = (extension == "typ").then(|| {
+                let collection = editor.update(cx, |editor, cx| editor.create_decorations_collection(vec![], cx));
+                super::highlight::Highlight::new(collection, cx)
+            });
+            Self {
+                key,
+                title,
+                document,
+                discard_allowed: false,
+                editor,
+                highlight,
+            }
+        });
+        panel.update(cx, |panel, cx| panel.rehighlight(cx));
+        panel
+    }
     pub(super) fn protected(&self) -> bool {
         self.document.is_dirty() && !self.discard_allowed
     }
@@ -87,6 +132,7 @@ impl DocumentPanel {
         if before != self.document.text() && !self.document.has_conflict() {
             self.editor
                 .update(cx, |e, cx| e.set_value(self.document.text().to_owned(), window, cx));
+            self.rehighlight(cx);
         }
         cx.notify();
     }

@@ -69,14 +69,13 @@ impl Workspace {
         }
         for key in paths {
             if !self.index.entries.contains_key(&key) {
-                let editor = cx.new(|cx| EditorState::new(window, cx));
-                let panel = cx.new(|_| DocumentPanel {
-                    title: format!("{} (unavailable)", key_label(&key)),
-                    key: key.clone(),
-                    document: Document::unavailable(),
-                    discard_allowed: false,
-                    editor,
-                });
+                let panel = DocumentPanel::new(
+                    key.clone(),
+                    format!("{} (unavailable)", key_label(&key)),
+                    Document::unavailable(),
+                    window,
+                    cx,
+                );
                 self.docs.insert(key.clone(), panel);
             }
             self.open(key.clone(), Location::File, window, cx);
@@ -101,14 +100,13 @@ impl Workspace {
             {
                 return panel_handle(panel.clone());
             }
-            let editor = cx.new(|cx| EditorState::new(window, cx).default_value("File unavailable; see Problems"));
-            panel_handle(cx.new(|_| DocumentPanel {
-                title: "Unavailable document".into(),
-                key: key.unwrap_or_else(|| FileKey::Disk(PathBuf::new())),
-                document: Document::new("File unavailable; see Problems".into()),
-                discard_allowed: false,
-                editor,
-            }))
+            panel_handle(DocumentPanel::new(
+                key.unwrap_or_else(|| FileKey::Disk(PathBuf::new())),
+                "Unavailable document".into(),
+                Document::new("File unavailable; see Problems".into()),
+                window,
+                cx,
+            ))
         });
         match self.dock.update(cx, |area, cx| area.load(state, window, cx)) {
             Ok(()) => self.last_layout = Some(self.dock.read(cx).dump(cx)),

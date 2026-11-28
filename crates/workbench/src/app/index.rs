@@ -105,6 +105,12 @@ impl FileIndex {
                                 )],
                             },
                         );
+                    } else if std::fs::metadata(&path).is_ok_and(|metadata| metadata.is_dir()) {
+                        // Non-candidate files and dangling non-candidate links are outside the inventory.
+                        self.problems.push(Problem::file(
+                            &path,
+                            "Symbolic links are not followed by the folder scan",
+                        ));
                     }
                 }
                 Ok(_) => {
@@ -266,8 +272,14 @@ pub fn classify(path: &Path) -> FileEntry {
 }
 
 fn classify_as(path: &Path, kind: FileKind) -> FileEntry {
+    // Only README.md beside a style entry is documentation, not arbitrary neighboring resumes.
+    let style_readme = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .is_some_and(|s| s.eq_ignore_ascii_case("README.md"))
+        && path.parent().is_some_and(|dir| dir.join("style.typ").is_file());
     let mut entry = FileEntry {
-        kind,
+        kind: if style_readme { FileKind::Styles } else { kind },
         text: None,
         problems: vec![],
     };
@@ -306,6 +318,7 @@ fn classify_as(path: &Path, kind: FileKind) -> FileEntry {
             Ok(_) => vec![],
             Err(e) => Problem::spec(path, &e),
         },
+        FileKind::Styles if style_readme => vec![],
         FileKind::Styles => {
             let source = typst_syntax::Source::detached(text.clone());
             let (errors, warnings) = source.root().errors_and_warnings();
@@ -341,6 +354,91 @@ mod tests {
     use super::{FileIndex, FileKey, FileKind, classify};
     use claims::{assert_ok, assert_some};
     use pretty_assertions::assert_eq;
+    #[test]
+    fn test_style_readme_is_documentation_but_neighboring_resume_is_not() {
+        let dir = assert_ok!(tempfile::tempdir());
+        let style = dir.path().join("styles/mine");
+        assert_ok!(std::fs::create_dir_all(&style));
+        assert_ok!(std::fs::create_dir_all(dir.path().join("styles/lib")));
+        for (path, text) in [
+            (style.join("style.typ"), "#let x = 1"),
+            (style.join("README.md"), "# My style\n## Files\nDocumentation"),
+            (style.join("resume.md"), "# Ada"),
+            (dir.path().join("README.md"), "# Root"),
+            (dir.path().join("styles/lib/shared.typ"), "#let shared = 2"),
+        ] {
+            assert_ok!(std::fs::write(path, text));
+        }
+        let index = FileIndex::scan(dir.path());
+        for path in [
+            style.join("style.typ"),
+            style.join("README.md"),
+            dir.path().join("styles/lib/shared.typ"),
+        ] {
+            let entry = assert_some!(index.entries.get(&FileKey::Disk(path)));
+            assert_eq!(entry.kind, FileKind::Styles);
+            assert!(entry.problems.is_empty(), "{:?}", entry.problems);
+        }
+        for path in [style.join("resume.md"), dir.path().join("README.md")] {
+            assert_eq!(
+                assert_some!(index.entries.get(&FileKey::Disk(path))).kind,
+                FileKind::Resumes
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_skipped_directory_symlink_is_reported() {
+        let dir = assert_ok!(tempfile::tempdir());
+        let target = assert_ok!(tempfile::tempdir());
+        assert_ok!(std::fs::write(target.path().join("style.typ"), "#let x = 1"));
+        let link = dir.path().join("styles");
+        assert_ok!(std::os::unix::fs::symlink(target.path(), &link));
+        assert_ok!(std::fs::write(target.path().join("photo.png"), b"image"));
+        assert_ok!(std::os::unix::fs::symlink(
+            target.path().join("photo.png"),
+            dir.path().join("photo.png")
+        ));
+        assert_ok!(std::os::unix::fs::symlink(
+            target.path().join("missing"),
+            dir.path().join("broken-link")
+        ));
+        let index = FileIndex::scan(dir.path());
+        assert_eq!(index.problems.len(), 1);
+        assert!(
+            index
+                .problems
+                .iter()
+                .any(|p| p.file == link && p.message.contains("Symbolic links"))
+        );
+        assert!(!index.entries.contains_key(&FileKey::Disk(link.join("style.typ"))));
+    }
+
+    #[test]
+    fn test_builtin_shared_files_and_disk_style_limits() {
+        let dir = assert_ok!(tempfile::tempdir());
+        let path = dir.path().join("large.typ");
+        assert_ok!(std::fs::write(&path, " ".repeat(resume::markdown::MAX_INPUT_BYTES + 1)));
+        let index = FileIndex::scan(dir.path());
+        let large = assert_some!(index.entries.get(&FileKey::Disk(path)));
+        assert!(large.text.is_none());
+        assert!(!large.problems.is_empty());
+        for style in assert_ok!(resume::style::catalog(None)) {
+            let name = assert_ok!(resume::model::StyleName::try_new(style.name));
+            for (path, bytes) in assert_ok!(resume::style::builtin_files(&name)) {
+                let entry = assert_some!(index.entries.get(&FileKey::Builtin(path)));
+                assert_eq!(entry.kind, FileKind::Styles);
+                assert_eq!(entry.text.as_deref(), Some(assert_ok!(std::str::from_utf8(bytes))));
+            }
+        }
+        assert!(
+            index
+                .entries
+                .contains_key(&FileKey::Builtin("lib/components.typ".into()))
+        );
+    }
+
     #[test]
     fn unreadable_external_profile_remains_visible() {
         let dir = assert_ok!(tempfile::tempdir());
