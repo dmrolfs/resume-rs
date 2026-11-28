@@ -3,6 +3,8 @@
 
 use std::{path::Path, process::Command};
 
+use claims::{assert_ok, assert_some};
+use pretty_assertions::assert_eq;
 use serde_json::Value;
 
 /// Platform attributes `just` accepts on a recipe.
@@ -225,25 +227,30 @@ fn has_command(recipe: &Value, words: &[&str]) -> bool {
         .any(|line| words.iter().all(|w| line.iter().any(|x| x == w)))
 }
 
-/// True when `line` runs all of `words` for exactly one package, `package`.
+/// True when `line` is the command `words` (its leading words, in order) run for exactly one package, `package`.
 ///
-/// Two `--package` selectors in one cargo command merge the features of both packages, which is what the gate keeps
-/// apart; a command that names the right package among others must not satisfy the check. The short `-p` is
-/// refused too, so the one spelling the check reads is the only one in use.
+/// `words` starts with `cargo` and the subcommand, then any flags the recipe must carry, which may come anywhere
+/// before a `--` that hands the rest to the tool. Two `--package` selectors in one cargo command merge the features
+/// of both packages, which is what the gate keeps apart; a command that names the right package among others must not
+/// satisfy the check. The short `-p` is refused too, so the one spelling the check reads is the only one in use. A
+/// test command that is told not to run anything (`--no-run`, `--list`) is not a test gate.
 fn runs_alone_for(line: &[String], words: &[&str], package: &str) -> bool {
-    let selectors: Vec<&str> = line
+    // What cargo reads is what comes before `--`; the rest belongs to the tool it starts.
+    let cargo_args: &[String] = line.iter().position(|w| w == "--").map_or(line, |end| &line[..end]);
+    let selectors: Vec<&str> = cargo_args
         .windows(2)
         .filter(|pair| pair[0] == "--package")
         .map(|pair| pair[1].as_str())
         .collect();
     // Any other way to name a package: `-p`, `-pNAME`, `-p=NAME`, `--package=NAME`.
-    let other_spelling = line
+    let other_spelling = cargo_args
         .iter()
         .any(|w| w.starts_with("-p") && !w.starts_with("--") || w.starts_with("--package="));
-    // The words must be the command itself, in order, from the first word: `echo cargo test` is not `cargo test`.
-    let is_the_command =
-        line.first().map(String::as_str) == words.first().copied() && words.iter().all(|w| line.iter().any(|x| x == w));
-    is_the_command && selectors == [package] && !other_spelling
+    // `cargo test`, in that order, from the first word: `echo cargo test` and `cargo bench test` are other commands.
+    let starts_as_the_command = line.len() >= 2 && words.len() >= 2 && line[..2] == words[..2];
+    let carries_the_flags = words[2..].iter().all(|flag| cargo_args.iter().any(|x| x == flag));
+    let does_nothing = cargo_args.iter().any(|w| w == "--no-run" || w == "--list");
+    starts_as_the_command && carries_the_flags && selectors == [package] && !other_spelling && !does_nothing
 }
 
 #[test]
@@ -282,24 +289,21 @@ fn a_command_counts_for_a_package_only_when_it_names_that_one_package() {
 /// `(name, manifest path relative to the workspace root, with `/`)` of each workspace member.
 fn workspace_manifests() -> Vec<(String, String)> {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let output = Command::new(cargo)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .args(["metadata", "--no-deps", "--format-version", "1", "--locked"])
-        .output()
-        .expect("cargo runs");
+    let output = assert_ok!(
+        Command::new(cargo)
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .args(["metadata", "--no-deps", "--format-version", "1", "--locked"])
+            .output(),
+        "cargo runs"
+    );
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    let metadata: Value = serde_json::from_slice(&output.stdout).expect("cargo metadata prints JSON");
-    let root = metadata["workspace_root"]
-        .as_str()
-        .expect("a workspace root")
-        .replace('\\', "/");
-    let mut found: Vec<(String, String)> = metadata["packages"]
-        .as_array()
-        .expect("packages is a list")
+    let metadata: Value = assert_ok!(serde_json::from_slice(&output.stdout), "cargo metadata prints JSON");
+    let root = assert_some!(metadata["workspace_root"].as_str(), "a workspace root").replace('\\', "/");
+    let mut found: Vec<(String, String)> = assert_some!(metadata["packages"].as_array(), "packages is a list")
         .iter()
         .map(|p| {
-            let name = p["name"].as_str().expect("a package name").to_string();
-            let manifest = p["manifest_path"].as_str().expect("a manifest path").replace('\\', "/");
+            let name = assert_some!(p["name"].as_str(), "a package name").to_string();
+            let manifest = assert_some!(p["manifest_path"].as_str(), "a manifest path").replace('\\', "/");
             let relative = manifest
                 .strip_prefix(&format!("{root}/"))
                 .unwrap_or_else(|| panic!("{manifest} is not under {root}"))

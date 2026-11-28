@@ -52,7 +52,7 @@ pub fn parse_letter(path: impl AsRef<Path>, text: &str) -> ParsedLetter {
             0
         };
         let normalized = super::normalize_lone_cr(&text[base..]);
-        let (letter, owned) = interpret(&doc, &Source { text }, &mut sink);
+        let (letter, owned) = interpret(&doc, &Source::new(text), &mut sink);
         // After the interpreter, so that a comment it has already judged is not judged twice.
         letter_safety::inspect(&normalized, base, &owned, &mut sink);
         letter

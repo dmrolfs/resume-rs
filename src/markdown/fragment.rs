@@ -59,7 +59,7 @@ pub struct Lowered<T> {
 pub fn resume_fragment(kind: ResumeFragmentKind, text: &str) -> Result<Lowered<ResumeFragment>, Vec<FragmentIssue>> {
     let mut sink = Sink::new(Path::new(""));
     let value = paragraph(text, &mut sink).map(|paragraph| {
-        let src = Source { text };
+        let src = Source::new(text);
         match kind {
             ResumeFragmentKind::Bullet => {
                 let (label, content) = inline::label_and_content(&paragraph.content, &src, &mut sink);
@@ -78,7 +78,7 @@ pub fn resume_fragment(kind: ResumeFragmentKind, text: &str) -> Result<Lowered<R
 pub fn letter_paragraph(text: &str) -> Result<Lowered<Vec<LetterInline>>, Vec<FragmentIssue>> {
     let mut sink = Sink::new(Path::new(""));
     let value = paragraph(text, &mut sink).map(|paragraph| {
-        let content = letter_inline::convert(&paragraph.content, &Source { text }, &mut sink);
+        let content = letter_inline::convert(&paragraph.content, &Source::new(text), &mut sink);
         let owned = annotation::judged_in(&paragraph.content).into_iter().collect();
         let base = if text.starts_with(super::BOM) {
             super::BOM.len_utf8()

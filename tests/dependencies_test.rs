@@ -4,6 +4,9 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+use claims::{assert_ok, assert_some};
+use pretty_assertions::assert_eq;
+
 fn read_project_file(name: &str) -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(name);
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
@@ -79,7 +82,7 @@ fn checked_stdout(args: &[&str], code: Option<i32>, stdout: &[u8], stderr: &[u8]
         "cargo {args:?} failed with exit code {code:?}:\n{}",
         String::from_utf8_lossy(stderr)
     );
-    String::from_utf8(stdout.to_vec()).expect("cargo prints UTF-8")
+    assert_ok!(String::from_utf8(stdout.to_vec()), "cargo prints UTF-8")
 }
 
 /// The workspace shares one `Cargo.lock`, and the desktop app brings network crates into it. What matters is what
@@ -126,17 +129,17 @@ fn the_network_check_names_a_crate_only_on_a_whole_name_match() {
 /// or version, panics instead of reading as an empty inventory.
 fn locked_versions_of(lock: &str, crate_name: &str) -> Vec<String> {
     let lock: toml::Value = lock.parse().unwrap_or_else(|e| panic!("Cargo.lock is not TOML: {e}"));
-    let packages = lock
-        .get("package")
-        .and_then(toml::Value::as_array)
-        .expect("Cargo.lock has a `package` list");
+    let packages = assert_some!(
+        lock.get("package").and_then(toml::Value::as_array),
+        "Cargo.lock has a `package` list"
+    );
     let mut versions: Vec<String> = packages
         .iter()
         .filter_map(|package| {
-            let name = package
-                .get("name")
-                .and_then(toml::Value::as_str)
-                .expect("a locked package has a name");
+            let name = assert_some!(
+                package.get("name").and_then(toml::Value::as_str),
+                "a locked package has a name"
+            );
             let version = package
                 .get("version")
                 .and_then(toml::Value::as_str)
@@ -396,7 +399,7 @@ fn a_locked_package_with_no_name_is_an_error_not_a_skipped_entry() {
 fn the_inverse_tree_of_a_crate_every_member_uses_is_read_from_cargo_itself() {
     // A real positive control: `serde_json` is in every member, so cargo's own output must show each of them. If
     // cargo changed how it prints a tree, the checks above would find no one and stay green; this one would not.
-    let trees = workspace_dependents_of("serde_json").expect("serde_json is locked");
+    let trees = assert_some!(workspace_dependents_of("serde_json"), "serde_json is locked");
     assert!(!trees.is_empty());
     assert!(trees.iter().any(|tree| lists_resume_as_dependent(tree)), "{trees:?}");
     let members = workspace_member_names();
@@ -458,7 +461,7 @@ fn a_leak_in_the_second_version_is_still_found() {
             "aes v0.8.4\n└── workbench v0.1.0 (/x)\n".to_string()
         }
     });
-    let trees = found.expect("aes is locked");
+    let trees = assert_some!(found, "aes is locked");
     assert!(trees.iter().any(|tree| lists_resume_as_dependent(tree)));
 }
 

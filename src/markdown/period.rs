@@ -432,7 +432,7 @@ mod tests {
         let mut node = TextNode::default();
         node.push(text, 0..text.len(), true);
         let mut sink = Sink::new(Path::new("r.md"));
-        let src = Source { text };
+        let src = Source::new(text);
         let period = parse_located(&node, 0..text.len(), &src, &mut sink);
         (period, sink.finish())
     }
@@ -546,7 +546,7 @@ mod tests {
         node.push("–", 5..7, false);
         node.push(" 2017", 7..12, true);
         let mut sink = Sink::new(Path::new("r.md"));
-        let src = Source { text: source };
+        let src = Source::new(source);
         let period = parse_located(&node, 0..node.text.len(), &src, &mut sink);
         assert_some!(period);
         let diagnostics = sink.finish();
@@ -748,7 +748,7 @@ mod tests {
         node.push("–", 5..12, false);
         node.push(" 2021", 12..17, true);
         let mut sink = Sink::new(Path::new("r.md"));
-        let src = Source { text: source };
+        let src = Source::new(source);
         assert_some!(parse_located(&node, 0..node.text.len(), &src, &mut sink));
         assert_eq!(sink.finish(), vec![]);
     }

@@ -634,7 +634,7 @@ mod tests {
         let Some(BlockNode::Heading(heading)) = doc.blocks.first() else {
             panic!("expected a heading")
         };
-        let src = Source { text: markdown };
+        let src = Source::new(markdown);
         let head = role_line(heading, &src, &mut sink);
         (head, sink.finish())
     }
@@ -644,7 +644,7 @@ mod tests {
         let Some(BlockNode::Paragraph(paragraph)) = doc.blocks.first() else {
             panic!("expected a paragraph")
         };
-        let src = Source { text: markdown };
+        let src = Source::new(markdown);
         let check = era_line(paragraph, &src, &mut sink);
         (check, sink.finish())
     }

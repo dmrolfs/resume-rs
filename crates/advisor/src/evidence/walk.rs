@@ -42,6 +42,8 @@ pub(super) fn project(
         let provenance = walk.provenance(index, node, ranges[index].clone(), lines[index], parent)?;
         walk.visit(node, provenance, parent)?;
     }
+    // The last role is never left by a later node, so its eras are checked here.
+    walk.eras.finish(nodes.len())?;
     walk.finish()
 }
 
@@ -55,21 +57,26 @@ struct Open {
     label: String,
 }
 
-/// Hands out each era's period in order, and notices when the walk and the model disagree about how many eras a role has.
+/// Hands out each era's period in order, and notices when the walk and the model disagree about the eras of a role.
 ///
-/// `Resume::nodes` emits one era node per era, so the two cannot drift today. This guards a later parser change.
-struct EraCursor(std::vec::IntoIter<Period>);
+/// `Resume::nodes` emits one era node per era, in order, so the two cannot drift today. This guards a later parser
+/// change: an era taken out of order, one too many, or one never met.
+struct EraCursor(std::vec::IntoIter<(String, Period)>);
 
 impl EraCursor {
-    fn new(periods: Vec<Period>) -> Self {
-        Self(periods.into_iter())
+    fn new(eras: Vec<(String, Period)>) -> Self {
+        Self(eras.into_iter())
     }
 
-    fn next(&mut self, node_index: usize) -> Result<Period, EvidenceError> {
-        self.0.next().ok_or(EvidenceError::EraCursorMismatch { node_index })
+    /// The period of the next era, which must be the one called `name`.
+    fn next(&mut self, node_index: usize, name: &str) -> Result<Period, EvidenceError> {
+        match self.0.next() {
+            Some((expected, period)) if expected == name => Ok(period),
+            _ => EraCursorMismatchSnafu { node_index }.fail(),
+        }
     }
 
-    /// Fails when an era of the role that has just closed was never met.
+    /// Fails when an era of the role that has closed was never met.
     fn finish(&self, node_index: usize) -> Result<(), EvidenceError> {
         ensure!(self.0.len() == 0, EraCursorMismatchSnafu { node_index });
         Ok(())
@@ -397,7 +404,7 @@ impl<'a> Walk<'a> {
             role.body
                 .iter()
                 .filter_map(|part| match part {
-                    RoleBlock::Era { period, .. } => Some(period.clone()),
+                    RoleBlock::Era { name, period, .. } => Some((name.to_string(), period.clone())),
                     _ => None,
                 })
                 .collect(),
@@ -461,7 +468,7 @@ impl<'a> Walk<'a> {
                 missing: "role"
             }
         );
-        let period = self.eras.next(index)?;
+        let period = self.eras.next(index, name.as_ref())?;
         let id = self.ctx_id(index);
         self.claim(&id, index, true)?;
         let label = name.to_string();
@@ -510,11 +517,12 @@ impl<'a> Walk<'a> {
             _ => false,
         };
         let context = node.kind == NodeKind::Blurb || (node.kind == NodeKind::Paragraph && in_blurb_group);
-        let generated = alternate.is_none() || context;
-        let id = match alternate {
-            Some(a) if !context => format!("{}.{}", a.group, a.variant),
-            _ if context => self.ctx_id(index),
-            _ => self.src_id(index),
+        // A wording keeps its own `group.variant` ID. Everything else gets a generated one, which must never read as a
+        // wording ID.
+        let (id, generated) = match (context, alternate) {
+            (true, _) => (self.ctx_id(index), true),
+            (false, Some(a)) => (format!("{}.{}", a.group, a.variant), false),
+            (false, None) => (self.src_id(index), true),
         };
         self.claim(&id, index, generated)?;
         if own.is_some() || inherited.is_some() {
@@ -571,13 +579,15 @@ impl<'a> Walk<'a> {
             let p = &local.record.parents;
             used.extend([p.section.clone(), p.role.clone(), p.era.clone()].into_iter().flatten());
         }
-        for local in &self.context {
+        // A role description is always sent, so the section and era it sits in are sent with it. A description of an
+        // excluded role never gets here: it inherits the exclusion and is not a record.
+        for local in self
+            .context
+            .iter()
+            .filter(|local| local.record.kind == ContextKind::RoleDescription)
+        {
             let p = &local.record.parents;
-            if local.record.kind == ContextKind::RoleDescription
-                && p.role.as_ref().is_some_and(|r| self.ids.contains_key(r))
-            {
-                used.extend([p.section.clone(), p.era.clone()].into_iter().flatten());
-            }
+            used.extend([p.section.clone(), p.era.clone()].into_iter().flatten());
         }
         self.context
             .retain(|local| local.record.kind == ContextKind::RoleDescription || used.contains(&local.record.id));
@@ -639,13 +649,13 @@ mod tests {
     use claims::{assert_err, assert_ok, assert_some};
     use pretty_assertions::assert_eq;
 
-    /// The periods of the eras of `**A · 2016 – 2017**` and `**B · 2018 – 2019**`, as the parser reads them.
-    fn periods() -> Vec<Period> {
+    /// The names and periods of the eras `A · 2016 – 2017` and `B · 2018 – 2019`, as the parser reads them.
+    fn periods() -> Vec<(String, Period)> {
         let text =
             "# A B\n\n## E\n\n### Co · 2015 – 2020\n\n**A · 2016 – 2017**\n\n- One.\n\n**B · 2018 – 2019**\n\n- Two.\n";
         let parsed = resume::markdown::parse("r.md", text);
         let resume = assert_some!(parsed.valid());
-        let periods: Vec<Period> = resume
+        let periods: Vec<(String, Period)> = resume
             .sections
             .iter()
             .flat_map(|s| &s.blocks)
@@ -655,7 +665,7 @@ mod tests {
             })
             .flat_map(|role| &role.body)
             .filter_map(|part| match part {
-                RoleBlock::Era { period, .. } => Some(period.clone()),
+                RoleBlock::Era { name, period, .. } => Some((name.to_string(), period.clone())),
                 _ => None,
             })
             .collect();
@@ -666,23 +676,33 @@ mod tests {
     #[test]
     fn the_era_cursor_hands_out_periods_in_order_and_refuses_one_too_many() {
         let mut cursor = EraCursor::new(periods());
-        assert_eq!(assert_ok!(cursor.next(3)).text, "2016 – 2017");
-        assert_eq!(assert_ok!(cursor.next(5)).text, "2018 – 2019");
+        assert_eq!(assert_ok!(cursor.next(3, "A")).text, "2016 – 2017");
+        assert_eq!(assert_ok!(cursor.next(5, "B")).text, "2018 – 2019");
         assert!(matches!(
-            assert_err!(cursor.next(7)),
+            assert_err!(cursor.next(7, "C")),
             EvidenceError::EraCursorMismatch { node_index: 7 }
         ));
     }
 
     #[test]
+    fn the_era_cursor_refuses_an_era_taken_out_of_order() {
+        let mut cursor = EraCursor::new(periods());
+        let error = assert_err!(cursor.next(3, "B"));
+        assert!(
+            matches!(error, EvidenceError::EraCursorMismatch { node_index: 3 }),
+            "{error:?}"
+        );
+    }
+
+    #[test]
     fn the_era_cursor_refuses_to_close_a_role_with_an_era_never_met() {
         let mut cursor = EraCursor::new(periods());
-        assert_ok!(cursor.next(3));
+        assert_ok!(cursor.next(3, "A"));
         assert!(matches!(
             assert_err!(cursor.finish(9)),
             EvidenceError::EraCursorMismatch { node_index: 9 }
         ));
-        assert_ok!(cursor.next(5));
+        assert_ok!(cursor.next(5, "B"));
         assert_ok!(cursor.finish(9));
     }
 
@@ -703,6 +723,43 @@ mod tests {
         let resume = assert_some!(parsed.valid());
         let nodes = resume.nodes();
         with(resume, &nodes)
+    }
+
+    #[test]
+    fn line_starts_follow_lf_crlf_and_lone_cr_and_give_one_based_lines() {
+        // "a", "b", "c", "d" on four lines, joined three different ways in one text: LF, CRLF, then a lone CR.
+        let text = "a\nb\r\nc\rd";
+        let starts = line_starts(text);
+        assert_eq!(starts, [0, 2, 5, 7]);
+        let lines: Vec<usize> = ["a", "b", "c", "d"]
+            .iter()
+            .filter_map(|c| text.find(c))
+            .map(|at| line_in(&starts, at))
+            .collect();
+        assert_eq!(lines, [1, 2, 3, 4]);
+        assert_eq!(line_in(&starts, 0), 1);
+        assert_eq!(line_in(&starts, text.len()), 4, "the end is on the last line");
+        assert_eq!(line_starts(""), [0]);
+    }
+
+    #[test]
+    fn only_two_valid_names_around_one_dot_read_as_a_group_variant() {
+        for wording in ["group.default", "a.b", "ai-platform.short2"] {
+            assert!(is_group_variant(wording), "{wording}");
+        }
+        for not_wording in [
+            "Group.default",
+            "group.Default",
+            "group.",
+            ".default",
+            "group",
+            "a.b.c",
+            "1group.default",
+            "src:0123:node:4",
+            "ctx:0123:node:4",
+        ] {
+            assert!(!is_group_variant(not_wording), "{not_wording}");
+        }
     }
 
     #[test]
@@ -732,7 +789,7 @@ mod tests {
     fn a_range_that_does_not_fit_the_text_or_cuts_a_character_is_refused() {
         on_nodes(|_, nodes| {
             let walk = walk();
-            let accent = TEXT.find('é').expect("the accent is in the text");
+            let accent = assert_some!(TEXT.find('é'), "the accent is in the text");
             let cases = [
                 (std::ops::Range { start: 5, end: 3 }, "reversed"),
                 (0..TEXT.len() + 1, "past the end"),
@@ -752,7 +809,7 @@ mod tests {
     fn a_line_the_parser_reports_wrongly_is_refused_with_both_numbers() {
         on_nodes(|_, nodes| {
             let walk = walk();
-            let start = TEXT.find("- Café").expect("the bullet is in the text");
+            let start = assert_some!(TEXT.find("- Café"), "the bullet is in the text");
             let error = assert_err!(walk.provenance(1, &nodes[1], start..start + 7, 3, None));
             assert!(
                 matches!(
@@ -773,14 +830,16 @@ mod tests {
     fn a_parent_must_be_an_earlier_bullet_in_the_same_container() {
         on_nodes(|_, nodes| {
             let mut walk = walk();
+            // The section is node 5, not 0, so a container read from the wrong place cannot match by luck.
             let section = Open {
-                node_index: 0,
+                node_index: 5,
                 depth: 0,
                 id: "ctx:x".into(),
                 label: "S".into(),
             };
             walk.section = Some(section);
-            walk.container_of.insert(1, 0);
+            walk.container_of.insert(1, 5);
+            walk.container_of.insert(2, 5);
             // Node 2 is the second bullet; node 1 is the first, in the same section.
             assert_eq!(
                 assert_ok!(walk.resolve_parent(2, &nodes[2], Nesting::In(1), nodes)),
@@ -829,7 +888,7 @@ mod tests {
         let parsed = resume::markdown::parse("r.md", text);
         let resume = assert_some!(parsed.valid());
         let nodes = resume.nodes();
-        let era = nodes.iter().position(|n| n.kind == NodeKind::Era).expect("an era node");
+        let era = assert_some!(nodes.iter().position(|n| n.kind == NodeKind::Era), "an era node");
         let mut walk = Walk::new(text, "0".repeat(64));
         let provenance = assert_ok!(walk.provenance(era, &nodes[era], 0..5, 1, None));
         let error = assert_err!(walk.visit(&nodes[era], provenance, None));

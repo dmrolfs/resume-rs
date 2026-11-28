@@ -115,8 +115,8 @@ fn eras_keep_periods_and_a_following_paragraph_clears_the_era() {
         .map(|r| r.record.text.as_str())
         .collect();
     assert_eq!(eras, ["AI · 2016 – 2017", "AI · 2018 – 2019"]);
-    assert!(e.records[2].record.parents.era.is_none());
-    assert!(e.records[3].record.parents.era.is_none());
+    assert_none!(e.records[2].record.parents.era.as_ref());
+    assert_none!(e.records[3].record.parents.era.as_ref());
     assert_ne!(e.records[1].record.parents.era, e.records[4].record.parents.era);
 }
 
@@ -153,6 +153,22 @@ fn empty_unreferenced_sections_are_pruned() {
     let e = fixture("## Empty\n\n## Filled\n\nReady.\n");
     assert_eq!(e.context.len(), 1);
     assert_eq!(e.context[0].record.text, "Filled");
+}
+
+#[test]
+fn a_refusal_counts_only_the_errors_not_the_warnings() {
+    // Two bullets reuse a name (two errors), and the missing contact line is a warning that must not be counted.
+    let text = "# A B\n\n## S\n\n- One. <!-- &same -->\n- Two. <!-- &same -->\n- Three. <!-- &same -->\n";
+    let parsed = resume::markdown::parse("r.md", text);
+    let errors = parsed
+        .diagnostics()
+        .iter()
+        .filter(|d| d.severity == resume::diagnostics::Severity::Error)
+        .count();
+    assert_eq!(errors, 2);
+    assert!(parsed.diagnostics().len() > errors, "a warning is present too");
+    let error = assert_err!(project(text));
+    assert!(matches!(error, EvidenceError::InvalidResume { errors: 2 }), "{error:?}");
 }
 
 #[test]
@@ -298,4 +314,65 @@ fn context_nobody_refers_to_is_not_sent_and_what_a_description_needs_is() {
         description.parents.section.as_deref(),
         Some(e.context[0].record.id.as_str())
     );
+}
+
+#[test]
+fn each_record_shows_the_title_of_the_section_role_and_era_it_sits_in() {
+    let e = fixture(
+        "## Experience\n\n### Acme · Engineer · 2015 – 2020\n\n**AI · 2016 – 2017**\n\n- In the era.\n\nIn the role.\n\n### Beta · 2010 – 2014\n\n- In a role with no title.\n\n## Education\n\nIn the section.\n",
+    );
+    /// `(text, section, role, era)` as a model reads one record.
+    type Shown<'a> = (&'a str, Option<&'a str>, Option<&'a str>, Option<&'a str>);
+    let shown: Vec<Shown<'_>> = e
+        .records
+        .iter()
+        .map(|r| {
+            (
+                r.record.text.as_str(),
+                r.record.section.as_deref(),
+                r.record.role.as_deref(),
+                r.record.era.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            (
+                "Acme · Engineer · 2015 – 2020",
+                Some("Experience"),
+                Some("Acme · Engineer"),
+                None
+            ),
+            ("In the era.", Some("Experience"), Some("Acme · Engineer"), Some("AI")),
+            ("In the role.", Some("Experience"), Some("Acme · Engineer"), None),
+            ("Beta · 2010 – 2014", Some("Experience"), Some("Beta"), None),
+            ("In a role with no title.", Some("Experience"), Some("Beta"), None),
+            ("In the section.", Some("Education"), None, None),
+        ]
+    );
+    let era = assert_some!(e.context.iter().find(|c| c.record.kind == ContextKind::Era));
+    assert_eq!(
+        (
+            era.record.section.as_deref(),
+            era.record.role.as_deref(),
+            era.record.era.as_deref()
+        ),
+        (Some("Experience"), Some("Acme · Engineer"), Some("AI"))
+    );
+}
+
+#[test]
+fn a_description_whose_role_is_excluded_is_neither_a_record_nor_a_reason_to_keep_its_section() {
+    // The only role is excluded, so its description is excluded with it. Nothing under `Experience` may be sent, not
+    // even the section, and the baseline still has the statements elsewhere.
+    for status in ["draft", "verify"] {
+        let e = fixture(&format!(
+            "## Experience\n\n### Gone · 2015 – 2020 <!-- @{status} -->\n\nGone description.\n\n- Gone bullet.\n\n## Education\n\nB.S. in Mathematics.\n"
+        ));
+        let context: Vec<&str> = e.context.iter().map(|c| c.record.text.as_str()).collect();
+        assert_eq!(context, ["Education"], "{status}");
+        assert_eq!(texts(&e), ["B.S. in Mathematics."]);
+        assert_eq!(e.excluded.len(), 3);
+    }
 }

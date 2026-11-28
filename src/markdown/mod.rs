@@ -217,7 +217,7 @@ fn analyze(path: &Path, text: &str) -> Parsed {
     let Some(doc) = lower_document(text, &mut sink) else {
         return Parsed::new(None, sink.finish());
     };
-    let src = Source { text };
+    let src = Source::new(text);
     let (resume, outline) = blocks::interpret(&doc, &src, &mut sink);
     let mut diagnostics = sink.finish();
     enforce_span_contract(&mut diagnostics, text);
@@ -297,14 +297,24 @@ pub(crate) fn trim_range(text: &str, range: Range<usize>) -> Range<usize> {
 /// The original text; every range indexes it.
 pub(crate) struct Source<'a> {
     pub text: &'a str,
+    /// Built on the first `line_of`, then reused: a finding names a line, and a resume that breaks one rule thousands
+    /// of times used to build a fresh index for each, before the cap on findings could drop them.
+    lines: std::sync::OnceLock<LineIndex>,
 }
 
 impl<'a> Source<'a> {
+    pub fn new(text: &'a str) -> Self {
+        Self {
+            text,
+            lines: std::sync::OnceLock::new(),
+        }
+    }
+
     /// The 1-based line number of `offset`, counting `\n`, `\r\n`, and a lone `\r` as line endings.
     ///
-    /// Builds the line index each call, so it is for rare findings, not a hot loop.
+    /// The line index is built on the first call and kept.
     pub fn line_of(&self, offset: usize) -> usize {
-        LineIndex::new(self.text).line_of(offset) + 1
+        self.lines.get_or_init(|| LineIndex::new(self.text)).line_of(offset) + 1
     }
 
     /// Slices the original text; an out-of-range or non-boundary range yields an empty string.
@@ -722,7 +732,7 @@ mod tests {
         // Looking ahead inside a truncated slice used to count the `\r` of a CRLF as a lone CR when the
         // offset fell on its `\n`, reporting the next line.
         let text = "a\r\nb\rc\nd";
-        let source = Source { text };
+        let source = Source::new(text);
         let lines: Vec<usize> = (0..=text.len()).map(|offset| source.line_of(offset)).collect();
         assert_eq!(
             lines,
@@ -730,6 +740,6 @@ mod tests {
             "a, CR, LF, b, CR, c, LF, d, end"
         );
         assert_eq!(source.line_of(999), 4, "past the end is the last line");
-        assert_eq!(Source { text: "\u{FEFF}x" }.line_of(1), 1);
+        assert_eq!(Source::new("\u{FEFF}x").line_of(1), 1);
     }
 }

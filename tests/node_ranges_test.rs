@@ -335,3 +335,22 @@ fn node_lines_agree_with_a_line_counted_by_hand_and_stay_fast_on_a_large_baselin
         started.elapsed()
     );
 }
+
+#[test]
+fn a_baseline_that_breaks_one_rule_thousands_of_times_is_still_reported_quickly() {
+    // Each reused name builds a hint that names the line of the first use. That used to build a line index per
+    // finding, before the 500-finding cap could stop it: minutes for a few tens of thousands of bullets.
+    let mut text = String::from("# A B\n\n## S\n\n");
+    for i in 0..6000 {
+        text.push_str(&format!("- Item {i} <!-- &same -->\n"));
+    }
+    let started = std::time::Instant::now();
+    let parsed = parse("r.md", &text);
+    assert!(parsed.has_errors());
+    assert!(parsed.diagnostics().len() <= 501, "{}", parsed.diagnostics().len());
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "parsing took {:?}",
+        started.elapsed()
+    );
+}

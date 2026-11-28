@@ -433,7 +433,7 @@ mod tests {
     ) -> (Value, Vec<Diagnostic>) {
         let mut sink = Sink::new(Path::new("r.md"));
         let doc = tree::lower(markdown, 0, &mut sink);
-        let src = Source { text: markdown };
+        let src = Source::new(markdown);
         let Some(BlockNode::Paragraph(p)) = doc.blocks.first() else {
             panic!("expected a paragraph in {markdown:?}")
         };

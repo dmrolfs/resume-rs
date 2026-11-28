@@ -209,7 +209,9 @@ pub enum EvidenceError {
         counted_line: usize,
     },
 
-    #[snafu(display("node {node_index} names {parent} as its parent, which is not an earlier node"))]
+    #[snafu(display(
+        "node {node_index} has an invalid source parent (node {parent}): it is missing, not an earlier bullet, or in another section, role or era"
+    ))]
     InvalidSourceParent { node_index: usize, parent: usize },
 
     #[snafu(display("the era at node {node_index} does not match the eras of its role"))]

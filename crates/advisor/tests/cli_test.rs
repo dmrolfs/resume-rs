@@ -37,23 +37,14 @@ fn evidence_lists_the_statements_a_model_may_cite_with_local_provenance() {
     let (_dir, path) = baseline(BASELINE);
     let json = stdout_json(&[path.as_os_str()]);
     assert_eq!(json["schema"], "resume-evidence/v1");
-    let ids: Vec<&str> = json["records"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|r| r["record"]["id"].as_str().unwrap())
-        .collect();
+    let records = assert_some!(json["records"].as_array());
+    let ids: Vec<&str> = records.iter().filter_map(|r| r["record"]["id"].as_str()).collect();
     assert_eq!(ids.len(), 3, "{ids:?}");
     assert!(ids.contains(&"engine.default"));
-    let education = assert_some!(
-        json["records"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|r| r["record"]["text"] == "B.S. in Mathematics.")
-    );
-    assert!(education["record"]["id"].as_str().unwrap().starts_with("src:"));
-    assert_eq!(json["excluded"].as_array().unwrap().len(), 1);
+    let education = assert_some!(records.iter().find(|r| r["record"]["text"] == "B.S. in Mathematics."));
+    let education_id = assert_some!(education["record"]["id"].as_str());
+    assert!(education_id.starts_with("src:"), "{education_id}");
+    assert_eq!(assert_some!(json["excluded"].as_array()).len(), 1);
     assert!(json["records"][0]["provenance"]["byte_range"].is_object());
 }
 
@@ -142,4 +133,34 @@ fn output_is_the_same_on_every_run() {
         .stdout
         .clone();
     assert_eq!(first, second);
+}
+
+#[test]
+fn a_baseline_near_the_size_limit_is_projected_in_seconds_not_minutes() {
+    // About 900 KB and 11,000 bullets, each with its own wording group. Counting each line, building each ID and
+    // pruning the context must all stay linear: the first version took over six minutes.
+    let mut text = String::from(
+        "# Ada Lovelace\n\nLondon · ada@example.com\n\n## Experience\n\n### Acme · Engineer · 2015 – 2020\n\n",
+    );
+    let mut n = 0;
+    while text.len() < 900_000 {
+        text.push_str(&format!(
+            "- Statement number {n} {}. <!-- =w{n}.default -->\n",
+            "x".repeat(50)
+        ));
+        n += 1;
+    }
+    let (_dir, path) = baseline(&text);
+    let started = std::time::Instant::now();
+    let json = stdout_json(&[path.as_os_str()]);
+    let took = started.elapsed();
+    assert_eq!(
+        json["records"].as_array().map(Vec::len),
+        Some(n + 1),
+        "every bullet and the role"
+    );
+    assert!(
+        took < std::time::Duration::from_secs(20),
+        "took {took:?} for {n} bullets"
+    );
 }
