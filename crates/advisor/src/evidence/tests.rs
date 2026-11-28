@@ -1,6 +1,6 @@
 //! Synthetic evidence-policy tests. No private baseline enters this repository.
 use super::*;
-use claims::{assert_err, assert_ok};
+use claims::{assert_err, assert_none, assert_ok, assert_some};
 use pretty_assertions::assert_eq;
 
 const HEAD: &str = "# Ada Lovelace\n\nLondon · ada@example.com\n\n";
@@ -172,4 +172,130 @@ fn invalid_or_empty_baselines_fail_closed() {
     assert_err!(project(&format!(
         "{HEAD}## S\n\n- A. <!-- =same.default -->\n- B. <!-- =same.default -->\n"
     )));
+}
+
+// ---------------------------------------------------------------------------------------------------
+// The outgoing payload is an allow-list: exact keys, so a new local field cannot reach a model unnoticed.
+// ---------------------------------------------------------------------------------------------------
+
+fn keys(value: &serde_json::Value) -> Vec<&str> {
+    let mut keys: Vec<&str> = assert_some!(value.as_object()).keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    keys
+}
+
+#[test]
+fn the_model_payload_has_exactly_the_approved_keys_in_every_record_family() {
+    let e = fixture(
+        "## Experience\n\n### Acme · Engineer · 2015 – 2020\n\nCompany description. <!-- =company.default -->\n\n**AI · 2016 – 2017**\n\n- Built it. <!-- =built.default -->\n\n- Hidden. <!-- @draft -->\n",
+    );
+    let artifact = assert_ok!(e.model_artifact());
+    let json: serde_json::Value = assert_ok!(serde_json::from_slice(artifact.bytes()));
+    assert_eq!(keys(&json), ["context", "records", "schema"]);
+    let record_keys = [
+        "era", "group", "id", "kind", "parents", "role", "section", "text", "variant",
+    ];
+    let records = assert_some!(json["records"].as_array());
+    assert!(records.iter().any(|r| r["kind"] == "employment-record"));
+    assert!(records.iter().any(|r| r["kind"] == "body-statement"));
+    let context = assert_some!(json["context"].as_array());
+    for kind in ["section", "era", "role-description"] {
+        assert!(context.iter().any(|r| r["kind"] == kind), "no {kind} context record");
+    }
+    for record in records.iter().chain(context) {
+        assert_eq!(keys(record), record_keys);
+        assert_eq!(keys(&record["parents"]), ["era", "role", "section"]);
+    }
+}
+
+#[test]
+fn the_digest_is_the_sha256_of_the_exact_artifact_bytes() {
+    use sha2::{Digest, Sha256};
+    let artifact = assert_ok!(fixture("## S\n\n- One.\n").model_artifact());
+    let expected: String = Sha256::digest(artifact.bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    assert_eq!(artifact.sha256(), expected);
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Exclusion state: what an excluded container must not carry into what follows, and what it must.
+// ---------------------------------------------------------------------------------------------------
+
+#[test]
+fn an_excluded_role_leaves_a_later_ready_role_whole_and_its_own_description_out_of_context() {
+    for status in ["draft", "verify"] {
+        let e = fixture(&format!(
+            "## Experience\n\n### Gone · Engineer · 2015 – 2020 <!-- @{status} -->\n\nGone description. <!-- =gone.default -->\n\n**Gone era · 2016 – 2017**\n\n- Gone bullet.\n\n### Kept · Engineer · 2010 – 2014\n\nKept description. <!-- =kept.default -->\n\n- Kept bullet.\n"
+        ));
+        assert_eq!(texts(&e), ["Kept · Engineer · 2010 – 2014", "Kept bullet."]);
+        let context: Vec<&str> = e.context.iter().map(|c| c.record.text.as_str()).collect();
+        assert_eq!(context, ["Experience", "Kept description."]);
+        let blocked: Vec<_> = e.excluded.iter().map(|x| x.inherited.map(|b| b.node_index)).collect();
+        assert_eq!(blocked[0], None, "the excluded role itself has no ancestor to blame");
+        assert!(
+            blocked[1..]
+                .iter()
+                .all(|b| *b == Some(e.excluded[0].provenance.node_index)),
+            "{blocked:?}"
+        );
+    }
+}
+
+#[test]
+fn after_an_excluded_era_a_ready_paragraph_and_the_bullet_after_it_are_kept_with_no_era() {
+    let e = fixture(
+        "## Experience\n\n### Acme · Engineer · 2015 – 2020\n\n**Gone era · 2016 – 2017** <!-- @draft -->\n\n- Gone bullet.\n\nReady paragraph.\n\n- Ready bullet.\n",
+    );
+    assert_eq!(
+        texts(&e),
+        ["Acme · Engineer · 2015 – 2020", "Ready paragraph.", "Ready bullet."]
+    );
+    for record in &e.records[1..] {
+        assert_none!(record.record.parents.era.as_ref());
+        assert_none!(record.record.era.as_ref());
+    }
+    assert!(e.context.iter().all(|c| c.record.kind != ContextKind::Era));
+}
+
+#[test]
+fn an_ungrouped_paragraph_is_a_statement_under_a_section_and_a_description_under_a_role() {
+    let e = fixture(
+        "## Education\n\nB.S. in Mathematics.\n\n## Experience\n\n### Acme · 2015 – 2020\n\nB.S. in Mathematics.\n\nThen a statement.\n",
+    );
+    assert_eq!(
+        texts(&e),
+        ["B.S. in Mathematics.", "Acme · 2015 – 2020", "Then a statement."]
+    );
+    let descriptions: Vec<_> = e
+        .context
+        .iter()
+        .filter(|c| c.record.kind == ContextKind::RoleDescription)
+        .collect();
+    assert_eq!(descriptions.len(), 1);
+    assert_eq!(descriptions[0].record.text, "B.S. in Mathematics.");
+    assert!(descriptions[0].record.id.starts_with("ctx:"));
+    assert!(e.records[0].record.id.starts_with("src:"));
+}
+
+#[test]
+fn context_nobody_refers_to_is_not_sent_and_what_a_description_needs_is() {
+    let e = fixture(
+        "## Experience\n\n### Acme · Engineer · 2015 – 2020\n\nAcme builds engines.\n\n**Unused era · 2016 – 2017**\n\n- Hidden. <!-- @verify -->\n\n**Used era · 2018 – 2019**\n\n- Used.\n",
+    );
+    let context: Vec<&str> = e.context.iter().map(|c| c.record.text.as_str()).collect();
+    assert_eq!(
+        context,
+        ["Experience", "Acme builds engines.", "Used era · 2018 – 2019"]
+    );
+    let description = &e.context[1].record;
+    assert_eq!(
+        description.parents.role.as_deref(),
+        Some(e.records[0].record.id.as_str())
+    );
+    assert_eq!(
+        description.parents.section.as_deref(),
+        Some(e.context[0].record.id.as_str())
+    );
 }

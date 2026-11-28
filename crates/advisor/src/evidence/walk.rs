@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use resume::markdown::Parsed;
+use resume::markdown::{Nesting, Parsed};
 use resume::model::{
     GroupName, NodeHeading, NodeKind, NodeView, Period, Resume, RoleBlock, SectionTitle, VariantName, plain_text,
 };
@@ -38,14 +38,17 @@ pub(super) fn project(
     );
     let mut walk = Walk::new(text, source_id);
     for (index, node) in nodes.iter().enumerate() {
-        let provenance = walk.provenance(index, node, ranges[index].clone(), lines[index], nesting[index])?;
-        walk.visit(node, provenance, nesting[index])?;
+        let parent = walk.resolve_parent(index, node, nesting[index], &nodes)?;
+        let provenance = walk.provenance(index, node, ranges[index].clone(), lines[index], parent)?;
+        walk.visit(node, provenance, parent)?;
     }
     walk.finish()
 }
 
 /// A section, role or era that is open while the walk reads what it holds.
 struct Open {
+    /// The node index of the heading.
+    node_index: usize,
     depth: usize,
     id: String,
     /// What a record under it shows: the section title, `Company` or `Company · Title`, the era name.
@@ -81,6 +84,8 @@ struct Closed {
 
 struct Walk<'a> {
     text: &'a str,
+    /// Where each line of `text` starts, counted here to check the lines the parser reports.
+    line_starts: Vec<usize>,
     source_id: String,
     section: Option<Open>,
     role: Option<Open>,
@@ -90,6 +95,9 @@ struct Walk<'a> {
     /// The group of the open role's blurb: a paragraph in it is context too.
     blurb_group: Option<GroupName>,
     closed: Option<Closed>,
+    /// The node index of the innermost open section, role or era, for each bullet visited, to check a nested bullet
+    /// sits in the same one as its parent.
+    container_of: HashMap<usize, usize>,
     /// What excludes a node, by node index, so a bullet nested in it inherits it.
     blocked: HashMap<usize, Blocker>,
     records: Vec<Local<EvidenceKind>>,
@@ -102,6 +110,7 @@ impl<'a> Walk<'a> {
     fn new(text: &'a str, source_id: String) -> Self {
         Self {
             text,
+            line_starts: line_starts(text),
             source_id,
             section: None,
             role: None,
@@ -109,12 +118,57 @@ impl<'a> Walk<'a> {
             eras: EraCursor::new(Vec::new()),
             blurb_group: None,
             closed: None,
+            container_of: HashMap::new(),
             blocked: HashMap::new(),
             records: Vec::new(),
             context: Vec::new(),
             excluded: Vec::new(),
             ids: BTreeMap::new(),
         }
+    }
+
+    /// The bullet a node is nested in, checked: it must exist, come earlier, be a bullet, and sit in the same
+    /// section, role or era. A lost or wrong parent refuses the baseline, because a child of an excluded bullet
+    /// would otherwise read as ready.
+    fn resolve_parent(
+        &self,
+        index: usize,
+        node: &NodeView<'_>,
+        nesting: Nesting,
+        nodes: &[NodeView<'_>],
+    ) -> Result<Option<usize>, EvidenceError> {
+        let parent = match nesting {
+            Nesting::Top => return Ok(None),
+            Nesting::In(parent) => parent,
+            Nesting::Unresolved => {
+                return InvalidSourceParentSnafu {
+                    node_index: index,
+                    parent: index,
+                }
+                .fail();
+            }
+        };
+        let valid = parent < index
+            && node.kind == NodeKind::Bullet
+            && nodes.get(parent).is_some_and(|p| p.kind == NodeKind::Bullet)
+            && self.container_of.get(&parent) == self.open_container().as_ref();
+        ensure!(
+            valid,
+            InvalidSourceParentSnafu {
+                node_index: index,
+                parent
+            }
+        );
+        Ok(Some(parent))
+    }
+
+    /// The node index of the innermost open era, else role, else section.
+    fn open_container(&self) -> Option<usize> {
+        self.era
+            .as_ref()
+            .or(self.role.as_ref())
+            .or(self.section.as_ref())
+            .map(|open| open.node_index)
     }
 
     fn provenance(
@@ -137,7 +191,7 @@ impl<'a> Walk<'a> {
                 input_bytes: self.text.len()
             }
         );
-        let counted_line = line_of(self.text, range.start);
+        let counted_line = line_in(&self.line_starts, range.start);
         ensure!(
             line == counted_line,
             SourceLineMismatchSnafu {
@@ -171,6 +225,9 @@ impl<'a> Walk<'a> {
     ) -> Result<(), EvidenceError> {
         let index = provenance.node_index;
         self.leave_containers(index, node.depth)?;
+        if let (NodeKind::Bullet, Some(container)) = (node.kind, self.open_container()) {
+            self.container_of.insert(index, container);
+        }
         let own = node.annotations.status.map(ExcludedStatus::from);
         let inherited = self
             .closed
@@ -293,6 +350,7 @@ impl<'a> Walk<'a> {
         self.claim(&id, index, true)?;
         let label = title.to_string();
         self.section = Some(Open {
+            node_index: index,
             depth: node.depth,
             id: id.clone(),
             label: label.clone(),
@@ -334,10 +392,7 @@ impl<'a> Walk<'a> {
         };
         let id = self.src_id(index);
         self.claim(&id, index, true)?;
-        let heading = match &role.title {
-            Some(title) => format!("{} · {title}", role.company),
-            None => role.company.to_string(),
-        };
+        let heading = heading_of(role);
         self.eras = EraCursor::new(
             role.body
                 .iter()
@@ -352,9 +407,10 @@ impl<'a> Walk<'a> {
             .as_ref()
             .and_then(|_| role.blurb_annotations.alternate.as_ref().map(|a| a.group.clone()));
         self.role = Some(Open {
+            node_index: index,
             depth: node.depth,
             id: id.clone(),
-            label: heading,
+            label: heading.clone(),
         });
         self.era = None;
         self.open_closed(node.depth, index, own, inherited);
@@ -362,7 +418,7 @@ impl<'a> Walk<'a> {
             self.exclude(id, provenance, own, inherited);
             return Ok(());
         }
-        let text = format!("{} · {}", heading_of(role), role.period.text);
+        let text = format!("{heading} · {}", role.period.text);
         let (section, role_label, _) = self.labels();
         let record = Record {
             id,
@@ -410,6 +466,7 @@ impl<'a> Walk<'a> {
         self.claim(&id, index, true)?;
         let label = name.to_string();
         self.era = Some(Open {
+            node_index: index,
             depth: node.depth,
             id: id.clone(),
             label: label.clone(),
@@ -557,20 +614,23 @@ fn is_group_variant(id: &str) -> bool {
     })
 }
 
-/// The 1-based line of `offset`, counting `\n`, `\r\n` and a lone `\r` as one line ending each.
-fn line_of(text: &str, offset: usize) -> usize {
+/// The byte offset where each line starts, counting `\n`, `\r\n` and a lone `\r` as one line ending each.
+///
+/// Built here from the bytes, not taken from the parser, so it can check the line the parser reports.
+fn line_starts(text: &str) -> Vec<usize> {
     let bytes = text.as_bytes();
-    let mut line = 1;
-    let mut i = 0;
-    while i < offset.min(bytes.len()) {
-        match bytes[i] {
-            b'\n' => line += 1,
-            b'\r' if bytes.get(i + 1) != Some(&b'\n') => line += 1,
-            _ => {}
+    let mut starts = vec![0];
+    for (i, &byte) in bytes.iter().enumerate() {
+        if byte == b'\n' || (byte == b'\r' && bytes.get(i + 1) != Some(&b'\n')) {
+            starts.push(i + 1);
         }
-        i += 1;
     }
-    line
+    starts
+}
+
+/// The 1-based line of `offset` in a table from [`line_starts`].
+fn line_in(starts: &[usize], offset: usize) -> usize {
+    starts.partition_point(|&start| start <= offset)
 }
 
 #[cfg(test)]
@@ -624,5 +684,190 @@ mod tests {
         ));
         assert_ok!(cursor.next(5));
         assert_ok!(cursor.finish(9));
+    }
+
+    // -----------------------------------------------------------------------------------------------
+    // The guards that parser and model drift would trip. A valid baseline never reaches them, so each is fed the
+    // bad state directly, at the boundary it protects.
+    // -----------------------------------------------------------------------------------------------
+
+    const TEXT: &str = "# A B\n\nL\n\n## S\n\n- Café one.\n- Two.\n";
+
+    fn walk() -> Walk<'static> {
+        Walk::new(TEXT, "0".repeat(64))
+    }
+
+    /// Runs `with` on the section node and the first bullet of `TEXT`, the bullet being node 1.
+    fn on_nodes<T>(with: impl FnOnce(&Resume, &[NodeView<'_>]) -> T) -> T {
+        let parsed = resume::markdown::parse("r.md", TEXT);
+        let resume = assert_some!(parsed.valid());
+        let nodes = resume.nodes();
+        with(resume, &nodes)
+    }
+
+    #[test]
+    fn a_second_claim_of_one_id_names_both_nodes() {
+        let mut walk = walk();
+        assert_ok!(walk.claim("same.default", 1, false));
+        let error = assert_err!(walk.claim("same.default", 2, false));
+        assert!(
+            matches!(error, EvidenceError::DuplicateId { ref id, first_node: 1, second_node: 2 } if id == "same.default"),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn a_generated_id_must_not_read_as_group_dot_variant() {
+        let mut walk = walk();
+        let error = assert_err!(walk.claim("group.default", 4, true));
+        assert!(
+            matches!(error, EvidenceError::GeneratedIdIsGrouped { node_index: 4, .. }),
+            "{error:?}"
+        );
+        assert_ok!(walk.claim(&walk.src_id(4), 4, true));
+        assert_ok!(walk.claim("group.default", 5, false));
+    }
+
+    #[test]
+    fn a_range_that_does_not_fit_the_text_or_cuts_a_character_is_refused() {
+        on_nodes(|_, nodes| {
+            let walk = walk();
+            let accent = TEXT.find('é').expect("the accent is in the text");
+            let cases = [
+                (std::ops::Range { start: 5, end: 3 }, "reversed"),
+                (0..TEXT.len() + 1, "past the end"),
+                (accent + 1..accent + 3, "inside the accent"),
+            ];
+            for (range, why) in cases {
+                let error = assert_err!(walk.provenance(1, &nodes[1], range, 7, None), "{why}");
+                assert!(
+                    matches!(error, EvidenceError::InvalidSourceRange { node_index: 1, .. }),
+                    "{why}: {error:?}"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn a_line_the_parser_reports_wrongly_is_refused_with_both_numbers() {
+        on_nodes(|_, nodes| {
+            let walk = walk();
+            let start = TEXT.find("- Café").expect("the bullet is in the text");
+            let error = assert_err!(walk.provenance(1, &nodes[1], start..start + 7, 3, None));
+            assert!(
+                matches!(
+                    error,
+                    EvidenceError::SourceLineMismatch {
+                        node_index: 1,
+                        parser_line: 3,
+                        counted_line: 7
+                    }
+                ),
+                "{error:?}"
+            );
+            assert_ok!(walk.provenance(1, &nodes[1], start..start + 7, 7, None));
+        });
+    }
+
+    #[test]
+    fn a_parent_must_be_an_earlier_bullet_in_the_same_container() {
+        on_nodes(|_, nodes| {
+            let mut walk = walk();
+            let section = Open {
+                node_index: 0,
+                depth: 0,
+                id: "ctx:x".into(),
+                label: "S".into(),
+            };
+            walk.section = Some(section);
+            walk.container_of.insert(1, 0);
+            // Node 2 is the second bullet; node 1 is the first, in the same section.
+            assert_eq!(
+                assert_ok!(walk.resolve_parent(2, &nodes[2], Nesting::In(1), nodes)),
+                Some(1)
+            );
+            assert_eq!(assert_ok!(walk.resolve_parent(2, &nodes[2], Nesting::Top, nodes)), None);
+            for (nesting, why) in [
+                (Nesting::In(2), "itself"),
+                (Nesting::In(3), "a later node"),
+                (Nesting::In(0), "a section, not a bullet"),
+                (Nesting::Unresolved, "no parent found"),
+            ] {
+                let error = assert_err!(walk.resolve_parent(2, &nodes[2], nesting, nodes), "{why}");
+                assert!(
+                    matches!(error, EvidenceError::InvalidSourceParent { node_index: 2, .. }),
+                    "{why}: {error:?}"
+                );
+            }
+            // A parent that sits in another container is refused.
+            walk.container_of.insert(1, 99);
+            assert_err!(walk.resolve_parent(2, &nodes[2], Nesting::In(1), nodes));
+        });
+    }
+
+    #[test]
+    fn a_node_without_its_heading_is_refused_as_missing_structure() {
+        on_nodes(|_, nodes| {
+            for kind in [NodeKind::Section, NodeKind::Role, NodeKind::Era] {
+                let mut node = nodes[0];
+                node.kind = kind;
+                node.heading = None;
+                let mut walk = walk();
+                let provenance = assert_ok!(walk.provenance(0, &node, 0..5, 1, None));
+                let error = assert_err!(walk.visit(&node, provenance, None), "{kind:?}");
+                assert!(
+                    matches!(error, EvidenceError::MissingStructure { node_index: 0, .. }),
+                    "{kind:?}: {error:?}"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn an_era_outside_any_role_is_refused() {
+        let text = "# A B\n\n## S\n\n### Co · 2015 – 2020\n\n**A · 2016 – 2017**\n\n- One.\n";
+        let parsed = resume::markdown::parse("r.md", text);
+        let resume = assert_some!(parsed.valid());
+        let nodes = resume.nodes();
+        let era = nodes.iter().position(|n| n.kind == NodeKind::Era).expect("an era node");
+        let mut walk = Walk::new(text, "0".repeat(64));
+        let provenance = assert_ok!(walk.provenance(era, &nodes[era], 0..5, 1, None));
+        let error = assert_err!(walk.visit(&nodes[era], provenance, None));
+        assert!(
+            matches!(error, EvidenceError::MissingStructure { missing: "role", .. }),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn leaving_a_role_with_an_era_never_met_is_refused_where_the_walk_leaves_it() {
+        // The cursor helper is tested alone above; this proves `leave_containers` still asks it.
+        let mut walk = walk();
+        walk.eras = EraCursor::new(periods());
+        walk.role = Some(Open {
+            node_index: 0,
+            depth: 1,
+            id: "src:r".into(),
+            label: "R".into(),
+        });
+        assert_ok!(walk.leave_containers(5, 2));
+        let error = assert_err!(walk.leave_containers(6, 1));
+        assert!(
+            matches!(error, EvidenceError::EraCursorMismatch { node_index: 6 }),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn metadata_of_the_wrong_length_is_refused() {
+        let parsed = resume::markdown::parse("r.md", TEXT);
+        let resume = assert_some!(parsed.valid());
+        let mut shorter = resume.clone();
+        shorter.sections.clear();
+        let error = assert_err!(project(TEXT, "0".repeat(64), &parsed, &shorter));
+        assert!(
+            matches!(error, EvidenceError::NodeMetadataLengthMismatch { .. }),
+            "{error:?}"
+        );
     }
 }

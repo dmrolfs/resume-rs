@@ -92,9 +92,14 @@ impl Parsed {
     /// model. `text` must be the text this was parsed from.
     #[must_use]
     pub fn node_lines(&self, text: &str) -> Vec<usize> {
-        let source = Source { text };
+        // One index for every node: `Source::line_of` builds its own each call, so it was minutes on a 1 MiB resume.
+        let index = LineIndex::new(text);
         self.outline.as_ref().map_or_else(Vec::new, |outline| {
-            outline.ranges.iter().map(|range| source.line_of(range.start)).collect()
+            outline
+                .ranges
+                .iter()
+                .map(|range| index.line_of(range.start) + 1)
+                .collect()
         })
     }
 
@@ -113,15 +118,20 @@ impl Parsed {
         self.outline.as_ref().map_or(&[], |outline| outline.ranges.as_slice())
     }
 
-    /// For each node of the model, in [`Resume::nodes`] order, the index of the bullet it is nested in, or `None` for
-    /// everything that is not a nested bullet; empty without a model.
+    /// For each node of the model, in [`Resume::nodes`] order, where it is nested: [`Nesting::Top`] for everything that
+    /// is not a nested bullet, [`Nesting::In`] with the index of the bullet it is nested in, and
+    /// [`Nesting::Unresolved`] for a nested bullet whose parent could not be found among the nodes. Empty without a
+    /// model.
     ///
     /// The model flattens nested bullets to one level, so a child shows no sign of its parent. This keeps the link,
     /// for a reader that must treat a child as part of what its parent says (for example, to leave out a child of a
     /// draft bullet). A parent always comes before its child. A bullet that shows nothing is no node, so a child of
-    /// one is tied to the nearest bullet above it that is a node, and to `None` when there is none.
+    /// one is tied to the nearest bullet above it that is a node, and is [`Nesting::Top`] when there is none.
+    ///
+    /// `Unresolved` is a parser bug, not a state of any resume. It is its own value so that a reader cannot take a
+    /// lost parent for "no parent" and let a child of an excluded bullet through.
     #[must_use]
-    pub fn node_nested_in(&self) -> Vec<Option<usize>> {
+    pub fn node_nested_in(&self) -> Vec<Nesting> {
         let Some(outline) = self.outline.as_ref() else {
             return Vec::new();
         };
@@ -132,14 +142,17 @@ impl Parsed {
             .rev()
             .map(|(index, range)| (range.start, index))
             .collect();
-        let mut nested = vec![None; outline.ranges.len()];
+        let mut nested = vec![Nesting::Top; outline.ranges.len()];
         let bullets = outline
             .sections
             .iter()
             .flat_map(|s| s.bullets.iter().chain(s.roles.iter().flat_map(|r| &r.bullets)));
         for bullet in bullets {
-            if let (Some(&child), Some(parent)) = (node_at.get(&bullet.item.start), bullet.kept_in) {
-                nested[child] = node_at.get(&parent).copied();
+            let Some(&child) = node_at.get(&bullet.item.start) else {
+                continue;
+            };
+            if let Some(parent) = bullet.kept_in {
+                nested[child] = node_at.get(&parent).map_or(Nesting::Unresolved, |&p| Nesting::In(p));
             }
         }
         nested
@@ -174,6 +187,17 @@ impl Parsed {
     pub fn into_parts(self) -> (Option<Resume>, Vec<Diagnostic>) {
         (self.resume, self.diagnostics)
     }
+}
+
+/// Where a node sits among bullets, from [`Parsed::node_nested_in`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Nesting {
+    /// Not a nested bullet.
+    Top,
+    /// A bullet nested in the bullet at this node index.
+    In(usize),
+    /// A nested bullet whose parent is not among the nodes. The parser should never produce it.
+    Unresolved,
 }
 
 /// Parses a Markdown resume; `path` only labels the spans of the findings.

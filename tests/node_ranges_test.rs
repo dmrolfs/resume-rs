@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use claims::assert_some;
 use pretty_assertions::assert_eq;
-use resume::markdown::parse;
+use resume::markdown::{Nesting, parse};
 
 const HEAD: &str = "# Ada Lovelace\n\nLondon, UK · ada@example.com\n\n";
 
@@ -114,8 +114,8 @@ fn fixture(relative: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(relative)
 }
 
-#[test]
-fn every_fixture_and_guide_example_has_one_valid_range_per_node() {
+/// The resume text of `tests/fixtures/full.md` and of every resume example in the user guide.
+fn corpus() -> Vec<String> {
     let mut texts = vec![assert_some!(
         std::fs::read_to_string(fixture("tests/fixtures/full.md")).ok()
     )];
@@ -135,6 +135,12 @@ fn every_fixture_and_guide_example_has_one_valid_range_per_node() {
         }
     }
     assert!(texts.len() >= 3, "the guide has resume examples: {}", texts.len());
+    texts
+}
+
+#[test]
+fn every_fixture_and_guide_example_has_one_valid_range_per_node() {
+    let texts = corpus();
     let mut checked = 0;
     for text in &texts {
         let parsed = parse("r.md", text);
@@ -184,10 +190,14 @@ fn parents(markdown: &str) -> Vec<(String, String, Option<String>)> {
         .enumerate()
         .map(|(i, node)| {
             let own = markdown[ranges[i].clone()].to_string();
-            let parent = nested[i].map(|p| {
-                assert!(p < i, "a parent comes before its child: node {i} names {p}");
-                markdown[ranges[p].clone()].to_string()
-            });
+            let parent = match nested[i] {
+                Nesting::Top => None,
+                Nesting::In(p) => {
+                    assert!(p < i, "a parent comes before its child: node {i} names {p}");
+                    Some(markdown[ranges[p].clone()].to_string())
+                }
+                Nesting::Unresolved => panic!("node {i} has a parent that was not found"),
+            };
             (node.kind.to_string(), own, parent)
         })
         .collect()
@@ -257,6 +267,17 @@ fn nesting_survives_crlf_and_a_byte_order_mark() {
 }
 
 #[test]
+fn no_node_of_any_fixture_has_an_unresolved_parent() {
+    let texts = corpus();
+    for text in &texts {
+        let parsed = parse("r.md", text);
+        let nested = parsed.node_nested_in();
+        assert_eq!(nested.len(), parsed.node_ranges().len(), "{text}");
+        assert!(!nested.contains(&Nesting::Unresolved), "{text}");
+    }
+}
+
+#[test]
 fn a_text_without_a_model_has_no_nesting() {
     assert!(parse("r.md", "no name heading here\n").node_nested_in().is_empty());
 }
@@ -273,4 +294,44 @@ fn a_bullet_with_nothing_to_show_passes_its_parent_down_to_its_children() {
 fn a_bullet_with_nothing_to_show_at_the_top_leaves_its_children_unparented() {
     let markdown = format!("{HEAD}## S\n\n-\n  - C\n- S\n");
     assert_eq!(nested_pairs(&markdown), pairs(&[]));
+}
+
+#[test]
+fn node_lines_agree_with_a_line_counted_by_hand_and_stay_fast_on_a_large_baseline() {
+    // Counting each line ending once: `\n`, `\r\n`, and a lone `\r`.
+    fn by_hand(text: &str, offset: usize) -> usize {
+        let bytes = text.as_bytes();
+        1 + (0..offset)
+            .filter(|&i| bytes[i] == b'\n' || (bytes[i] == b'\r' && bytes.get(i + 1) != Some(&b'\n')))
+            .count()
+    }
+    let lf = format!("{HEAD}{EVERY_KIND}");
+    for text in [
+        lf.clone(),
+        lf.replace('\n', "\r\n"),
+        lf.replace('\n', "\r"),
+        format!("\u{feff}{lf}"),
+    ] {
+        let parsed = parse("r.md", &text);
+        let lines = parsed.node_lines(&text);
+        let expected: Vec<usize> = parsed.node_ranges().iter().map(|r| by_hand(&text, r.start)).collect();
+        assert_eq!(lines, expected, "{text:?}");
+    }
+    // About 11,000 bullets in under 1 MiB: building the line index once per node took minutes.
+    let mut big = String::from("# A B\n\n## S\n\n");
+    let mut n = 0;
+    while big.len() < 900_000 {
+        big.push_str(&format!("- Statement number {n} {}\n", "x".repeat(60)));
+        n += 1;
+    }
+    let parsed = parse("r.md", &big);
+    let started = std::time::Instant::now();
+    let lines = parsed.node_lines(&big);
+    assert_eq!(lines.len(), n + 1);
+    assert_eq!(lines.last(), Some(&(n + 4)));
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "node_lines took {:?}",
+        started.elapsed()
+    );
 }

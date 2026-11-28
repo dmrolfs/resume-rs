@@ -236,10 +236,14 @@ fn runs_alone_for(line: &[String], words: &[&str], package: &str) -> bool {
         .filter(|pair| pair[0] == "--package")
         .map(|pair| pair[1].as_str())
         .collect();
-    let short = line
+    // Any other way to name a package: `-p`, `-pNAME`, `-p=NAME`, `--package=NAME`.
+    let other_spelling = line
         .iter()
-        .any(|w| w == "-p" || w.starts_with("-p=") || w.starts_with("--package="));
-    words.iter().all(|w| line.iter().any(|x| x == w)) && selectors == [package] && !short
+        .any(|w| w.starts_with("-p") && !w.starts_with("--") || w.starts_with("--package="));
+    // The words must be the command itself, in order, from the first word: `echo cargo test` is not `cargo test`.
+    let is_the_command =
+        line.first().map(String::as_str) == words.first().copied() && words.iter().all(|w| line.iter().any(|x| x == w));
+    is_the_command && selectors == [package] && !other_spelling
 }
 
 #[test]

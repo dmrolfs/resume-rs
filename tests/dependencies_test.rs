@@ -381,6 +381,35 @@ fn panic_message(run: impl FnOnce() + std::panic::UnwindSafe) -> String {
 }
 
 #[test]
+fn a_package_listed_twice_with_one_version_is_asked_for_once() {
+    let twice = format!("{TWO_VERSIONS}\n[[package]]\nname = \"aes\"\nversion = \"0.8.4\"\n");
+    assert_eq!(locked_versions_of(&twice, "aes"), ["0.8.4", "0.9.0"]);
+}
+
+#[test]
+fn a_locked_package_with_no_name_is_an_error_not_a_skipped_entry() {
+    let nameless = "[[package]]\nversion = \"1.0.0\"\n";
+    assert!(panic_message(|| drop(locked_versions_of(nameless, "aes"))).contains("has a name"));
+}
+
+#[test]
+fn the_inverse_tree_of_a_crate_every_member_uses_is_read_from_cargo_itself() {
+    // A real positive control: `serde_json` is in every member, so cargo's own output must show each of them. If
+    // cargo changed how it prints a tree, the checks above would find no one and stay green; this one would not.
+    let trees = workspace_dependents_of("serde_json").expect("serde_json is locked");
+    assert!(!trees.is_empty());
+    assert!(trees.iter().any(|tree| lists_resume_as_dependent(tree)), "{trees:?}");
+    let members = workspace_member_names();
+    let found: Vec<&str> = trees
+        .iter()
+        .flat_map(|tree| members_depending_in(tree, &members))
+        .collect();
+    for member in ["advisor", "resume", "workbench"] {
+        assert!(found.contains(&member), "{member} not found in {found:?}");
+    }
+}
+
+#[test]
 fn every_locked_version_of_a_name_is_listed_once_and_a_longer_name_is_another_crate() {
     assert_eq!(locked_versions_of(TWO_VERSIONS, "aes"), ["0.8.4", "0.9.0"]);
     assert!(locked_versions_of(TWO_VERSIONS, "ae").is_empty());
