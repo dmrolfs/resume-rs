@@ -1,4 +1,7 @@
 //! Native window and dock; policy lives in app modules.
+mod highlight;
+#[cfg(test)]
+mod highlight_tests;
 mod loading;
 mod panels;
 mod persistence;
@@ -276,26 +279,7 @@ impl Workspace {
                     .to_string_lossy()
                     .into_owned(),
             };
-            let language = match &key {
-                FileKey::Disk(p) | FileKey::Builtin(p) => match p.extension().and_then(|s| s.to_str()) {
-                    Some("md") => "markdown",
-                    Some("toml") => "toml",
-                    _ => "text",
-                },
-            };
-            let editor = cx.new(|cx| {
-                EditorState::new(window, cx)
-                    .language(language)
-                    .line_number(true)
-                    .default_value(text.to_string())
-            });
-            let panel = cx.new(|_| DocumentPanel {
-                title,
-                key: key.clone(),
-                document: Document::new(text),
-                discard_allowed: false,
-                editor,
-            });
+            let panel = DocumentPanel::new(key.clone(), title, Document::new(text), window, cx);
             self.dock.update(cx, |area, cx| {
                 area.add_panel_view(panel_handle(panel.clone()), DockPlacement::Center, None, window, cx)
             });
